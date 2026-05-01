@@ -80,7 +80,16 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
             timeout_sec = _RUN_COMMAND_DEFAULT_TIMEOUT
         timeout_sec = max(1, min(timeout_sec, _RUN_COMMAND_MAX_TIMEOUT))
 
-        cmd = ["cmd.exe", "/c", command]
+        import shlex
+        if command.lower().startswith("powershell"):
+            remaining = command[len("powershell"):].strip()
+            try:
+                parsed = shlex.split(remaining)
+                cmd = ["powershell.exe"] + parsed
+            except:
+                cmd = ["powershell.exe", "-Command", remaining]
+        else:
+            cmd = ["cmd.exe", "/c", command]
         
         popen_kw: dict = {
             "cwd": cwd_str,

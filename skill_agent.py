@@ -177,6 +177,7 @@ class SkillAgent:
         else:
             self._conversation_id = (conversation_id or "").strip()
         self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor)
+        self._recent_commands: list[tuple[str, str]] = []
 
     def _disabled_skill_ids_frozen(self) -> frozenset[str]:
         return frozenset(load_disabled_skill_ids())
@@ -237,6 +238,122 @@ class SkillAgent:
         if content.startswith("错误"):
             return False
         return True
+
+    def _is_dangerous_command(self, command: str) -> bool:
+        cmd_lower = command.lower().strip()
+        dangerous_prefixes = [
+            "del ",
+            "erase ",
+            "rmdir ",
+            "rd ",
+            "copy ",
+            "move ",
+            "ren ",
+            "rename ",
+            "mkdir ",
+            "md ",
+        ]
+        for pattern in dangerous_prefixes:
+            if cmd_lower.startswith(pattern):
+                return True
+        
+        dangerous_contains = [
+            " > ",
+            " >> ",
+            " >",
+            " >>",
+            " set-content ",
+            " set-content-",
+            " add-content ",
+            " add-content-",
+            " out-file ",
+            " out-file-",
+            " new-item ",
+            " new-item-",
+            " remove-item ",
+            " remove-item-",
+            " rm ",
+        ]
+        for pattern in dangerous_contains:
+            if pattern in cmd_lower:
+                return True
+        
+        return False
+
+    def _is_write_operation(self, command: str) -> bool:
+        cmd_lower = command.lower().strip()
+        write_indicators = [
+            ">", ">>", "set-content", "write-host", "write-output",
+            "out-file", "add-content", "echo ", "mkdir ", "md ",
+            "copy ", "move ", "del ", "erase ", "rmdir ", "ren "
+        ]
+        for indicator in write_indicators:
+            if indicator in cmd_lower:
+                return True
+        return False
+
+    def _check_repeated_write_success(self, command: str, result: str) -> Optional[str]:
+        if "exit_code: 0" not in result:
+            return None
+        
+        stdout_match = result.split("--- stdout ---")
+        if len(stdout_match) < 2:
+            return None
+        stdout = stdout_match[1].split("--- stderr ---")[0].strip()
+        
+        if stdout:
+            return None
+        
+        if not self._is_write_operation(command):
+            return None
+        
+        self._recent_commands.append(command)
+        if len(self._recent_commands) > 10:
+            self._recent_commands.pop(0)
+        
+        write_count = sum(1 for cmd in self._recent_commands if self._is_write_operation(cmd))
+        if write_count >= 2:
+            seen = set()
+            for cmd in self._recent_commands:
+                if cmd in seen:
+                    return "检测到重复的文件写入操作且已成功完成，任务自动结束。"
+                seen.add(cmd)
+        
+        return None
+
+    def _extract_file_path(self, command: str) -> Optional[str]:
+        import re
+        patterns = [
+            r"[-/]Path\s+['\"]([^'\"]+)['\"]",
+            r">>\s*['\"]([^'\"]+)['\"]",
+            r">\s*['\"]([^'\"]+)['\"]",
+            r">>\s*(\S+)",
+            r">\s*(\S+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, command, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        return None
+
+    def _verify_file_exists(self, file_path: str, cwd: str) -> str:
+        from pathlib import Path
+        
+        if cwd == ".":
+            full_path = Path(self.work_dir) / file_path
+        else:
+            full_path = Path(self.work_dir) / cwd / file_path
+        
+        full_path = full_path.resolve()
+        
+        if full_path.exists():
+            if full_path.is_file():
+                size = full_path.stat().st_size
+                return f"✓ 文件已创建成功：{full_path}（大小：{size} 字节）"
+            else:
+                return f"✓ 路径存在，但不是文件：{full_path}"
+        else:
+            return f"✗ 文件不存在：{full_path}"
 
     def _dispatch(
         self,
@@ -314,6 +431,7 @@ class SkillAgent:
             messages.append({"role": "user", "content": extra_user})
 
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
+        self._recent_commands = []
         model = get_chat_model()
         disabled = self._disabled_skill_ids_frozen()
         skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
@@ -328,6 +446,37 @@ class SkillAgent:
 
         if self.memory is not None:
             self._append_model_messages(messages, system_prompt=system_prompt, user_query=user_query)
+            prior_messages = self.memory.get_message_records(self._conversation_id)
+            if prior_messages and len(prior_messages) >= 2:
+                last_msg = prior_messages[-1]
+                prev_msg = prior_messages[-2]
+                if last_msg.get("role") == "user" and prev_msg.get("role") == "tool":
+                    prev_meta = prev_msg.get("metadata") or {}
+                    if prev_meta.get("name") == "ask_user":
+                        user_choice = user_query.strip()
+                        if user_choice == "确认执行":
+                            for record in reversed(prior_messages[:-2]):
+                                if record.get("role") == "assistant":
+                                    content = record.get("content", "")
+                                    instruction_call = _parse_instruction_call(str(content))
+                                    if instruction_call:
+                                        fname, args = instruction_call
+                                        if fname == "run_command":
+                                            command = str(args.get("command", "") or "").strip()
+                                            result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
+                                            self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
+                                            messages.append({"role": "tool", "name": fname, "content": str(result)})
+                                            if log_callback:
+                                                log_callback(f"执行命令: {command}", "base_tool")
+                                                log_callback(str(result), "base_tool")
+                                            break
+                        elif user_choice == "取消":
+                            cancel_msg = "命令已取消执行"
+                            if log_callback:
+                                log_callback(cancel_msg, "assistant")
+                            if self.memory is not None:
+                                self.memory.append_message(self._conversation_id, "assistant", cancel_msg)
+                            return cancel_msg
 
         for step in range(self.max_steps):
             msg = model.complete(messages)
@@ -365,6 +514,38 @@ class SkillAgent:
             if self.memory is not None:
                 self.memory.append_message(self._conversation_id, "assistant", text, metadata={"type": "think"})
             
+            if fname == "run_command":
+                command = str(args.get("command", "") or "").strip()
+                if self._is_dangerous_command(command):
+                    ask_args = {
+                        "question": f"即将执行以下命令，可能会修改或删除文件：\n\n{command}\n\n是否确认执行？",
+                        "choices": ["确认执行", "取消"]
+                    }
+                    result, terminate, final = execute_skill_control_tool(
+                        "ask_user",
+                        ask_args,
+                        registry=self.registry,
+                        active_skill_text=active_skill_text,
+                        active_skill_ids=active_skill_ids,
+                        disabled_skill_ids=self._disabled_skill_ids_frozen(),
+                    )
+                    if str(result).startswith("错误"):
+                        return result
+                    if self.memory is not None:
+                        self._persist_after_tool_turn(
+                            "ask_user",
+                            ask_args,
+                            str(result),
+                            active_skill_text,
+                            active_skill_ids,
+                            messages,
+                        )
+                    else:
+                        messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
+                    if log_callback:
+                        log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+                    return SKILL_AGENT_AWAITING_USER_REPLY
+            
             result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
 
             if log_callback and fname == "select_skill":
@@ -386,6 +567,31 @@ class SkillAgent:
                 r = str(result)
                 if len(r) > 12000:
                     r = r[:12000] + "\n\n…（内容已截断）"
+                if fname == "run_command":
+                    command = str(args.get("command", "") or "").strip()
+                    log_callback(f"执行命令: {command}", "base_tool")
+                    
+                    if "exit_code: 0" in r:
+                        stdout_match = r.split("--- stdout ---")
+                        stdout = ""
+                        if len(stdout_match) >= 2:
+                            stdout = stdout_match[1].split("--- stderr ---")[0].strip()
+                        
+                        if not stdout and self._is_write_operation(command):
+                            file_path = self._extract_file_path(command)
+                            if file_path:
+                                check_result = self._verify_file_exists(file_path, args.get("cwd", "."))
+                                if log_callback:
+                                    log_callback(f"检查结果: {check_result}", "base_tool")
+                                if self.memory is not None:
+                                    self.memory.append_message(self._conversation_id, "tool", check_result, metadata={"name": "verify"})
+                                messages.append({"role": "tool", "name": "verify", "content": check_result})
+                    
+                    auto_end_msg = self._check_repeated_write_success(command, str(result))
+                    if auto_end_msg:
+                        log_callback(auto_end_msg, "assistant")
+                        self.memory.append_message(self._conversation_id, "assistant", auto_end_msg)
+                        return auto_end_msg
                 log_callback(r, "base_tool")
 
             if terminate and final is not None:
