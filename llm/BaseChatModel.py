@@ -88,6 +88,18 @@ class BaseChatModel(ABC):
         )
         return response.choices[0].message
 
+    def complete(self, messages: list[dict]) -> Any:
+        """发起一次不带工具的纯文本补全，返回 choices[0].message。"""
+        response = self.get_client().chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            temperature=0.7,
+            top_p=0.95,
+            frequency_penalty=0.6,
+            extra_body=self.extra_body,
+        )
+        return response.choices[0].message
+
     def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
         response = self.get_client().chat.completions.create(
             model=self.model_name,

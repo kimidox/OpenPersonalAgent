@@ -6,11 +6,10 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import config
-from base_tool import ToolContext, all_definition_dicts, execute_atomic_tool, tools_for_model
+from base_tool import ToolContext, execute_atomic_tool
 from skill_agent_preferences import load_disabled_skill_ids
 from executor import Executor
 from llm import get_chat_model
-from llm.BaseChatModel import BaseChatModel
 from memory import Memory
 from memory.conversation import Conversation
 from skill import (
@@ -18,7 +17,6 @@ from skill import (
     build_skills_catalog_text,
     execute_skill_control_tool,
     skills_auto_matched_for_query,
-    SKILL_CONTROL_TOOL_DEFINITIONS,
 )
 
 # `SkillAgent.run` 在调用 `ask_user` 且成功挂起时返回该常量（非自然语言，便于 UI 识别）。
@@ -55,6 +53,29 @@ def _history_without_system(messages: list[dict[str, Any]]) -> list[dict[str, An
     return [m for m in messages if m.get("role") != "system"]
 
 
+def _parse_instruction_call(content: str) -> Optional[tuple[str, dict]]:
+    """
+    从模型输出中解析工具调用指令。
+    指令格式：<function name="工具名称">工具参数(JSON格式)</function>
+    
+    返回：(工具名称, 参数字典) 或 None
+    """
+    import re
+    
+    pattern = r'<function name="([^"]+)">\s*(\{.*?\})\s*</function>'
+    match = re.search(pattern, content, re.DOTALL)
+    
+    if match:
+        tool_name = match.group(1).strip()
+        args_json = match.group(2).strip()
+        try:
+            args = json.loads(args_json)
+            return (tool_name, args)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 def _build_system_prompt(catalog: str) -> str:
     return f"""你是 SkillAgent：根据用户的业务提问，从下列 Skill 中选择并执行合适流程。
 
@@ -63,10 +84,10 @@ def _build_system_prompt(catalog: str) -> str:
 ## 工具使用约定
 0. 部分Skill里面描述中若说明仍需其它 Skill，可再 `select_skill`（已自动加载的 id 再选不会重复追加）。
 1. 按需调用 `select_skill` 加载 Skill 全文（可加载一个或多个）。若用户任务明显需要多套规范，请依次 `select_skill`；下文会同时列出本轮已加载的全部 Skill，须一并遵守（若有冲突，以更具体或后加载的说明为准）。
-2. 执行过程中使用原子工具（读取文件、写入文件、列出目录、在 Skill 包内运行 `scripts/` 下 Python 等）完成具体操作。
-3. 部分Skill里面描述说明需要执行相关原子工具时，请确定要传入的path是否带上了当前skill的dir；若需执行某 Skill 文档中引用的 `scripts/*.py`，应使用 `run_skill_script` 并传入对应 `skill_id`。
+2. 执行过程中使用 `run_command` 执行 Windows CMD 命令完成具体操作（如读取文件、写入文件、列出目录、运行脚本等）。
+3. **关键规则**：当读取当前加载的 Skill 包内的文件时，**必须**指定 `skill_id` 参数，否则路径将无法正确解析。
 4. 当你认为已满足用户目标时，调用 `finish`，在参数 `message` 中给出完整、用户可读的最终答复。
-5. 若当前没有可用 Skill，可直接用原子工具与常识完成用户请求，并 `finish` 结束。
+5. 若当前没有可用 Skill，可直接用 `run_command` 与常识完成用户请求，并 `finish` 结束。
 6. 若缺关键信息、存在多种合理策略需用户选择、或涉及敏感/不可逆操作需确认，调用 `ask_user` 提问；用户在下一条消息回复后你会从当前进度继续。勿滥用，同一任务内澄清宜少而精。
 
 【最高优先级·Skill 加载铁律】
@@ -76,10 +97,13 @@ def _build_system_prompt(catalog: str) -> str:
 Step 1：完整阅读主文档全部内容，禁止跳段、禁止只读部分
 Step 2：**逐行扫描**文档，提取所有被反引号包裹的文件路径（格式：`./xxx/xxx.md`）
         → 必须提取全部路径，禁止遗漏任何一个
-Step 3：对**每一个**提取到的文件路径，**必须立即调用工具 read_text_file 读取内容**
+Step 3：对**每一个**提取到的文件路径，**必须立即调用run_command工具读取内容**
+        → 调用格式：`{{"command": "type 文件路径", "skill_id": "当前skill的id", "cwd": "."}}`
+        → **必须**指定 skill_id 参数，否则文件将无法找到
         → 一个文件都不能少，不读取视为严重违规
 Step 4：若文档要求运行 scripts/ 下的 .py 脚本
-        → 必须使用原子工具 run_skill_script 执行，禁止跳过
+        → 必须使用run_command执行，禁止跳过
+        → 调用格式：`{{"command": "python 脚本名.py", "skill_id": "当前skill的id", "cwd": "."}}`
 Step 5：将所有读取到的文件内容 + 主文档，**完整合并**为最终上下文
 Step 6：扫描合并后的内容，若发现新的 Skill 引用
         → 重复 Step1~Step5 递归加载，直到无新文件为止
@@ -89,6 +113,42 @@ Step 6：扫描合并后的内容，若发现新的 Skill 引用
 2. 必须显性调用工具，禁止脑补文件内容
 3. 必须加载所有关联 Skill，禁止只加载主文档
 4. 每完成一步，必须确认：已完成 Step X
+
+## 输出格式要求
+你必须使用以下指令格式调用工具，**不要使用 JSON 格式的 function call**：
+
+<function name="工具名称">
+工具参数（JSON格式）
+</function>
+
+例如：
+<function name="select_skill">
+{{"skill_id": "skill_example"}}
+</function>
+
+<function name="run_command">
+{{"command": "dir", "cwd": ".", "timeout_sec": 30}}
+</function>
+
+<function name="ask_user">
+{{"question": "请问您希望保存到哪个位置？", "choices": ["桌面", "文档"]}}
+</function>
+
+<function name="finish">
+{{"message": "任务已完成。我已经为您创建了所需的文件。"}}
+</function>
+
+## run_command 常用命令示例
+- 列出目录: `{{"command": "dir", "cwd": "."}}`
+- 创建文件: `{{"command": "echo hello > test.txt", "cwd": "."}}`
+- 读取文件内容: `{{"command": "type test.txt", "cwd": "."}}`
+- 写入文件: `{{"command": "echo content > file.txt", "cwd": "."}}`
+- 删除文件: `{{"command": "del test.txt", "cwd": "."}}`
+- 创建目录: `{{"command": "mkdir new_folder", "cwd": "."}}`
+- 运行 Python 脚本: `{{"command": "python script.py", "cwd": "./scripts"}}`
+- 读取 Skill 包内文件: `{{"command": "type example/test.md", "skill_id": "skill_name", "cwd": "."}}`
+
+请确保 JSON 参数格式正确，使用双引号，并且工具名称正确无误。
 """
 
 
@@ -117,7 +177,6 @@ class SkillAgent:
         else:
             self._conversation_id = (conversation_id or "").strip()
         self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor)
-        self._definitions = list(SKILL_CONTROL_TOOL_DEFINITIONS) + list(all_definition_dicts())
 
     def _disabled_skill_ids_frozen(self) -> frozenset[str]:
         return frozenset(load_disabled_skill_ids())
@@ -178,9 +237,6 @@ class SkillAgent:
         if content.startswith("错误"):
             return False
         return True
-
-    def _merged_tools(self, model: BaseChatModel) -> list[dict]:
-        return tools_for_model(model, self._definitions)
 
     def _dispatch(
         self,
@@ -259,7 +315,6 @@ class SkillAgent:
 
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
         model = get_chat_model()
-        tools = self._merged_tools(model)
         disabled = self._disabled_skill_ids_frozen()
         skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
         catalog = build_skills_catalog_text(skills_visible)
@@ -275,29 +330,26 @@ class SkillAgent:
             self._append_model_messages(messages, system_prompt=system_prompt, user_query=user_query)
 
         for step in range(self.max_steps):
-            msg = model.complete_with_tools(messages, tools)
-            fc = model.extract_function_call(msg)
-            if not fc:
-                text = _message_text(msg)
-                if text:
-                    if log_callback:
-                        log_callback(text, "assistant")
-                    if self.memory is not None:
-                        self.memory.append_message(self._conversation_id, "assistant", text)
-                    return text
-                err = "模型未返回工具调用且无文本内容，无法继续。"
+            msg = model.complete(messages)
+            text = _message_text(msg)
+            
+            if not text:
+                err = "模型未返回内容，无法继续。"
                 if log_callback:
                     log_callback(err, "assistant")
                 if self.memory is not None:
                     self.memory.append_message(self._conversation_id, "assistant", err)
                 return err
 
-            fname = fc.get("name") or ""
-            arg_str = fc.get("arguments") or "{}"
-            try:
-                args = json.loads(arg_str) if isinstance(arg_str, str) else {}
-            except json.JSONDecodeError:
-                args = {}
+            instruction_call = _parse_instruction_call(text)
+            if not instruction_call:
+                if log_callback:
+                    log_callback(text, "assistant")
+                if self.memory is not None:
+                    self.memory.append_message(self._conversation_id, "assistant", text)
+                return text
+
+            fname, args = instruction_call
 
             if log_callback:
                 if fname == "finish":
@@ -307,13 +359,12 @@ class SkillAgent:
                         args_s = json.dumps(args, ensure_ascii=False)
                     except (TypeError, ValueError):
                         args_s = str(args)
-                    log_callback(f"{msg.model_extra['reasoning_content']}", "think")
                     log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
                 else:
-                    log_callback(f"{msg.model_extra['reasoning_content']}","think")
+                    log_callback(f"选择 Skill: {args.get('skill_id', '')}", "think")
             if self.memory is not None:
-                self.memory.append_message(self._conversation_id, "assistant", msg.model_extra["reasoning_content"],metadata={"type":"think"})
-            # 执行tool
+                self.memory.append_message(self._conversation_id, "assistant", text, metadata={"type": "think"})
+            
             result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
 
             if log_callback and fname == "select_skill":
