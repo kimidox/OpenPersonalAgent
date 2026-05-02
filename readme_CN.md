@@ -1,4 +1,4 @@
-# PersonalWindowGLM · SkillAgent
+# OpenPersonalAgent · SkillAgent
 
 ## 界面预览
 
