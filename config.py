@@ -1,11 +1,20 @@
 import os
 
+from resource_path import is_frozen, get_app_dir, get_bundled_resource
 
-def get_config(key:str):
+
+def get_config(key: str):
     import dotenv
 
+    if is_frozen():
+        env_path = get_app_dir() / ".env"
+        if not env_path.is_file():
+            env_path = get_bundled_resource(".env")
+        if env_path.is_file():
+            dotenv.load_dotenv(str(env_path))
+        return dotenv.get_key(dotenv_path=str(env_path), key_to_get=key)
     dotenv.load_dotenv()
-    return dotenv.get_key(dotenv_path=".env",key_to_get=key)
+    return dotenv.get_key(dotenv_path=".env", key_to_get=key)
 
 OPENAI_API_KEY = get_config("OPENAI_API_KEY")
 OPENAI_BASE_URL = get_config("OPENAI_BASE_URL")
@@ -38,8 +47,17 @@ def _env_bool(raw, default: bool) -> bool:
 # 为 False 时：SkillAgent 界面不显示「工具」行，也不显示 select_skill / 自动加载 的「Skill 文档」块。
 _show_tools = get_config("SKILL_AGENT_UI_SHOW_TOOL_CALLS")
 SKILL_AGENT_UI_SHOW_TOOL_CALLS = _env_bool(_show_tools, True)
-WORKER_DIR=os.path.join(os.path.dirname(os.path.abspath(__file__)),str(get_config("WORKER_DIR")))
-SKILLS_DIR=os.path.join(WORKER_DIR,str(get_config("SKILLS_DIR")))
+if is_frozen():
+    _worker_dir_name = str(get_config("WORKER_DIR"))
+    _worker_candidate = get_app_dir() / _worker_dir_name
+    if _worker_candidate.is_dir():
+        WORKER_DIR = str(_worker_candidate)
+    else:
+        WORKER_DIR = str(get_bundled_resource(_worker_dir_name))
+    SKILLS_DIR = os.path.join(WORKER_DIR, str(get_config("SKILLS_DIR")))
+else:
+    WORKER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), str(get_config("WORKER_DIR")))
+    SKILLS_DIR = os.path.join(WORKER_DIR, str(get_config("SKILLS_DIR")))
 # 为 False 时：不在每轮开头按 auto_load / description 匹配自动注入 Skill（仅依赖模型 select_skill）。
 _auto_load = get_config("SKILL_AGENT_AUTO_LOAD")
 SKILL_AGENT_AUTO_LOAD = _env_bool(_auto_load, True)

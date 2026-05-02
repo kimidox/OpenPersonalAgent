@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .types import SkillDefinition
+import config
 
 
 def _parse_simple_frontmatter(raw: str) -> tuple[dict[str, str], str]:
@@ -63,12 +64,21 @@ def load_skill_from_path(path: Path) -> SkillDefinition:
     name = (meta.get("name") or skill_id).strip()
     description = (meta.get("description") or meta.get("desc") or "").strip()
     extra = {k: v for k, v in meta.items() if k not in ("id", "skill_id", "name", "description", "desc")}
+    try:
+        relative = path.relative_to(Path(config.WORKER_DIR).resolve())
+        relative_path = relative
+    except ValueError:
+        try:
+            relative = path.relative_to(Path.cwd())
+            relative_path = Path(*relative.parts[1:]) if len(relative.parts) > 1 else relative
+        except ValueError:
+            relative_path = path.name
     return SkillDefinition(
         skill_id=skill_id,
         name=name,
         description=description,
         body=body.strip(),
-        relative_path=Path(*path.relative_to(Path.cwd()).parts[1:]),
+        relative_path=relative_path,
         extra_meta=extra,
     )
 

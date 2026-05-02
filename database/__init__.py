@@ -5,10 +5,21 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# 使用包目录而非 cwd，避免从其他工作目录启动时找不到库文件；SQLite 不会自动创建父目录。
-_DB_DIR = Path(__file__).resolve().parent / "sqllite_data"
-_DB_DIR.mkdir(parents=True, exist_ok=True)
-DB_FILE = _DB_DIR / "sqllite_test.db"
+from resource_path import is_frozen, get_app_data_path
+
+
+def _get_db_path():
+    if is_frozen():
+        db_dir = get_app_data_path() / "data"
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return db_dir / "skill_agent.db"
+    else:
+        _DB_DIR = Path(__file__).resolve().parent / "sqllite_data"
+        _DB_DIR.mkdir(parents=True, exist_ok=True)
+        return _DB_DIR / "sqllite_test.db"
+
+
+DB_FILE = _get_db_path()
 
 engine = create_engine(
     f"sqlite:///{DB_FILE.resolve().as_posix()}",
@@ -36,10 +47,15 @@ def get_session():
     try:
         yield db
     except Exception as e:
-        db.rollback()  # 出错时回滚
+        db.rollback()
         raise e
     finally:
-        db.close()  # 确保会话关闭
+        db.close()
 
-if __name__ == '__main__':
-    pass
+
+def init_db() -> None:
+    from database.models import User, Conversations, Messages
+    Base.metadata.create_all(engine)
+
+
+init_db()

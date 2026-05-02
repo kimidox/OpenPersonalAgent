@@ -5,8 +5,16 @@ from pathlib import Path
 from typing import Optional
 
 import config
+from resource_path import is_frozen, get_app_data_path
 
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "llm_config.json"
+
+def _get_config_path() -> Path:
+    if is_frozen():
+        return get_app_data_path() / "llm_config.json"
+    return Path(__file__).resolve().parent.parent / "llm_config.json"
+
+
+_CONFIG_PATH = _get_config_path()
 
 
 class LLMConfig:

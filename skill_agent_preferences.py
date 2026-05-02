@@ -3,7 +3,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-_STATE_PATH = Path(__file__).resolve().parent / "skill_agent_disabled_skills.json"
+from resource_path import is_frozen, get_app_data_path
+
+
+def _get_state_path() -> Path:
+    if is_frozen():
+        return get_app_data_path() / "skill_agent_disabled_skills.json"
+    return Path(__file__).resolve().parent / "skill_agent_disabled_skills.json"
+
+
+_STATE_PATH = _get_state_path()
 
 
 def load_disabled_skill_ids() -> set[str]:

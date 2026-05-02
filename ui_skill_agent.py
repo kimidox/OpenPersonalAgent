@@ -45,9 +45,11 @@ from skill_agent import SKILL_AGENT_AWAITING_USER_REPLY, SkillAgent
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 
 
+from resource_path import get_bundled_resource
+
+
 def _load_ui_style_sections() -> dict[str, str]:
-    """从 ui_skill_agent_styles.css 解析 /* === section:<id> === */ 分块为字典。"""
-    css_path = Path(__file__).with_name("ui_skill_agent_styles.css")
+    css_path = get_bundled_resource("ui_skill_agent_styles.css")
     raw = css_path.read_text(encoding="utf-8")
     parts = re.split(r"/\* === section:(\w+) === \*/", raw)
     if len(parts) < 2:
