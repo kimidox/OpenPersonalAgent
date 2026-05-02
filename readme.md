@@ -1,4 +1,4 @@
-# PersonalWindowGLM · SkillAgent
+# OpenPersonalAgent · SkillAgent
 
 [中文版readme](./readme_CN.md)
 
