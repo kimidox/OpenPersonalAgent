@@ -1,134 +1,363 @@
 # OpenPersonalAgent · SkillAgent
 
-## 界面预览
+[English readme](./readme.md)
 
-下列截图为当前 SkillAgent 桌面端（`ui_skill_agent`）相关界面，资源位于仓库 `doc/` 目录。
+## 项目简介
 
-![SkillAgent 界面截图 1](doc/img.png)
+OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系统（SkillAgent）**，采用创新的 **"Skill-First" 架构设计**：
 
-![SkillAgent 界面截图 2](doc/img_1.png)
-
-![SkillAgent 界面截图 3](doc/img_2.png)
-
-![SkillAgent 界面截图 4](doc/img_3.png)
-
----
-
-基于大模型工具调用的 **SkillAgent**：把业务规范写成磁盘上的 Skill 文档，由 Agent **按需加载**、**组合多条 Skill** 约束，并通过 **原子工具** 在受限工作区内完成读写目录与桌面自动化等操作。
+- 📋 **业务规则即文档**：将业务规范写成磁盘上的 Markdown Skill 文档
+- 🔧 **按需动态加载**：Agent 根据用户需求智能选择并加载相关 Skill
+- 🧩 **多Skill组合执行**：支持在同一任务中组合多条 Skill 约束
+- ⚡ **原子命令执行**：通过 `run_command` 在受限工作区内完成文件操作与桌面自动化
 
 ---
 
-## 核心思路
+## ✨ 核心特性
 
-| 层次 | 作用 |
-|------|------|
-| **Skill 目录与注册表** | 扫描 Skills 根目录，解析每个 Skill 的元数据与正文，供目录摘要与 `select_skill` 加载。 |
-| **Skill 控制工具** | `select_skill` / `finish`：加载完整 Skill、结束回合并返回用户可见结果。 |
-| **原子工具** | `read_text_file` / `write_text_file` / `list_directory` / `execute_desktop_action`：统一经 `ToolContext(work_dir)` 执行。 |
+### 1. 智能Skill系统
 
-Agent 在系统提示中只看到 **Skill 列表摘要**；完整流程在模型调用 `select_skill` 后注入对话，再与原子工具交替执行，直到 `finish`。
+| 层次 | 功能 | 说明 |
+|------|------|------|
+| **Skill注册表** | 扫描Skills目录，解析元数据与正文 | 支持热更新 `reload_skills()` |
+| **控制工具** | `select_skill` / `finish` / `ask_user` | 加载Skill、结束会话、询问用户 |
+| **原子工具** | `run_command` | 统一通过 `ToolContext(work_dir)` 执行 |
 
----
+### 2. 安全执行机制
 
-## Skill 如何被加载
-
-1. **目录约定**（`skill/loader.py`）  
-   - Skills 根目录下每个 **一级子文件夹** 视为一个 Skill **包**。  
-   - 包内主文档解析顺序：优先 `<文件夹名>.md`，否则取该目录下字典序第一个 `.md`。  
-   - 兼容根目录平铺的独立 `.md` / `.markdown` / `.txt`。
-
-2. **元数据**  
-   - 支持可选的 `---` 包裹的简单前置块（无 PyYAML 依赖）：`id` / `skill_id`、`name`、`description` 等。  
-   - 解析结果为 `SkillDefinition`（`skill/types.py`），由 `SkillRegistry` 索引（`skill/registry.py`）。
-
-3. **运行时**  
-   - `SkillAgent` 构造时创建 `SkillRegistry(skills_dir)`，可用 `reload_skills()` 热更新。  
-   - 系统提示中的目录文本由 `build_skills_catalog_text` 生成，包含每个 Skill 的 `id`、`name`、`description` 及 **`dir`（相对路径提示）**，便于模型理解 Skill 包位置。
+- ✅ **工作目录隔离**：所有文件操作限制在 `work_dir` 内，防止路径穿越攻击
+- ✅ **危险命令检测**：自动识别 `del`、`rmdir`、`>` 等危险操作并要求用户确认
+- ✅ **步数上限保护**：`SKILL_AGENT_MAX_STEPS`（默认50步）防止无限循环
+- ✅ **写入操作监控**：自动检测重复写入并智能结束任务
 
 ---
 
-## Skill 如何被执行
+## 📁 内置Skill示例
 
-- **主循环**（`skill_agent.py`）：`complete_with_tools` → 解析函数调用 → `_dispatch`。  
-- **`select_skill` / `finish`** → `execute_skill_control_tool`（`skill/execution.py`）。  
-- **其余名称** → `execute_atomic_tool`（`base_tool/dispatch.py`）。
+项目提供5个开箱即用的Skill示例，展示不同场景的应用：
 
-成功 `select_skill` 后，会把 **当前会话已加载的全部 Skill 全文** 合并成一条用户侧消息追加进上下文，并约定：**多份 Skill 同时生效**；若有冲突，以更具体或 **后加载** 的说明为准（与系统提示文案一致）。
+### 1️⃣ 小说生成 (`id: 1`)
+- **功能**：根据章节大纲自动生成小说内容
+- **特性**：自动编号、剧情连贯性保持、字数控制（3000-5000字）
+- **输出**：Markdown格式的章节文件
 
----
+### 2️⃣ 聊天语气 (`id: 2`)
+- **功能**：为AI回复添加个性化语气风格
+- **特性**：音符符号、语气词、句式模板
+- **场景**：角色扮演、个性化助手
 
-## Skill 之间的相互调用 / 组合
+### 3️⃣ 时间格式转换 (`id: 5`)
+- **功能**：统一时间格式转换（日期时间 ↔ 时间戳）
+- **特性**：支持时区配置、多种输入格式识别
 
-- **多次 `select_skill`**：同一轮任务可依次加载多个 `skill_id`；`active_skill_text` / `active_skill_ids` 累积，**不是后加载覆盖先加载**。  
-- **去重**：同一 `skill_id` 再次 `select_skill` 时直接返回已缓存正文，不重复追加（`skill/execution.py`）。  
-- **文档内协作**：Skill 的 Markdown 可写明「仍需其它 Skill」；系统提示引导模型再次 `select_skill`，实现 **流程 A + 约束 B** 的链式组合。  
-
-这使复杂业务可以拆成多个小 Skill，由模型按任务动态组合，而不必把所有规则塞进单条超长 system prompt。
-
----
-
-## Skill → 原子工具
-
-原子工具在 `base_tool/definitions.py` 中声明，由同一套 `ToolContext` 执行：
-
-- **文件与目录**：相对 `work_dir` 的路径；读写、列目录。  
-- **桌面自动化**：`execute_desktop_action` 接收 **单个动作的 JSON 字符串**，交给可选的 `Executor`（例如 UI 中的 `Executor(self.work_dir)`）。
-
-系统提示中约定：若 Skill 要求读取包内相对路径文件，应用原子工具读写，且 **路径需拼上当前 Skill 的 `dir`**，避免模型把工作区根目录与 Skill 包目录混淆。
+### 4️⃣ Excel操作 (`id: 6`)
+- **功能**：自动化Excel文件读取
+- **集成**：Python脚本调用
 
 ---
 
-## 操作空间与工作目录隔离（沙箱）
+## 🏗️ 技术架构
 
-`base_tool/dispatch.py` 中 `_resolve_safe` 对所有文件类路径做校验：
-
-- 解析为 **`Path(work_dir).resolve()` 下的真实路径**；  
-- 若解析结果跳出工作区（如 `../`），抛出 **「路径必须位于工作目录内」**。
-
-效果：
-
-- Agent 的读写与列目录被限制在 **可配置的 `work_dir`**（例如 UI 里使用 `config.WORKER_DIR`），降低误删系统文件、乱写用户主目录的风险。  
-- Skill **内容**与 **用户数据/产出** 在概念上分离：规范在 `SKILLS_DIR`（默认在 worker 目录下由配置指定），执行时的文件操作锚定在 `work_dir`。
-
-此外，**每个 Skill 物理上独占一级子文件夹**，附件、模板与主 `.md` 同包，便于版本管理与复用。
-
----
-
-## 其它设计上的优势（简要）
-
-- **上下文经济**：首轮只注入目录摘要，长文档按需 `select_skill`，控制 token 与噪声。  
-- **人机可读规范**：Skill 即 Markdown + 轻量 frontmatter，非程序员也可维护。  
-- **工具面清晰**：控制面（Skill）与执行面（原子工具）分离，便于审计模型在「选规范」与「动手」上的行为。  
-- **步数上限**：`SKILL_AGENT_MAX_STEPS`（默认来自环境配置）防止无限工具循环。  
-- **可观测性**：`run(..., log_callback=...)` 可记录推理摘要、工具调用、Skill 全文加载与截断后的原子工具返回（Qt 界面按类型着色展示）。
-
----
-
-## 会话持久化与 Skill 可见性
-
-- **`Memory` 可选**：传入 `memory` 与 `conversation_id` 时，`run` 会在每轮前拼接历史消息（不含旧 system），并用当前 Skill 目录重新生成 system；工具轮次与「已加载 Skill」正文会写入持久化层，便于多轮对话与界面恢复。  
-- **桌面端默认**：`ui_skill_agent` 使用 `SqliteMemory`（用户名为 `config.DEFAULT_SKILL_AGENT_USER`），支持多标签页会话（`start_new_conversation` / `set_conversation_id`）、从库中拉取历史消息等。  
-- **禁用部分 Skill**：`skill_agent_preferences.load_disabled_skill_ids()` 读取项目根下的 `skill_agent_disabled_skills.json`；被禁用的 Skill 不会出现在目录摘要中，也无法被 `select_skill` 选中。设置界面可维护该列表。
+```
+PersonalWindowGLM/
+├── skill_agent.py              # 核心Agent逻辑
+├── ui_skill_agent.py           # 桌面GUI界面 (PySide6)
+├── config.py                   # 配置管理
+├── base_tool/                  # 原子工具定义
+│   ├── definitions.py          # 工具schema定义
+│   ├── dispatch.py             # 工具分发与安全校验
+│   └── context.py              # ToolContext上下文
+├── skill/                      # Skill加载与执行
+│   ├── loader.py               # 文件扫描与解析
+│   ├── registry.py             # Skill注册表
+│   └── execution.py            # 控制工具执行
+├── memory/                     # 会话持久化
+│   └── conversation.py         # SQLite存储
+├── database/                   # 数据库层
+└── PersonalData/Skills/        # Skill文档目录
+    ├── excel操作/
+    ├── 小说生成/
+    ├── 时间格式转换/
+    └── 聊天语气/
+```
 
 ---
 
-## 配置与环境（示例）
+## 🔄 Skill工作流程
 
-通过 `.env.dev` 等（见 `config.py`）可配置例如：
+### 加载机制
+1. **目录扫描**：每个子文件夹视为一个Skill包
+2. **主文档解析**：优先 `<文件夹名>.md`，否则取首个 `.md`
+3. **元数据提取**：解析 `---` 包裹的frontmatter（`id`、`name`、`description`）
+4. **运行时索引**：由 `SkillRegistry` 维护，支持热重载
 
-- `WORKER_DIR`：Agent 工作区（原子工具路径锚点）。  
-- `SKILLS_DIR`：相对 worker 的 Skills 根目录。  
-- `SKILL_AGENT_MAX_STEPS`：单轮最大工具步数。  
-- `OPENAI_*` / `MODEL_NAME`：模型与 API。
+### 执行流程
+```
+用户提问 → [系统提示: Skill目录摘要]
+         ↓
+    模型决策: select_skill(skill_id)
+         ↓
+    [强制6步加载流程]
+    Step 1: 完整阅读主文档
+    Step 2: 提取所有引用文件路径
+    Step 3: 逐个读取引用文件（必须指定skill_id）
+    Step 4: 执行scripts/下的脚本
+    Step 5: 合并为最终上下文
+    Step 6: 递归加载关联Skill
+         ↓
+    [上下文注入: 已加载的全部Skill全文]
+         ↓
+    执行 run_command 完成具体操作
+         ↓
+    finish(message) 返回结果
+```
+
+### 多Skill组合
+- **累积加载**：多次 `select_skill` 不覆盖，而是合并
+- **去重优化**：相同Skill不重复追加
+- **冲突解决**：以更具体或后加载的规则为准
+- **跨Skill协作**：文档内可声明依赖其他Skill
 
 ---
 
-## 运行入口
+## 🛡️ 安全设计详解
 
-主程序当前默认启动 SkillAgent 界面（`main.py` → `ui_skill_agent`）：内部构造 `SkillAgent(work_dir, executor=Executor(work_dir), memory=SqliteMemory(...), username=...)`，在独立线程中调用 `run` 并刷新聊天与日志视图。
+### 工作区沙箱
+```python
+# base_tool/dispatch.py - _resolve_safe()
+- 所有路径解析为 Path(work_dir).resolve() 下的真实路径
+- 禁止 ../ 路径穿越
+- 错误提示："路径必须位于工作目录内"
+```
 
-**说明**：`skill/processing.py` 中的 `skills_auto_matched_for_query` 与配置项 `SKILL_AGENT_AUTO_LOAD` 已存在，但 **`SkillAgent.run` 当前未调用自动匹配**；自动按用户问题预注入 Skill 需在主循环中另行接线后再写入文档。
+### 危险命令拦截
+```python
+# skill_agent.py - _is_dangerous_command()
+危险前缀: del, erase, rmdir, rd, copy, move, ren, mkdir
+危险特征: >, >>, set-content, remove-item, rm 等
+
+触发动作:
+→ 弹出确认对话框（"确认执行" / "取消"）
+→ 用户取消则终止命令
+→ 记录到会话历史
+```
+
+### 自动结束检测
+- 监控最近10条命令
+- 检测到2次以上重复写入成功 → 自动调用 `finish()`
+- 防止无限写入循环
 
 ---
 
+## 💾 会话持久化
 
+### 多标签页支持
+- **新建会话**：`start_new_conversation()` → 生成UUID
+- **切换会话**：`set_conversation_id(id)`
+- **历史列表**：`list_saved_conversations()`
+
+### 存储内容
+- 完整对话历史（system/user/assistant/tool）
+- 已加载的Skill列表
+- 工具调用记录（含参数）
+- 推理过程（reasoning_content）
+
+### Skill可见性控制
+- **禁用机制**：`skill_agent_disabled_skills.json`
+- **界面管理**：设置对话框可勾选启用/禁用
+- **效果**：被禁用的Skill不在目录中显示，无法被选中
+
+---
+
+## ⚙️ 配置说明
+
+通过项目根目录 `.env` 文件配置：
+
+```bash
+# ===== LLM配置 =====
+OPENAI_API_KEY=your-api-key
+OPENAI_BASE_URL=https://api.example.com/v1
+MODEL_NAME=gpt-4
+
+# ===== 工作目录配置 =====
+WORKER_DIR=PersonalData              # Agent工作区根目录
+SKILLS_DIR=Skills                    # Skills相对路径
+
+# ===== 执行限制 =====
+SKILL_AGENT_MAX_STEPS=50             # 单轮最大工具调用次数
+
+# ===== UI选项 =====
+SKILL_AGENT_UI_SHOW_TOOL_CALLS=true  # 是否显示工具调用详情
+DEFAULT_SKILL_AGENT_USER=default_user
+```
+
+---
+
+## 🚀 快速开始
+
+### 环境要求
+- Python 3.11+
+
+### 安装依赖
+```bash
+pip install -r requirements.txt
+```
+
+主要依赖：
+- PySide6（GUI界面）
+- python-dotenv（配置管理）
+- openai（LLM调用）
+
+### 运行程序
+```bash
+# 方式1：直接运行
+python main.py
+
+# 方式2：打包为exe（见build.bat）
+# 打包后的exe在 dist/OpenPersonalAgent/ 目录下
+```
+
+### 首次使用
+1. 复制 `.env.example` 为 `.env`
+2. 填写API密钥和模型配置
+3. 运行 `main.py` 启动界面
+4. 在左侧Skill列表查看可用技能
+5. 输入问题开始对话
+
+---
+
+## 🎨 界面预览
+
+![SkillAgent 主界面](doc/img.png)
+
+![Skill 对话示例](doc/img_1.png)
+
+![工具调用日志](doc/img_2.png)
+
+![设置界面](doc/img_3.png)
+
+---
+
+## 📝 开发自定义Skill
+
+### Skill文档结构
+```markdown
+---
+id: 100                          # 唯一标识（数字）
+name: 我的自定义Skill           # 显示名称
+description: 简短功能描述        # 目录中显示
+---
+
+## 功能说明
+详细描述Skill的功能和使用场景...
+
+## 执行流程
+1. 第一步...
+2. 第二步...
+
+## 调用命令
+`scripts/my_script.py "{参数}"`
+
+## 注意事项
+- 约束条件1
+- 约束条件2
+```
+
+### 目录规范
+```
+my_skill/                # Skill包目录（一级子文件夹）
+├── SKILL.md             # 主文档（优先）或 my_skill.md
+├── scripts/             # 可选：脚本文件
+│   └── my_script.py
+├── example/             # 可选：示例文件
+│   └── demo.md
+└── output/              # 可选：输出目录
+```
+
+### 最佳实践
+✅ **明确步骤**：使用有序列表定义清晰的执行流程  
+✅ **参数说明**：详细描述输入参数和格式  
+✅ **约束声明**：用【强制约束】标记必须遵守的规则  
+✅ **错误处理**：说明异常情况的处理方式  
+✅ **引用资源**：使用反引号标注包内文件路径 `` `./example/file.md` ``  
+
+---
+
+## 🔍 高级特性
+
+### Token经济性
+- 首轮只注入**Skill目录摘要**（轻量）
+- 完整文档仅在 `select_skill` 后加载
+- 有效控制上下文长度和成本
+
+### 可观测性
+```python
+# 日志回调接口
+run(user_query, log_callback=lambda msg, type: print(f"[{type}] {msg}"))
+
+# 消息类型：
+# - "think": 模型推理过程
+# - "tool": 工具调用
+# - "doc": Skill文档加载
+# - "base_tool": 命令执行结果
+# - "assistant": 最终回复
+# - "await_user": 等待用户确认
+```
+
+### 递归Skill加载
+Skill文档可引用其他Skill文件：
+- 主文档中的 `` `./path/to/file.md` `` 会被自动提取
+- 每个提取到的文件都会被读取
+- 若发现新的Skill引用，继续递归加载
+- 直到无新文件为止
+
+---
+
+## ❓ 常见问题
+
+**Q: 如何添加新的Skill？**
+A: 在 `PersonalData/Skills/` 下创建新文件夹，编写 `.md` 文档即可。重启或调用 `reload_skills()` 生效。
+
+**Q: 危险命令被误拦怎么办？**
+A: 当前为硬编码检测逻辑。如需调整白名单，修改 `skill_agent.py` 的 `_is_dangerous_command()` 方法。
+
+**Q: 支持哪些LLM后端？**
+A: 兼容OpenAI API格式即可（通过 `OPENAI_BASE_URL` 配置）。已测试：GPT-4、Claude、本地Ollama等。
+
+**Q: 如何导出会话记录？**
+A: 会话数据存储在SQLite数据库中（`database/sqllite_data/`），可直接查询或通过界面的导出功能。
+
+---
+
+## 📄 许可证
+
+MIT License
+
+---
+
+## 🤝 贡献指南
+
+欢迎提交Issue和Pull Request！
+
+1. Fork本仓库
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启Pull Request
+
+---
+
+## 更新日志
+
+### v2.0.0 (当前版本)
+- ✨ 重构为Skill-First架构
+- ✨ 新增多Skill组合执行
+- ✨ 新增危险命令检测与确认机制
+- ✨ 新增自动结束检测
+- ✨ 新增会话持久化与多标签页
+- 🔧 优化工作区沙箱安全性
+- 🐛 修复多个稳定性问题
+
+---
+
+**⭐ 如果这个项目对你有帮助，请给一个Star支持！**
