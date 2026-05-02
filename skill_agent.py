@@ -429,46 +429,86 @@ class SkillAgent:
                             return cancel_msg
 
         for step in range(self.max_steps):
-            function_call = model.request_llm_with_tools(messages, tools)
-            
-            if not function_call:
-                msg = model.complete(messages)
-                text = _message_text(msg)
-                if not text:
+            thinking_parts: list[str] = []
+            content_parts: list[str] = []
+
+            def _stream_callback(content: str, msg_type: str) -> None:
+                if log_callback:
+                    log_callback(content, msg_type)
+                if msg_type == "think":
+                    thinking_parts.append(content)
+                elif msg_type == "content":
+                    content_parts.append(content)
+
+            function_call = model.stream_request_llm_with_tools(messages, tools, _stream_callback)
+
+            full_thinking = "".join(thinking_parts).strip()
+
+            # 判断是否为纯文本回复（无工具调用）
+            is_text_only = (
+                function_call is not None and
+                function_call.get("name") is None and
+                function_call.get("content") is not None
+            )
+
+            if is_text_only or (function_call is None):
+                # 纯文本回复：内容已经在流式过程中显示过，只需入库
+                final_text = ""
+                if is_text_only:
+                    final_text = function_call.get("content", "")
+                else:
+                    final_text = "".join(content_parts).strip()
+                    full_thinking = "".join(thinking_parts).strip()
+
+                if full_thinking and self.memory is not None:
+                    self.memory.append_message(
+                        self._conversation_id,
+                        "assistant",
+                        full_thinking,
+                        metadata={"type": "think"},
+                    )
+
+                if not final_text:
                     err = "模型未返回内容，无法继续。"
                     if log_callback:
                         log_callback(err, "assistant")
                     if self.memory is not None:
                         self.memory.append_message(self._conversation_id, "assistant", err)
                     return err
-                if log_callback:
-                    log_callback(text, "assistant")
+
                 if self.memory is not None:
-                    self.memory.append_message(self._conversation_id, "assistant", text)
-                return text
+                    self.memory.append_message(self._conversation_id, "assistant", final_text)
+                return final_text
 
             fname = function_call.get("name")
             arg_str = function_call.get("arguments", "{}")
-            reasoning_content=function_call.get("reasoning_content", "")
             try:
                 args = json.loads(arg_str)
             except json.JSONDecodeError:
                 args = {}
+
+            if full_thinking and self.memory is not None:
+                self.memory.append_message(
+                    self._conversation_id,
+                    "assistant",
+                    full_thinking,
+                    metadata={"type": "think"},
+                )
 
             if log_callback:
                 try:
                     args_s = json.dumps(args, ensure_ascii=False)
                 except (TypeError, ValueError):
                     args_s = str(args)
-                log_callback(f"{reasoning_content}", "think")
+                pass
                 if fname == "finish":
-                    log_callback(str(args.get("message", "")), "assistant")
+                    pass
                 elif fname != "select_skill":
                     log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
                 else:
                     log_callback(f"选择 Skill: {args.get('skill_id', '')}", "tool")
             if self.memory is not None:
-                self.memory.append_message(self._conversation_id, "assistant", f"调用工具: {fname}", metadata={"type": "tool_call", "name": fname, "args": arg_str,"reasoning_content":reasoning_content})
+                self.memory.append_message(self._conversation_id, "assistant", f"调用工具: {fname}", metadata={"type": "tool_call", "name": fname, "args": arg_str,"reasoning_content":full_thinking})
             
             if fname == "run_command":
                 command = str(args.get("command", "") or "").strip()

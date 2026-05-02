@@ -214,6 +214,196 @@ class BaseChatModel(ABC):
         msg = response.choices[0].message
         return self.extract_function_call(msg)
 
+    def stream_request_llm_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        stream_callback: Callable[[str, str], None],
+    ) -> Optional[dict[str, str]]:
+        """
+        流式请求带工具的补全。
+        - stream_callback(content: str, type: str) 实时回调：
+          - type="think": 推理内容（reasoning_content）
+          - type="content": 普通文本内容
+        - 返回完整的 function_call（若有），否则返回 None
+        - 内置智能缓冲：每 50ms 或累积 30 字符触发一次回调，避免UI过载
+        """
+        import time as _time
+
+        stream = self.get_client().chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            temperature=self.temperature,
+            top_p=self.top_p,
+            frequency_penalty=self.frequency_penalty,
+            extra_body=self.extra_body,
+            stream=True,
+        )
+
+        reasoning_buffer: list[str] = []
+        content_buffer: list[str] = []
+        tool_call_chunks: dict[int, dict[str, Any]] = {}
+
+        last_callback_time = _time.time()
+        callback_interval = 0.05  # 50ms
+        min_chars_for_callback = 30  # 最少累积30字符
+
+        def _flush_buffer():
+            nonlocal last_callback_time
+            if reasoning_buffer:
+                text = "".join(reasoning_buffer)
+                reasoning_buffer.clear()
+                stream_callback(text, "think")
+            if content_buffer:
+                text = "".join(content_buffer)
+                content_buffer.clear()
+                stream_callback(text, "content")
+            last_callback_time = _time.time()
+
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+
+            reasoning = getattr(delta, 'reasoning_content', None)
+            if reasoning:
+                reasoning_buffer.append(reasoning)
+            content = getattr(delta, 'content', None)
+            if content:
+                content_buffer.append(content)
+
+            current_time = _time.time()
+            total_buffered = sum(len(s) for s in reasoning_buffer) + sum(len(s) for s in content_buffer)
+            should_flush = (
+                (current_time - last_callback_time >= callback_interval) or
+                (total_buffered >= min_chars_for_callback)
+            )
+            if should_flush and (reasoning_buffer or content_buffer):
+                _flush_buffer()
+
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    if idx not in tool_call_chunks:
+                        tool_call_chunks[idx] = {
+                            "id": tc.id or "",
+                            "name": "",
+                            "arguments": "",
+                        }
+                    if tc.function:
+                        if tc.function.name:
+                            tool_call_chunks[idx]["name"] += tc.function.name
+                        if tc.function.arguments:
+                            tool_call_chunks[idx]["arguments"] += tc.function.arguments
+
+        _flush_buffer()
+
+        if not tool_call_chunks:
+            # 没有工具调用，返回纯文本内容
+            content_text = "".join(content_buffer).strip()
+            reasoning_text = "".join(reasoning_buffer).strip()
+            if not content_text and not reasoning_text:
+                return None
+            return {
+                "name": None,
+                "arguments": None,
+                "content": content_text,
+                "reasoning_content": reasoning_text,
+            }
+
+        first_tc = tool_call_chunks[min(tool_call_chunks.keys())]
+        name = first_tc["name"].strip()
+        arguments = first_tc["arguments"].strip()
+
+        if not name:
+            # 有内容但无有效工具调用，当作纯文本处理
+            content_text = "".join(content_buffer).strip()
+            reasoning_text = "".join(reasoning_buffer).strip()
+            return {
+                "name": None,
+                "arguments": None,
+                "content": content_text,
+                "reasoning_content": reasoning_text,
+            }
+
+        reasoning_content = "".join(reasoning_buffer)
+        return {"name": name, "arguments": arguments, "reasoning_content": reasoning_content}
+
+    def stream_complete(
+        self,
+        messages: list[dict],
+        stream_callback: Callable[[str, str], None],
+    ) -> Any:
+        """
+        流式纯文本补全。
+        - stream_callback(content: str, type: str) 实时回调：
+          - type="think": 推理内容（reasoning_content）
+          - type="content": 普通文本内容
+        - 返回完整消息对象（兼容原有接口）
+        - 内置智能缓冲：每 50ms 或累积 30 字符触发一次回调，避免UI过载
+        """
+        import time as _time
+
+        stream = self.get_client().chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            frequency_penalty=self.frequency_penalty,
+            extra_body=self.extra_body,
+            stream=True,
+        )
+
+        reasoning_buffer: list[str] = []
+        content_buffer: list[str] = []
+
+        last_callback_time = _time.time()
+        callback_interval = 0.05  # 50ms
+        min_chars_for_callback = 30  # 最少累积30字符
+
+        def _flush_buffer():
+            nonlocal last_callback_time
+            if reasoning_buffer:
+                text = "".join(reasoning_buffer)
+                reasoning_buffer.clear()
+                stream_callback(text, "think")
+            if content_buffer:
+                text = "".join(content_buffer)
+                content_buffer.clear()
+                stream_callback(text, "content")
+            last_callback_time = _time.time()
+
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+
+            reasoning = getattr(delta, 'reasoning_content', None)
+            if reasoning:
+                reasoning_buffer.append(reasoning)
+            content = getattr(delta, 'content', None)
+            if content:
+                content_buffer.append(content)
+
+            current_time = _time.time()
+            total_buffered = sum(len(s) for s in reasoning_buffer) + sum(len(s) for s in content_buffer)
+            should_flush = (
+                (current_time - last_callback_time >= callback_interval) or
+                (total_buffered >= min_chars_for_callback)
+            )
+            if should_flush and (reasoning_buffer or content_buffer):
+                _flush_buffer()
+
+        _flush_buffer()
+
+        from types import SimpleNamespace
+        msg = SimpleNamespace()
+        msg.content = "".join(content_buffer)
+        msg.reasoning_content = "".join(reasoning_buffer)
+        return msg
+
     def execute_function_call(self, fname: str, args: dict, executor: Executor) -> str:
         action = {"action": fname}
         if args:

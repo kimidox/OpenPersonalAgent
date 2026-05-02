@@ -719,6 +719,8 @@ class SkillAgentMainWindow(QMainWindow):
         self.worker_thread: SkillAgentWorkerThread | None = None
         self._assistant_stream_timer: QTimer | None = None
         self._assistant_stream_state: dict[str, Any] | None = None
+        self._current_stream_type: str | None = None
+        self._current_stream_session: ChatSessionTab | None = None
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -1321,17 +1323,33 @@ class SkillAgentMainWindow(QMainWindow):
             return
         target_chat = session_tab.chat_view
         show_tool_ui = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
+
         if msg_type in ("tool", "base_tool"):
+            self._reset_stream_state()
             if show_tool_ui:
                 self._append_tool_line(target_chat, message)
         elif msg_type == "doc":
+            self._reset_stream_state()
             if show_tool_ui:
                 self._append_doc_markdown(target_chat, message)
-        elif msg_type in ("assistant", "response"):
-            self._append_assistant_markdown_streaming(target_chat, message)
+        elif msg_type in ("assistant", "response", "content"):
+            if self._current_stream_type == "content" and self._current_stream_session is session_tab:
+                self._append_assistant_content_append(target_chat, message)
+            else:
+                self._reset_stream_state()
+                self._current_stream_type = "content"
+                self._current_stream_session = session_tab
+                self._append_assistant_markdown_streaming(target_chat, message)
         elif msg_type in ("think",):
-            self._append_assistant_think_markdown(target_chat, message)
+            if self._current_stream_type == "think" and self._current_stream_session is session_tab:
+                self._append_assistant_think_append(target_chat, message)
+            else:
+                self._reset_stream_state()
+                self._current_stream_type = "think"
+                self._current_stream_session = session_tab
+                self._append_assistant_think_markdown(target_chat, message)
         elif msg_type == "await_user":
+            self._reset_stream_state()
             spec = _parse_await_user_log_json(message)
             st = session_tab
             session_tab.show_await_user_prompt(
@@ -1339,9 +1357,37 @@ class SkillAgentMainWindow(QMainWindow):
                 on_confirm_send=lambda t, _st=st: self._send_user_message(t, session_tab=_st),
             )
 
+    def _reset_stream_state(self) -> None:
+        """重置当前流式输出状态"""
+        if self._assistant_stream_state is not None:
+            self._flush_assistant_stream_to_markdown()
+        self._current_stream_type = None
+        self._current_stream_session = None
+
+    def _append_assistant_think_append(self, chat_view: QTextEdit, text: str) -> None:
+        """追加思考内容到现有的 think 块"""
+        doc = chat_view.document()
+        cursor = QTextCursor(doc)
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(text)
+        self._scroll_to_end(chat_view)
+
+    def _append_assistant_content_append(self, chat_view: QTextEdit, text: str) -> None:
+        """追加内容到现有的流式内容块"""
+        if self._assistant_stream_state is not None:
+            st = self._assistant_stream_state
+            st["full"] += text
+            return
+        doc = chat_view.document()
+        cursor = QTextCursor(doc)
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(text)
+        self._scroll_to_end(chat_view)
+
     def _on_worker_finished(self, result: str, session_tab: object) -> None:
         self.send_btn.setEnabled(True)
         self.input_edit.setEnabled(True)
+        self._reset_stream_state()
         if isinstance(session_tab, ChatSessionTab) and result != SKILL_AGENT_AWAITING_USER_REPLY:
             session_tab.clear_await_user_ui()
         self._sync_input_placeholder_for_active_tab()
