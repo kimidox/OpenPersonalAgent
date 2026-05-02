@@ -26,13 +26,17 @@ class BaseChatModel(ABC):
         model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        temperature: float = 0.0,
+        temperature: float = 0.7,
+        top_p: float = 0.95,
+        frequency_penalty: float = 0.6,
         extra_body: Optional[dict[str, Any]] = None,
     ) -> None:
         self.model_name = model_name or config.MODEL_NAME
         self.api_key = api_key or config.OPENAI_API_KEY
         self.base_url = base_url or config.OPENAI_BASE_URL
         self.temperature = temperature
+        self.top_p = top_p
+        self.frequency_penalty = frequency_penalty
         self.extra_body = extra_body if extra_body is not None else {"enable_thinking": True}
         self._client: Optional[OpenAI] = None
 
@@ -178,6 +182,8 @@ class BaseChatModel(ABC):
             tools=tools,
             tool_choice="auto",
             temperature=self.temperature,
+            top_p=self.top_p,
+            frequency_penalty=self.frequency_penalty,
             extra_body=self.extra_body,
         )
         return response.choices[0].message
@@ -187,9 +193,9 @@ class BaseChatModel(ABC):
         response = self.get_client().chat.completions.create(
             model=self.model_name,
             messages=messages,
-            temperature=0.7,
-            top_p=0.95,
-            frequency_penalty=0.6,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            frequency_penalty=self.frequency_penalty,
             extra_body=self.extra_body,
         )
         return response.choices[0].message
@@ -200,9 +206,9 @@ class BaseChatModel(ABC):
             messages=messages,
             tools=tools,
             tool_choice="auto",
-            temperature=0.7,
-            top_p=0.95,
-            frequency_penalty=0.6,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            frequency_penalty=self.frequency_penalty,
             extra_body=self.extra_body,
         )
         msg = response.choices[0].message
@@ -253,7 +259,6 @@ class BaseChatModel(ABC):
         current_messages = list(messages)
         executor = executor or Executor(".")
 
-        # 避免无限循环：达到 MAX_ITERATIONS 仍未结束则返回异常。
         for _ in range(getattr(config, "MAX_ITERATIONS", 20)):
             function_call = self.request_llm_with_tools(current_messages, tools)
             if not function_call:
@@ -298,4 +303,3 @@ class BaseChatModel(ABC):
         if log_callback:
             log_callback("任务异常", "response")
         return "任务异常"
-

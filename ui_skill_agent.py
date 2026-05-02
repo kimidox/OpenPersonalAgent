@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 import config
 from executor import Executor
 from llm import get_chat_model
+from llm.llm_config_manager import get_current_config, set_config, reset_to_default, LLMConfig
 from memory import SqliteMemory
 from skill_agent import SKILL_AGENT_AWAITING_USER_REPLY, SkillAgent
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
@@ -351,6 +352,9 @@ def _llm_request_params_text() -> str:
     parts = [
         f"model_name: {m.model_name}",
         f"temperature: {m.temperature}",
+        f"top_p: {getattr(m, 'top_p', 0.95)}",
+        f"frequency_penalty: {getattr(m, 'frequency_penalty', 0.6)}",
+        f"enable_thinking: {body.get('enable_thinking', True)}",
         f"base_url: {m.base_url}",
         f"api_key: {key_disp}",
         f"extra_body:\n{body_s}",
@@ -367,7 +371,7 @@ class SkillAgentSettingsDialog(QDialog):
         self.setObjectName("skillAgentSettingsDialog")
         self.setWindowTitle("会话与模型设置")
         self.setModal(True)
-        self.resize(560, 520)
+        self.resize(560, 720)
         self._skill_agent = skill_agent
         self._disabled: set[str] = set(load_disabled_skill_ids())
         self._skill_checks: list[tuple[str, QCheckBox]] = []
@@ -376,17 +380,89 @@ class SkillAgentSettingsDialog(QDialog):
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
 
-        lm = QLabel("当前大模型")
+        lm = QLabel("大模型配置")
         f = lm.font()
         f.setBold(True)
         lm.setFont(f)
         root.addWidget(lm)
-        self._model_label = QLabel()
-        self._model_label.setWordWrap(True)
-        self._model_label.setTextFormat(Qt.TextFormat.RichText)
-        root.addWidget(self._model_label)
 
-        lp = QLabel("LLM 请求参数（与当前配置一致，只读）")
+        self._model_name_edit = QLineEdit()
+        self._model_name_edit.setPlaceholderText("模型名称（如：qwen3.5-plus、glm-4）")
+        root.addWidget(self._model_name_edit)
+
+        self._api_key_edit = QLineEdit()
+        self._api_key_edit.setPlaceholderText("API Key")
+        root.addWidget(self._api_key_edit)
+
+        self._base_url_edit = QLineEdit()
+        self._base_url_edit.setPlaceholderText("API 基础 URL")
+        root.addWidget(self._base_url_edit)
+
+        temp_layout = QHBoxLayout()
+        temp_label = QLabel("温度系数：")
+        temp_label.setFont(QFont("Microsoft YaHei", 9))
+        temp_layout.addWidget(temp_label)
+        self._temperature_edit = QLineEdit()
+        self._temperature_edit.setPlaceholderText("0.7")
+        self._temperature_edit.setFixedWidth(80)
+        temp_layout.addWidget(self._temperature_edit)
+        temp_hint = QLabel("（控制输出随机性，0-2之间，值越高越随机）")
+        temp_hint.setFont(QFont("Microsoft YaHei", 9))
+        temp_hint.setStyleSheet("color: #6b7280;")
+        temp_layout.addWidget(temp_hint)
+        root.addLayout(temp_layout)
+
+        top_p_layout = QHBoxLayout()
+        top_p_label = QLabel("Top P：")
+        top_p_label.setFont(QFont("Microsoft YaHei", 9))
+        top_p_layout.addWidget(top_p_label)
+        self._top_p_edit = QLineEdit()
+        self._top_p_edit.setPlaceholderText("0.95")
+        self._top_p_edit.setFixedWidth(80)
+        top_p_layout.addWidget(self._top_p_edit)
+        top_p_hint = QLabel("（核采样，0-1之间，值越小越聚焦）")
+        top_p_hint.setFont(QFont("Microsoft YaHei", 9))
+        top_p_hint.setStyleSheet("color: #6b7280;")
+        top_p_layout.addWidget(top_p_hint)
+        root.addLayout(top_p_layout)
+
+        freq_pen_layout = QHBoxLayout()
+        freq_pen_label = QLabel("频率惩罚：")
+        freq_pen_label.setFont(QFont("Microsoft YaHei", 9))
+        freq_pen_layout.addWidget(freq_pen_label)
+        self._frequency_penalty_edit = QLineEdit()
+        self._frequency_penalty_edit.setPlaceholderText("0.6")
+        self._frequency_penalty_edit.setFixedWidth(80)
+        freq_pen_layout.addWidget(self._frequency_penalty_edit)
+        freq_pen_hint = QLabel("（控制重复输出，值越高越避免重复）")
+        freq_pen_hint.setFont(QFont("Microsoft YaHei", 9))
+        freq_pen_hint.setStyleSheet("color: #6b7280;")
+        freq_pen_layout.addWidget(freq_pen_hint)
+        root.addLayout(freq_pen_layout)
+
+        enable_thinking_layout = QHBoxLayout()
+        self._enable_thinking_check = QCheckBox("启用深度思考模式")
+        self._enable_thinking_check.setFont(QFont("Microsoft YaHei", 9))
+        enable_thinking_layout.addWidget(self._enable_thinking_check)
+        thinking_hint = QLabel("（启用后模型会输出思考过程）")
+        thinking_hint.setFont(QFont("Microsoft YaHei", 9))
+        thinking_hint.setStyleSheet("color: #6b7280;")
+        enable_thinking_layout.addWidget(thinking_hint)
+        root.addLayout(enable_thinking_layout)
+
+        config_buttons = QHBoxLayout()
+        self._apply_btn = QPushButton("应用配置")
+        self._apply_btn.setObjectName("skillAgentSettingsApplyButton")
+        self._apply_btn.clicked.connect(self._on_apply_config)
+        config_buttons.addWidget(self._apply_btn)
+
+        self._reset_btn = QPushButton("恢复默认")
+        self._reset_btn.setObjectName("skillAgentSettingsResetButton")
+        self._reset_btn.clicked.connect(self._on_reset_config)
+        config_buttons.addWidget(self._reset_btn)
+        root.addLayout(config_buttons)
+
+        lp = QLabel("当前 LLM 请求参数（只读）")
         fp = lp.font()
         fp.setBold(True)
         lp.setFont(fp)
@@ -394,7 +470,7 @@ class SkillAgentSettingsDialog(QDialog):
         self._params_edit = QTextEdit()
         self._params_edit.setReadOnly(True)
         self._params_edit.setFont(QFont("Consolas", 9))
-        self._params_edit.setMinimumHeight(140)
+        self._params_edit.setMinimumHeight(100)
         self._params_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         root.addWidget(self._params_edit)
 
@@ -430,9 +506,16 @@ class SkillAgentSettingsDialog(QDialog):
         self._refresh_llm_block()
 
     def _refresh_llm_block(self) -> None:
+        current = get_current_config()
+        self._model_name_edit.setText(current.model_name)
+        self._api_key_edit.setText(current.api_key)
+        self._base_url_edit.setText(current.base_url)
+        self._temperature_edit.setText(str(current.temperature))
+        self._top_p_edit.setText(str(current.top_p))
+        self._frequency_penalty_edit.setText(str(current.frequency_penalty))
+        self._enable_thinking_check.setChecked(current.enable_thinking)
+        
         m = get_chat_model()
-        mono = _UI_STYLES["settings_model_name_span"]
-        self._model_label.setText(f"<span style='{mono}'>{escape(m.model_name or '')}</span>")
         self._params_edit.setPlainText(_llm_request_params_text())
 
     def _repopulate_skill_rows(self) -> None:
@@ -442,7 +525,6 @@ class SkillAgentSettingsDialog(QDialog):
         self._skills_layout = QVBoxLayout(self._skills_inner)
         self._skills_layout.setContentsMargins(8, 8, 8, 8)
         self._skills_layout.setSpacing(6)
-        # setWidget 会接管并销毁滚动区里原来的 widget，不可再对旧指针 deleteLater
         self._skills_scroll.setWidget(self._skills_inner)
 
         skills = sorted(
@@ -471,6 +553,79 @@ class SkillAgentSettingsDialog(QDialog):
         else:
             self._disabled.add(skill_id)
         save_disabled_skill_ids(self._disabled)
+
+    def _on_apply_config(self) -> None:
+        model_name = self._model_name_edit.text().strip()
+        api_key = self._api_key_edit.text().strip()
+        base_url = self._base_url_edit.text().strip()
+        
+        temperature = 0.7
+        try:
+            temp_val = float(self._temperature_edit.text().strip())
+            if 0 <= temp_val <= 2:
+                temperature = temp_val
+            else:
+                QMessageBox.warning(self, "警告", "温度系数必须在 0 到 2 之间")
+                return
+        except ValueError:
+            QMessageBox.warning(self, "警告", "温度系数必须是数字")
+            return
+        
+        top_p = 0.95
+        try:
+            top_p_val = float(self._top_p_edit.text().strip())
+            if 0 <= top_p_val <= 1:
+                top_p = top_p_val
+            else:
+                QMessageBox.warning(self, "警告", "Top P 必须在 0 到 1 之间")
+                return
+        except ValueError:
+            QMessageBox.warning(self, "警告", "Top P 必须是数字")
+            return
+        
+        frequency_penalty = 0.6
+        try:
+            freq_val = float(self._frequency_penalty_edit.text().strip())
+            frequency_penalty = freq_val
+        except ValueError:
+            QMessageBox.warning(self, "警告", "频率惩罚必须是数字")
+            return
+        
+        enable_thinking = self._enable_thinking_check.isChecked()
+        
+        if not model_name:
+            QMessageBox.warning(self, "警告", "请输入模型名称")
+            return
+        if not api_key:
+            QMessageBox.warning(self, "警告", "请输入 API Key")
+            return
+        if not base_url:
+            QMessageBox.warning(self, "警告", "请输入 API 基础 URL")
+            return
+        
+        new_config = LLMConfig(
+            model_name=model_name,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            enable_thinking=enable_thinking,
+        )
+        set_config(new_config)
+        
+        QMessageBox.information(self, "提示", "配置已保存并生效，新配置将立即应用到所有会话")
+        self._refresh_llm_block()
+
+    def _on_reset_config(self) -> None:
+        reply = QMessageBox.question(
+            self, "确认", "确定要恢复默认配置吗？这将使用 .env 文件中的设置。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            reset_to_default()
+            self._refresh_llm_block()
+            QMessageBox.information(self, "提示", "已恢复默认配置")
 
     def showEvent(self, event) -> None:  # type: ignore[override]
         super().showEvent(event)
