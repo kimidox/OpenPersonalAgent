@@ -1388,8 +1388,11 @@ class SkillAgentMainWindow(QMainWindow):
         self.send_btn.setEnabled(True)
         self.input_edit.setEnabled(True)
         self._reset_stream_state()
-        if isinstance(session_tab, ChatSessionTab) and result != SKILL_AGENT_AWAITING_USER_REPLY:
-            session_tab.clear_await_user_ui()
+        if isinstance(session_tab, ChatSessionTab):
+            if result != SKILL_AGENT_AWAITING_USER_REPLY:
+                session_tab.clear_await_user_ui()
+                if result and result.strip():
+                    self._append_assistant_markdown(session_tab.chat_view, result)
         self._sync_input_placeholder_for_active_tab()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]

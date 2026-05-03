@@ -12,6 +12,44 @@ _RUN_COMMAND_DEFAULT_TIMEOUT = 60
 _RUN_COMMAND_MAX_TIMEOUT = 180
 _RUN_COMMAND_MAX_TOTAL_OUT = 12000
 
+# 获取项目根目录下的 PersonalData 路径
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PERSONAL_DATA_DIR = _PROJECT_ROOT / "PersonalData"
+_VENV_DIR = _PERSONAL_DATA_DIR / "venv"
+
+
+def _ensure_venv_exists() -> bool:
+    """确保 PersonalData 下存在虚拟环境,如果不存在则创建"""
+    if _VENV_DIR.exists() and (_VENV_DIR / "Scripts" / "python.exe").exists():
+        return True
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "venv", str(_VENV_DIR)],
+            capture_output=True,
+            timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
+        )
+        return (_VENV_DIR / "Scripts" / "python.exe").exists()
+    except Exception:
+        return False
+
+
+def _get_venv_python() -> str | None:
+    """获取虚拟环境中的 Python 可执行文件路径"""
+    if not _ensure_venv_exists():
+        return None
+    return str(_VENV_DIR / "Scripts" / "python.exe")
+
+
+def _get_venv_activate_script() -> str | None:
+    """获取激活虚拟环境的脚本路径（不包含call关键字）"""
+    if not _ensure_venv_exists():
+        return None
+    activate_script = _VENV_DIR / "Scripts" / "activate.bat"
+    if activate_script.exists():
+        return str(activate_script)
+    return None
+
 
 def _resolve_safe(ctx: ToolContext, rel: str) -> Path:
     root = Path(ctx.work_dir).resolve()
@@ -80,16 +118,56 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
             timeout_sec = _RUN_COMMAND_DEFAULT_TIMEOUT
         timeout_sec = max(1, min(timeout_sec, _RUN_COMMAND_MAX_TIMEOUT))
 
-        import shlex
-        if command.lower().startswith("powershell"):
-            remaining = command[len("powershell"):].strip()
-            try:
-                parsed = shlex.split(remaining)
-                cmd = ["powershell.exe"] + parsed
-            except:
-                cmd = ["powershell.exe", "-Command", remaining]
+        # 使用虚拟环境执行命令
+        venv_python = _get_venv_python()
+        venv_activate_script = _get_venv_activate_script()
+        
+        # 构建使用虚拟环境的命令
+        if sys.platform == "win32":
+            # Windows: 对于Python脚本，直接使用虚拟环境的Python解释器
+            cmd_lower = command.lower().strip()
+            if (cmd_lower.startswith("python") or cmd_lower.endswith(".py")) and venv_python:
+                # 替换命令中的python为虚拟环境的python
+                if cmd_lower.startswith("python"):
+                    parts = command.split(None, 1)
+                    if len(parts) == 2:
+                        command = f'{venv_python} {parts[1]}'
+                    else:
+                        command = venv_python
+                elif cmd_lower.endswith(".py"):
+                    command = f'{venv_python} {command}'
+                # 使用虚拟环境的Python直接执行，无需激活
+                cmd = ["cmd.exe", "/c", command]
+            else:
+                # 非Python命令，如果需要激活虚拟环境则先激活
+                if venv_activate_script:
+                    cmd = ["cmd.exe", "/c", f'{venv_activate_script} && cd /d "{cwd_str}" && {command}']
+                else:
+                    import shlex
+                    if command.lower().startswith("powershell"):
+                        remaining = command[len("powershell"):].strip()
+                        try:
+                            parsed = shlex.split(remaining)
+                            cmd = ["powershell.exe"] + parsed
+                        except:
+                            cmd = ["powershell.exe", "-Command", remaining]
+                    else:
+                        cmd = ["cmd.exe", "/c", command]
         else:
-            cmd = ["cmd.exe", "/c", command]
+            # Unix-like 系统
+            if venv_activate_script:
+                cmd = ["/bin/bash", "-c", f"source {venv_activate_script} && cd {cwd_str} && {command}"]
+            else:
+                import shlex
+                if command.lower().startswith("powershell"):
+                    remaining = command[len("powershell"):].strip()
+                    try:
+                        parsed = shlex.split(remaining)
+                        cmd = ["powershell.exe"] + parsed
+                    except:
+                        cmd = ["powershell.exe", "-Command", remaining]
+                else:
+                    cmd = ["cmd.exe", "/c", command]
         
         popen_kw: dict = {
             "cwd": cwd_str,
@@ -105,7 +183,7 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         except subprocess.TimeoutExpired as e:
             out = _decode_output(e.stdout or b"") + _decode_output(e.stderr or b"")
             tail = _truncate_run_output(out)
-            return f"错误: 命令执行超时（{timeout_sec}s）\n{tail}".strip()
+            return f"错误: 命令执行超时({timeout_sec}s)\n{tail}".strip()
 
         stdout = _decode_output(proc.stdout or b"")
         stderr = _decode_output(proc.stderr or b"")
