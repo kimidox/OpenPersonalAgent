@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import config
+from resource_path import is_frozen, get_app_dir, get_app_data_path
 from skill import SkillRegistry
 from .context import ToolContext
 
@@ -12,10 +14,57 @@ _RUN_COMMAND_DEFAULT_TIMEOUT = 60
 _RUN_COMMAND_MAX_TIMEOUT = 180
 _RUN_COMMAND_MAX_TOTAL_OUT = 12000
 
-# 获取项目根目录下的 PersonalData 路径
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_PERSONAL_DATA_DIR = _PROJECT_ROOT / "PersonalData"
-_VENV_DIR = _PERSONAL_DATA_DIR / "venv"
+# 虚拟环境目录：统一存放到用户数据目录
+# onefile 模式: %APPDATA%/Roaming/OpenPersonalAgent/venv
+# 开发模式: 项目根目录/PersonalData/venv
+if is_frozen():
+    _VENV_DIR = get_app_data_path() / "venv"
+else:
+    _VENV_DIR = Path(__file__).resolve().parent.parent / "PersonalData" / "venv"
+
+
+def _find_system_python() -> str | None:
+    """
+    查找系统安装的 Python 解释器。
+    onefile 模式下 sys.executable 指向打包的 exe，不能用来创建虚拟环境。
+    """
+    import shutil
+    
+    if not is_frozen():
+        return sys.executable
+    
+    candidate_names = ["python", "python3", "py"]
+    
+    for name in candidate_names:
+        python_path = shutil.which(name)
+        if python_path:
+            return python_path
+    
+    common_paths = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "python.exe",
+        Path(os.environ.get("PROGRAMFILES", "")) / "Python" / "python.exe",
+        Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Python" / "python.exe",
+    ]
+    for p in common_paths:
+        if p.exists() and p.is_file():
+            return str(p)
+    
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Python\PythonCore") as key:
+            i = 0
+            while True:
+                version = winreg.EnumKey(key, i)
+                subkey = winreg.OpenKey(key, version)
+                install_path, _ = winreg.QueryValueEx(subkey, "InstallPath")
+                python_exe = Path(install_path) / "python.exe"
+                if python_exe.exists():
+                    return str(python_exe)
+                i += 1
+    except (ImportError, OSError, FileNotFoundError):
+        pass
+    
+    return None
 
 
 def _ensure_venv_exists() -> bool:
@@ -23,8 +72,12 @@ def _ensure_venv_exists() -> bool:
     if _VENV_DIR.exists() and (_VENV_DIR / "Scripts" / "python.exe").exists():
         return True
     try:
+        system_python = _find_system_python()
+        if not system_python:
+            return False
+        
         subprocess.run(
-            [sys.executable, "-m", "venv", str(_VENV_DIR)],
+            [system_python, "-m", "venv", str(_VENV_DIR)],
             capture_output=True,
             timeout=60,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
@@ -190,7 +243,7 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 
                 skill = registry.get(str(skill_id))
                 if skill and skill.relative_path.parent:
-                    skill_dir = _PERSONAL_DATA_DIR / skill.relative_path.parent
+                    skill_dir = Path(config.WORKER_DIR) / skill.relative_path.parent
                     success, msg = _install_skill_dependencies(skill_dir)
                     if not success:
                         return f"错误: {msg}"

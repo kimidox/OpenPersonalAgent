@@ -26,7 +26,7 @@ def get_bundled_resource(relative_path: str) -> Path:
 def get_app_data_path() -> Path:
     if is_frozen():
         app_data = Path(os.environ.get('APPDATA', os.path.expanduser('~')))
-        app_dir = app_data / "PersonalWindowGLM"
+        app_dir = app_data / "OpenPersonalAgent"
         app_dir.mkdir(parents=True, exist_ok=True)
         return app_dir
     return Path(__file__).resolve().parent
