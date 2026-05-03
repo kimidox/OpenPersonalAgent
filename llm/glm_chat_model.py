@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import time as _time
 from typing import Any, Callable, Optional
+
+from openai import APIError, BadRequestError, AuthenticationError, RateLimitError, APIConnectionError
 
 from .BaseChatModel import BaseChatModel
 
@@ -17,27 +20,49 @@ class GLMChatModel(BaseChatModel):
         super().__init__(model_name=model_name, **kwargs)
 
     def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
-        response = self.get_client().chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            functions=tools,
-            function_call="auto",
-            temperature=self.temperature,
-            extra_body=self.extra_body,
-        )
-        msg = response.choices[0].message
-        return self.extract_function_call(msg)
+        try:
+            response = self.get_client().chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                functions=tools,
+                function_call="auto",
+                temperature=self.temperature,
+                extra_body=self.extra_body,
+            )
+            msg = response.choices[0].message
+            return self.extract_function_call(msg)
+        except BadRequestError as e:
+            raise RuntimeError(f"请求参数错误: {e}")
+        except AuthenticationError as e:
+            raise RuntimeError(f"API认证失败: {e}")
+        except RateLimitError as e:
+            raise RuntimeError(f"API请求频率超限: {e}")
+        except APIConnectionError as e:
+            raise RuntimeError(f"API连接失败: {e}")
+        except APIError as e:
+            raise RuntimeError(f"API错误: {e}")
 
     def complete_with_tools(self, messages: list[dict], tools: list[dict]) -> Any:
-        response = self.get_client().chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            functions=tools,
-            function_call="auto",
-            temperature=self.temperature,
-            extra_body=self.extra_body,
-        )
-        return response.choices[0].message
+        try:
+            response = self.get_client().chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                functions=tools,
+                function_call="auto",
+                temperature=self.temperature,
+                extra_body=self.extra_body,
+            )
+            return response.choices[0].message
+        except BadRequestError as e:
+            raise RuntimeError(f"请求参数错误: {e}")
+        except AuthenticationError as e:
+            raise RuntimeError(f"API认证失败: {e}")
+        except RateLimitError as e:
+            raise RuntimeError(f"API请求频率超限: {e}")
+        except APIConnectionError as e:
+            raise RuntimeError(f"API连接失败: {e}")
+        except APIError as e:
+            raise RuntimeError(f"API错误: {e}")
 
     def stream_request_llm_with_tools(
         self,
@@ -50,15 +75,42 @@ class GLMChatModel(BaseChatModel):
         - 使用 functions 参数（GLM 兼容格式）
         - 内置智能缓冲：每 50ms 或累积 30 字符触发一次回调
         """
-        stream = self.get_client().chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            functions=tools,
-            function_call="auto",
-            temperature=self.temperature,
-            extra_body=self.extra_body,
-            stream=True,
-        )
+        try:
+            stream = self.get_client().chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                functions=tools,
+                function_call="auto",
+                temperature=self.temperature,
+                extra_body=self.extra_body,
+                stream=True,
+            )
+        except BadRequestError as e:
+            error_msg = f"请求参数错误: {e}"
+            if "inappropriate content" in str(e).lower() or "data inspection" in str(e).lower():
+                error_msg = "内容审核未通过：输入内容可能包含不适当的内容，请修改后重试。"
+            stream_callback(error_msg, "content")
+            return {"name": "finish", "arguments": json.dumps({"message": error_msg}, ensure_ascii=False)}
+        except AuthenticationError as e:
+            error_msg = f"API认证失败: {e}"
+            stream_callback(error_msg, "content")
+            return {"name": "finish", "arguments": json.dumps({"message": error_msg}, ensure_ascii=False)}
+        except RateLimitError as e:
+            error_msg = f"API请求频率超限: {e}"
+            stream_callback(error_msg, "content")
+            return {"name": "finish", "arguments": json.dumps({"message": error_msg}, ensure_ascii=False)}
+        except APIConnectionError as e:
+            error_msg = f"API连接失败: {e}"
+            stream_callback(error_msg, "content")
+            return {"name": "finish", "arguments": json.dumps({"message": error_msg}, ensure_ascii=False)}
+        except APIError as e:
+            error_msg = f"API错误: {e}"
+            stream_callback(error_msg, "content")
+            return {"name": "finish", "arguments": json.dumps({"message": error_msg}, ensure_ascii=False)}
+        except Exception as e:
+            error_msg = f"未知错误: {e}"
+            stream_callback(error_msg, "content")
+            return {"name": "finish", "arguments": json.dumps({"message": error_msg}, ensure_ascii=False)}
 
         reasoning_buffer: list[str] = []
         content_buffer: list[str] = []
@@ -80,41 +132,47 @@ class GLMChatModel(BaseChatModel):
                 stream_callback(text, "content")
             last_callback_time = _time.time()
 
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
+        try:
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
 
-            reasoning = getattr(delta, 'reasoning_content', None)
-            if reasoning:
-                reasoning_buffer.append(reasoning)
-            content = getattr(delta, 'content', None)
-            if content:
-                content_buffer.append(content)
+                reasoning = getattr(delta, 'reasoning_content', None)
+                if reasoning:
+                    reasoning_buffer.append(reasoning)
+                content = getattr(delta, 'content', None)
+                if content:
+                    content_buffer.append(content)
 
-            current_time = _time.time()
-            total_buffered = sum(len(s) for s in reasoning_buffer) + sum(len(s) for s in content_buffer)
-            should_flush = (
-                (current_time - last_callback_time >= callback_interval) or
-                (total_buffered >= min_chars_for_callback)
-            )
-            if should_flush and (reasoning_buffer or content_buffer):
-                _flush_buffer()
+                current_time = _time.time()
+                total_buffered = sum(len(s) for s in reasoning_buffer) + sum(len(s) for s in content_buffer)
+                should_flush = (
+                    (current_time - last_callback_time >= callback_interval) or
+                    (total_buffered >= min_chars_for_callback)
+                )
+                if should_flush and (reasoning_buffer or content_buffer):
+                    _flush_buffer()
 
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    idx = tc.index
-                    if idx not in tool_call_chunks:
-                        tool_call_chunks[idx] = {
-                            "id": tc.id or "",
-                            "name": "",
-                            "arguments": "",
-                        }
-                    if tc.function:
-                        if tc.function.name:
-                            tool_call_chunks[idx]["name"] += tc.function.name
-                        if tc.function.arguments:
-                            tool_call_chunks[idx]["arguments"] += tc.function.arguments
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_call_chunks:
+                            tool_call_chunks[idx] = {
+                                "id": tc.id or "",
+                                "name": "",
+                                "arguments": "",
+                            }
+                        if tc.function:
+                            if tc.function.name:
+                                tool_call_chunks[idx]["name"] += tc.function.name
+                            if tc.function.arguments:
+                                tool_call_chunks[idx]["arguments"] += tc.function.arguments
+        except Exception as e:
+            _flush_buffer()
+            error_msg = f"流式响应处理错误: {e}"
+            stream_callback(error_msg, "content")
+            return {"name": "finish", "arguments": json.dumps({"message": error_msg}, ensure_ascii=False)}
 
         _flush_buffer()
 
@@ -157,13 +215,64 @@ class GLMChatModel(BaseChatModel):
         - 内置智能缓冲机制
         - 返回完整消息对象
         """
-        stream = self.get_client().chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=self.temperature,
-            extra_body=self.extra_body,
-            stream=True,
-        )
+        try:
+            stream = self.get_client().chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                extra_body=self.extra_body,
+                stream=True,
+            )
+        except BadRequestError as e:
+            error_msg = f"请求参数错误: {e}"
+            if "inappropriate content" in str(e).lower() or "data inspection" in str(e).lower():
+                error_msg = "内容审核未通过：输入内容可能包含不适当的内容，请修改后重试。"
+            stream_callback(error_msg, "content")
+            from types import SimpleNamespace
+            msg = SimpleNamespace()
+            msg.content = error_msg
+            msg.reasoning_content = ""
+            return msg
+        except AuthenticationError as e:
+            error_msg = f"API认证失败: {e}"
+            stream_callback(error_msg, "content")
+            from types import SimpleNamespace
+            msg = SimpleNamespace()
+            msg.content = error_msg
+            msg.reasoning_content = ""
+            return msg
+        except RateLimitError as e:
+            error_msg = f"API请求频率超限: {e}"
+            stream_callback(error_msg, "content")
+            from types import SimpleNamespace
+            msg = SimpleNamespace()
+            msg.content = error_msg
+            msg.reasoning_content = ""
+            return msg
+        except APIConnectionError as e:
+            error_msg = f"API连接失败: {e}"
+            stream_callback(error_msg, "content")
+            from types import SimpleNamespace
+            msg = SimpleNamespace()
+            msg.content = error_msg
+            msg.reasoning_content = ""
+            return msg
+        except APIError as e:
+            error_msg = f"API错误: {e}"
+            stream_callback(error_msg, "content")
+            from types import SimpleNamespace
+            msg = SimpleNamespace()
+            msg.content = error_msg
+            msg.reasoning_content = ""
+            return msg
+        except Exception as e:
+            error_msg = f"未知错误: {e}"
+            stream_callback(error_msg, "content")
+            from types import SimpleNamespace
+            msg = SimpleNamespace()
+            msg.content = error_msg
+            msg.reasoning_content = ""
+            return msg
 
         reasoning_buffer: list[str] = []
         content_buffer: list[str] = []
@@ -184,26 +293,36 @@ class GLMChatModel(BaseChatModel):
                 stream_callback(text, "content")
             last_callback_time = _time.time()
 
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
+        try:
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
 
-            reasoning = getattr(delta, 'reasoning_content', None)
-            if reasoning:
-                reasoning_buffer.append(reasoning)
-            content = getattr(delta, 'content', None)
-            if content:
-                content_buffer.append(content)
+                reasoning = getattr(delta, 'reasoning_content', None)
+                if reasoning:
+                    reasoning_buffer.append(reasoning)
+                content = getattr(delta, 'content', None)
+                if content:
+                    content_buffer.append(content)
 
-            current_time = _time.time()
-            total_buffered = sum(len(s) for s in reasoning_buffer) + sum(len(s) for s in content_buffer)
-            should_flush = (
-                (current_time - last_callback_time >= callback_interval) or
-                (total_buffered >= min_chars_for_callback)
-            )
-            if should_flush and (reasoning_buffer or content_buffer):
-                _flush_buffer()
+                current_time = _time.time()
+                total_buffered = sum(len(s) for s in reasoning_buffer) + sum(len(s) for s in content_buffer)
+                should_flush = (
+                    (current_time - last_callback_time >= callback_interval) or
+                    (total_buffered >= min_chars_for_callback)
+                )
+                if should_flush and (reasoning_buffer or content_buffer):
+                    _flush_buffer()
+        except Exception as e:
+            _flush_buffer()
+            error_msg = f"流式响应处理错误: {e}"
+            stream_callback(error_msg, "content")
+            from types import SimpleNamespace
+            msg = SimpleNamespace()
+            msg.content = error_msg
+            msg.reasoning_content = ""
+            return msg
 
         _flush_buffer()
 
