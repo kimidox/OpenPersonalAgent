@@ -10,7 +10,7 @@ description: 使用DuckDuckGo搜索引擎进行网页搜索，支持普通搜索
 ## 输入参数
 - query: 搜索关键词
 - search_type: 搜索类型，可选值：text(普通搜索)、news(新闻搜索)、images(图片搜索)，默认为text
-- max_results: 最大返回结果数，默认为5
+- max_results: 最大返回结果数，默认为5，建议设置为10-20以获取更多结果
 
 ## 调用命令
 **注意：参数之间用空格分隔，不要给参数加引号**
@@ -19,8 +19,13 @@ python scripts/search.py {query} {search_type} {max_results}
 ```
 
 示例：
-- 搜索"崩坏三爱莉"：`python scripts/search.py 崩坏三爱莉 text 5`
-- 搜索新闻：`python scripts/search.py 科技新闻 news 3`
+- 搜索"崩坏三爱莉"：`python scripts/search.py 崩坏三爱莉 text 10`
+- 搜索新闻：`python scripts/search.py 科技新闻 news 10`
+
+## 搜索结果说明
+- 部分结果的 body 字段可能为空，这是DuckDuckGo搜索引擎的限制
+- 建议增加 max_results 参数以获取更多有效结果
+- news 搜索类型通常有更完整的摘要内容
 
 ## 执行流程
 1. 使用 run_command 执行上述命令
