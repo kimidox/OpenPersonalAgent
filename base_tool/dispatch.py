@@ -51,6 +51,93 @@ def _get_venv_activate_script() -> str | None:
     return None
 
 
+def _get_venv_pip() -> str | None:
+    """获取虚拟环境中的 pip 可执行文件路径"""
+    if not _ensure_venv_exists():
+        return None
+    pip_exe = _VENV_DIR / "Scripts" / "pip.exe"
+    if pip_exe.exists():
+        return str(pip_exe)
+    return None
+
+
+def _get_installed_packages() -> set[str]:
+    """获取虚拟环境中已安装的包名集合"""
+    venv_python = _get_venv_python()
+    if not venv_python:
+        return set()
+    try:
+        result = subprocess.run(
+            [venv_python, "-m", "pip", "list", "--format=freeze"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
+        )
+        packages = set()
+        for line in result.stdout.strip().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                pkg_name = line.split("==")[0].lower().replace("-", "_")
+                packages.add(pkg_name)
+        return packages
+    except Exception:
+        return set()
+
+
+def _install_skill_dependencies(skill_dir: Path) -> tuple[bool, str]:
+    """
+    安装 skill 包的依赖。
+    返回 (成功与否, 消息)
+    """
+    requirements_file = skill_dir / "requirements.txt"
+    if not requirements_file.exists():
+        return True, ""
+    
+    required_packages = set()
+    try:
+        content = requirements_file.read_text(encoding="utf-8")
+        for line in content.strip().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                pkg_name = line.split("==")[0].split(">=")[0].split("<=")[0].split("[")[0]
+                pkg_name = pkg_name.lower().replace("-", "_")
+                required_packages.add(pkg_name)
+    except Exception as e:
+        return False, f"读取 requirements.txt 失败: {e}"
+    
+    if not required_packages:
+        return True, ""
+    
+    installed = _get_installed_packages()
+    to_install = required_packages - installed
+    
+    if not to_install:
+        return True, ""
+    
+    pip_exe = _get_venv_pip()
+    if not pip_exe:
+        return False, "无法找到虚拟环境的 pip"
+    
+    try:
+        result = subprocess.run(
+            [pip_exe, "install", "-r", str(requirements_file)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
+        )
+        if result.returncode == 0:
+            installed_names = ", ".join(sorted(to_install))
+            return True, f"已安装依赖: {installed_names}"
+        else:
+            return False, f"安装依赖失败: {result.stderr}"
+    except subprocess.TimeoutExpired:
+        return False, "安装依赖超时"
+    except Exception as e:
+        return False, f"安装依赖异常: {e}"
+
+
 def _resolve_safe(ctx: ToolContext, rel: str) -> Path:
     root = Path(ctx.work_dir).resolve()
     rel = (rel or ".").strip().replace("\\", "/")
@@ -100,6 +187,13 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 skill_relative_path = _splice_skill_path(raw_cwd or ".", str(skill_id), registry)
                 cwd_path = _resolve_safe(ctx, skill_relative_path)
                 cwd_str = str(cwd_path)
+                
+                skill = registry.get(str(skill_id))
+                if skill and skill.relative_path.parent:
+                    skill_dir = _PERSONAL_DATA_DIR / skill.relative_path.parent
+                    success, msg = _install_skill_dependencies(skill_dir)
+                    if not success:
+                        return f"错误: {msg}"
             except ValueError as e:
                 return f"错误: {e}"
         elif raw_cwd:
