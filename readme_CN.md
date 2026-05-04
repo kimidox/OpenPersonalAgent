@@ -1,6 +1,6 @@
 # OpenPersonalAgent · SkillAgent
 
-[English readme](./readme.md)
+[English README](./readme.md)
 
 ## 项目简介
 
@@ -10,6 +10,7 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 - 🔧 **按需动态加载**：Agent 根据用户需求智能选择并加载相关 Skill
 - 🧩 **多Skill组合执行**：支持在同一任务中组合多条 Skill 约束
 - ⚡ **原子命令执行**：通过 `run_command` 在受限工作区内完成文件操作与桌面自动化
+- 🤖 **多模型支持**：支持 GLM、Qwen、Gemma 等多种大语言模型
 
 ---
 
@@ -27,14 +28,27 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 
 - ✅ **工作目录隔离**：所有文件操作限制在 `work_dir` 内，防止路径穿越攻击
 - ✅ **危险命令检测**：自动识别 `del`、`rmdir`、`>` 等危险操作并要求用户确认
+- ✅ **包安装确认**：检测到 pip/npm 等包安装命令时，需用户确认后执行
+- ✅ **Skill依赖管理**：自动检测 Skill 包的 requirements.txt，提示用户安装依赖
 - ✅ **步数上限保护**：`SKILL_AGENT_MAX_STEPS`（默认50步）防止无限循环
 - ✅ **写入操作监控**：自动检测重复写入并智能结束任务
+
+### 3. 多模型支持
+
+项目支持多种大语言模型后端：
+
+| 模型类型 | 模型名称示例 | 特点 |
+|---------|-------------|------|
+| **GLM系列** | glm-5, glm-4 | 智谱AI出品，支持深度思考 |
+| **Qwen系列** | qwen3.5, qwen-turbo | 阿里云通义千问系列 |
+| **Gemma系列** | gemma-2, gemma-7b | Google开源模型 |
+| **其他兼容模型** | gpt-4, claude等 | 兼容OpenAI API格式 |
 
 ---
 
 ## 📁 内置Skill示例
 
-项目提供5个开箱即用的Skill示例，展示不同场景的应用：
+项目提供6个开箱即用的Skill示例，展示不同场景的应用：
 
 ### 1️⃣ 小说生成 (`id: 1`)
 - **功能**：根据章节大纲自动生成小说内容
@@ -54,15 +68,27 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 - **功能**：自动化Excel文件读取
 - **集成**：Python脚本调用
 
+### 5️⃣ DuckDuckGo搜索 (`id: 8`)
+- **功能**：使用DuckDuckGo搜索引擎进行网页搜索
+- **特性**：支持普通搜索、新闻搜索、图片搜索
+- **输出**：自动获取搜索结果的详细网页内容
+
+### 6️⃣ 图片匹配测试 (`id: 7`)
+- **功能**：屏幕截图、模板匹配、自动化点击
+- **特性**：快捷键模拟、坐标点击、OpenCV模板匹配
+- **场景**：桌面自动化测试
+
 ---
 
 ## 🏗️ 技术架构
 
 ```
 PersonalWindowGLM/
+├── main.py                     # 程序入口
 ├── skill_agent.py              # 核心Agent逻辑
 ├── ui_skill_agent.py           # 桌面GUI界面 (PySide6)
 ├── config.py                   # 配置管理
+├── executor.py                 # 命令执行器
 ├── base_tool/                  # 原子工具定义
 │   ├── definitions.py          # 工具schema定义
 │   ├── dispatch.py             # 工具分发与安全校验
@@ -70,15 +96,29 @@ PersonalWindowGLM/
 ├── skill/                      # Skill加载与执行
 │   ├── loader.py               # 文件扫描与解析
 │   ├── registry.py             # Skill注册表
-│   └── execution.py            # 控制工具执行
+│   ├── execution.py            # 控制工具执行
+│   └── processing.py           # Skill处理工具
+├── llm/                        # 大语言模型接口
+│   ├── BaseChatModel.py        # 模型基类
+│   ├── glm_chat_model.py       # GLM模型实现
+│   ├── qwen_chat_model.py      # Qwen模型实现
+│   ├── gemma_chat_model.py     # Gemma模型实现
+│   └── llm_config_manager.py   # 模型配置管理
 ├── memory/                     # 会话持久化
-│   └── conversation.py         # SQLite存储
+│   ├── memory.py               # 内存管理接口
+│   ├── sqlite_memory.py        # SQLite存储实现
+│   └── conversation.py         # 会话管理
 ├── database/                   # 数据库层
-└── PersonalData/Skills/        # Skill文档目录
-    ├── excel操作/
-    ├── 小说生成/
-    ├── 时间格式转换/
-    └── 聊天语气/
+└── PersonalData/               # 用户数据目录
+    ├── Skills/                 # Skill文档目录
+    │   ├── DuckDuckGoSearch/
+    │   ├── excel操作/
+    │   ├── 小说生成/
+    │   ├── 时间格式转换/
+    │   ├── 聊天语气/
+    │   └── 图片匹配测试/
+    ├── data/                   # 数据库文件
+    └── logs/                   # 日志文件
 ```
 
 ---
@@ -86,8 +126,8 @@ PersonalWindowGLM/
 ## 🔄 Skill工作流程
 
 ### 加载机制
-1. **目录扫描**：每个子文件夹视为一个Skill包
-2. **主文档解析**：优先 `<文件夹名>.md`，否则取首个 `.md`
+1. **目录扫描**：每个一级子文件夹视为一个Skill包
+2. **主文档解析**：优先 `<文件夹名>.md` 或 `SKILL.md`，否则取首个 `.md`
 3. **元数据提取**：解析 `---` 包裹的frontmatter（`id`、`name`、`description`）
 4. **运行时索引**：由 `SkillRegistry` 维护，支持热重载
 
@@ -98,10 +138,10 @@ PersonalWindowGLM/
     模型决策: select_skill(skill_id)
          ↓
     [强制6步加载流程]
-    Step 1: 完整阅读主文档
-    Step 2: 提取所有引用文件路径
+    Step 1: 完整阅读主文档全部内容
+    Step 2: 提取所有被反引号包裹的文件路径
     Step 3: 逐个读取引用文件（必须指定skill_id）
-    Step 4: 执行scripts/下的脚本
+    Step 4: 执行scripts/下的脚本（如有）
     Step 5: 合并为最终上下文
     Step 6: 递归加载关联Skill
          ↓
@@ -133,13 +173,31 @@ PersonalWindowGLM/
 ### 危险命令拦截
 ```python
 # skill_agent.py - _is_dangerous_command()
-危险前缀: del, erase, rmdir, rd, copy, move, ren, mkdir
+危险前缀: del, erase, rmdir, rd, copy, move, ren, rename, mkdir, md
 危险特征: >, >>, set-content, remove-item, rm 等
 
 触发动作:
 → 弹出确认对话框（"确认执行" / "取消"）
 → 用户取消则终止命令
 → 记录到会话历史
+```
+
+### 包安装确认
+```python
+# skill_agent.py - _is_package_install_command()
+支持的包管理器: pip, pip3, npm, yarn, pnpm, conda, cargo, gem, go, apt, choco, scoop, winget
+
+触发动作:
+→ 弹出确认对话框，显示即将安装的包名
+→ 用户确认后执行安装
+```
+
+### Skill依赖自动检测
+```python
+# base_tool/dispatch.py - check_skill_dependencies()
+- 自动扫描 Skill 包内的 requirements.txt
+- 检测是否已安装所需依赖
+- 提示用户确认安装缺失的依赖包
 ```
 
 ### 自动结束检测
@@ -188,7 +246,11 @@ SKILL_AGENT_MAX_STEPS=50             # 单轮最大工具调用次数
 
 # ===== UI选项 =====
 SKILL_AGENT_UI_SHOW_TOOL_CALLS=true  # 是否显示工具调用详情
+SKILL_AGENT_AUTO_LOAD=true           # 是否自动加载Skill
 DEFAULT_SKILL_AGENT_USER=default_user
+
+# ===== 截图配置 =====
+SCREENSHOT_GRID_STEP_PX=32           # 截图网格步长
 ```
 
 ---
@@ -204,16 +266,21 @@ pip install -r requirements.txt
 ```
 
 主要依赖：
-- PySide6（GUI界面）
-- python-dotenv（配置管理）
-- openai（LLM调用）
+- PySide6 >= 6.5.0（GUI界面）
+- openai >= 1.0.0（LLM调用）
+- sqlalchemy >= 2.0.0（数据库）
+- pydantic >= 2.0.0（数据验证）
+- Pillow >= 9.0.0（图像处理）
+- opencv-python >= 4.8.0（图像匹配）
+- pyautogui >= 0.9.54（桌面自动化）
+- pandas ~= 3.0.1（数据处理）
 
 ### 运行程序
 ```bash
 # 方式1：直接运行
 python main.py
 
-# 方式2：打包为exe（见build.bat）
+# 方式2：打包为exe（见 build.bat）
 # 打包后的exe在 dist/OpenPersonalAgent/ 目录下
 ```
 
@@ -243,7 +310,7 @@ python main.py
 ### Skill文档结构
 ```markdown
 ---
-id: 100                          # 唯一标识（数字）
+id: 100                          # 唯一标识（数字或字符串）
 name: 我的自定义Skill           # 显示名称
 description: 简短功能描述        # 目录中显示
 ---
@@ -256,7 +323,14 @@ description: 简短功能描述        # 目录中显示
 2. 第二步...
 
 ## 调用命令
-`scripts/my_script.py "{参数}"`
+`python scripts/my_script.py "{参数}"`
+
+## 依赖（可选）
+在 Skill 包内创建 requirements.txt 列出所需依赖：
+```
+ddgs
+requests
+```
 
 ## 注意事项
 - 约束条件1
@@ -271,7 +345,8 @@ my_skill/                # Skill包目录（一级子文件夹）
 │   └── my_script.py
 ├── example/             # 可选：示例文件
 │   └── demo.md
-└── output/              # 可选：输出目录
+├── output/              # 可选：输出目录
+└── requirements.txt     # 可选：Python依赖
 ```
 
 ### 最佳实践
@@ -280,6 +355,7 @@ my_skill/                # Skill包目录（一级子文件夹）
 ✅ **约束声明**：用【强制约束】标记必须遵守的规则  
 ✅ **错误处理**：说明异常情况的处理方式  
 ✅ **引用资源**：使用反引号标注包内文件路径 `` `./example/file.md` ``  
+✅ **依赖声明**：在 requirements.txt 中声明所需的 Python 包
 
 ---
 
@@ -322,10 +398,13 @@ A: 在 `PersonalData/Skills/` 下创建新文件夹，编写 `.md` 文档即可�
 A: 当前为硬编码检测逻辑。如需调整白名单，修改 `skill_agent.py` 的 `_is_dangerous_command()` 方法。
 
 **Q: 支持哪些LLM后端？**
-A: 兼容OpenAI API格式即可（通过 `OPENAI_BASE_URL` 配置）。已测试：GPT-4、Claude、本地Ollama等。
+A: 兼容OpenAI API格式即可（通过 `OPENAI_BASE_URL` 配置）。已内置支持：GLM、Qwen、Gemma系列。
 
 **Q: 如何导出会话记录？**
-A: 会话数据存储在SQLite数据库中（`database/sqllite_data/`），可直接查询或通过界面的导出功能。
+A: 会话数据存储在SQLite数据库中（`PersonalData/data/`），可直接查询或通过界面的导出功能。
+
+**Q: Skill的依赖包如何安装？**
+A: 当执行 Skill 时检测到缺失依赖，系统会自动提示用户确认安装。
 
 ---
 
@@ -353,8 +432,11 @@ MIT License
 - ✨ 重构为Skill-First架构
 - ✨ 新增多Skill组合执行
 - ✨ 新增危险命令检测与确认机制
+- ✨ 新增包安装确认机制
+- ✨ 新增Skill依赖自动检测与安装
 - ✨ 新增自动结束检测
 - ✨ 新增会话持久化与多标签页
+- ✨ 新增多模型支持（GLM、Qwen、Gemma）
 - 🔧 优化工作区沙箱安全性
 - 🐛 修复多个稳定性问题
 

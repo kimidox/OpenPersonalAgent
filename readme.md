@@ -1,6 +1,6 @@
 # OpenPersonalAgent · SkillAgent
 
-[中文版readme](./readme_CN.md)
+[中文版README](./readme_CN.md)
 
 ## Project Overview
 
@@ -10,6 +10,7 @@ OpenPersonalAgent is an **intelligent agent system (SkillAgent) based on LLM too
 - 🔧 **On-Demand Dynamic Loading**: Agent intelligently selects and loads relevant Skills based on user needs
 - 🧩 **Multi-Skill Composition**: Combine multiple Skill constraints in a single task
 - ⚡ **Atomic Command Execution**: Complete file operations and desktop automation via `run_command` within a bounded workspace
+- 🤖 **Multi-Model Support**: Supports GLM, Qwen, Gemma, and other LLM backends
 
 ---
 
@@ -27,14 +28,27 @@ OpenPersonalAgent is an **intelligent agent system (SkillAgent) based on LLM too
 
 - ✅ **Workspace Isolation**: All file operations confined to `work_dir`, preventing path traversal attacks
 - ✅ **Dangerous Command Detection**: Auto-detects `del`, `rmdir`, `>` etc. and requires user confirmation
+- ✅ **Package Installation Confirmation**: Detects pip/npm commands and requires user confirmation
+- ✅ **Skill Dependency Management**: Auto-detects Skill package requirements.txt and prompts installation
 - ✅ **Step Limit Protection**: `SKILL_AGENT_MAX_STEPS` (default 50) prevents infinite loops
 - ✅ **Write Operation Monitoring**: Auto-detects repeated writes and intelligently ends tasks
+
+### 3. Multi-Model Support
+
+The project supports multiple LLM backends:
+
+| Model Type | Example Models | Features |
+|---------|-------------|------|
+| **GLM Series** | glm-5, glm-4 | Zhipu AI, supports deep thinking |
+| **Qwen Series** | qwen3.5, qwen-turbo | Alibaba Tongyi Qianwen series |
+| **Gemma Series** | gemma-2, gemma-7b | Google open-source models |
+| **Other Compatible** | gpt-4, claude, etc. | OpenAI API compatible |
 
 ---
 
 ## 📁 Built-in Skill Examples
 
-The project provides 5 ready-to-use Skill examples demonstrating different scenarios:
+The project provides 6 ready-to-use Skill examples demonstrating different scenarios:
 
 ### 1️⃣ Novel Generation (`id: 1`)
 - **Function**: Automatically generate novel content based on chapter outlines
@@ -54,15 +68,27 @@ The project provides 5 ready-to-use Skill examples demonstrating different scena
 - **Function**: Automated Excel file reading
 - **Integration**: Python script invocation
 
+### 5️⃣ DuckDuckGo Search (`id: 8`)
+- **Function**: Web search using DuckDuckGo search engine
+- **Features**: Supports text search, news search, image search
+- **Output**: Automatically fetches detailed content from search results
+
+### 6️⃣ Image Matching Test (`id: 7`)
+- **Function**: Screen capture, template matching, automated clicking
+- **Features**: Hotkey simulation, coordinate clicking, OpenCV template matching
+- **Scenarios**: Desktop automation testing
+
 ---
 
 ## 🏗️ Technical Architecture
 
 ```
 PersonalWindowGLM/
+├── main.py                     # Program entry
 ├── skill_agent.py              # Core Agent logic
 ├── ui_skill_agent.py           # Desktop GUI (PySide6)
 ├── config.py                   # Configuration management
+├── executor.py                 # Command executor
 ├── base_tool/                  # Atomic tool definitions
 │   ├── definitions.py          # Tool schema definitions
 │   ├── dispatch.py             # Tool dispatch and security validation
@@ -70,15 +96,29 @@ PersonalWindowGLM/
 ├── skill/                      # Skill loading and execution
 │   ├── loader.py               # File scanning and parsing
 │   ├── registry.py             # Skill registry
-│   └── execution.py            # Control tool execution
+│   ├── execution.py            # Control tool execution
+│   └── processing.py           # Skill processing utilities
+├── llm/                        # LLM interface
+│   ├── BaseChatModel.py        # Model base class
+│   ├── glm_chat_model.py       # GLM model implementation
+│   ├── qwen_chat_model.py      # Qwen model implementation
+│   ├── gemma_chat_model.py     # Gemma model implementation
+│   └── llm_config_manager.py   # Model configuration management
 ├── memory/                     # Session persistence
-│   └── conversation.py         # SQLite storage
+│   ├── memory.py               # Memory management interface
+│   ├── sqlite_memory.py        # SQLite storage implementation
+│   └── conversation.py         # Conversation management
 ├── database/                   # Database layer
-└── PersonalData/Skills/        # Skill document directory
-    ├── excel操作/
-    ├── 小说生成/
-    ├── 时间格式转换/
-    └── 聊天语气/
+└── PersonalData/               # User data directory
+    ├── Skills/                 # Skill document directory
+    │   ├── DuckDuckGoSearch/
+    │   ├── excel操作/
+    │   ├── 小说生成/
+    │   ├── 时间格式转换/
+    │   ├── 聊天语气/
+    │   └── 图片匹配测试/
+    ├── data/                   # Database files
+    └── logs/                   # Log files
 ```
 
 ---
@@ -86,8 +126,8 @@ PersonalWindowGLM/
 ## 🔄 Skill Workflow
 
 ### Loading Mechanism
-1. **Directory Scan**: Each subfolder is treated as a Skill package
-2. **Main Document Resolution**: Prefer `<folder_name>.md`, otherwise take first `.md`
+1. **Directory Scan**: Each first-level subfolder is treated as a Skill package
+2. **Main Document Resolution**: Prefer `<folder_name>.md` or `SKILL.md`, otherwise take first `.md`
 3. **Metadata Extraction**: Parse frontmatter wrapped in `---` (`id`, `name`, `description`)
 4. **Runtime Indexing**: Maintained by `SkillRegistry`, supports hot-reload
 
@@ -99,9 +139,9 @@ User Query → [System Prompt: Skill Catalog Summary]
            ↓
       [Mandatory 6-Step Loading Process]
       Step 1: Read complete main document
-      Step 2: Extract all referenced file paths
+      Step 2: Extract all backtick-wrapped file paths
       Step 3: Read each referenced file (must specify skill_id)
-      Step 4: Execute scripts under scripts/
+      Step 4: Execute scripts under scripts/ (if any)
       Step 5: Merge into final context
       Step 6: Recursively load associated Skills
            ↓
@@ -133,13 +173,31 @@ User Query → [System Prompt: Skill Catalog Summary]
 ### Dangerous Command Interception
 ```python
 # skill_agent.py - _is_dangerous_command()
-Dangerous Prefixes: del, erase, rmdir, rd, copy, move, ren, mkdir
+Dangerous Prefixes: del, erase, rmdir, rd, copy, move, ren, rename, mkdir, md
 Dangerous Patterns: >, >>, set-content, remove-item, rm, etc.
 
 Triggered Actions:
 → Show confirmation dialog ("Confirm" / "Cancel")
 → User cancellation terminates command
 → Record to session history
+```
+
+### Package Installation Confirmation
+```python
+# skill_agent.py - _is_package_install_command()
+Supported Package Managers: pip, pip3, npm, yarn, pnpm, conda, cargo, gem, go, apt, choco, scoop, winget
+
+Triggered Actions:
+→ Show confirmation dialog with package names
+→ Execute installation after user confirmation
+```
+
+### Skill Dependency Auto-Detection
+```python
+# base_tool/dispatch.py - check_skill_dependencies()
+- Auto-scan requirements.txt in Skill package
+- Detect if required dependencies are installed
+- Prompt user to confirm installation of missing packages
 ```
 
 ### Auto-End Detection
@@ -188,7 +246,11 @@ SKILL_AGENT_MAX_STEPS=50             # Max tool calls per turn
 
 # ===== UI Options =====
 SKILL_AGENT_UI_SHOW_TOOL_CALLS=true  # Show tool call details
+SKILL_AGENT_AUTO_LOAD=true           # Auto-load Skills
 DEFAULT_SKILL_AGENT_USER=default_user
+
+# ===== Screenshot Configuration =====
+SCREENSHOT_GRID_STEP_PX=32           # Screenshot grid step size
 ```
 
 ---
@@ -204,9 +266,14 @@ pip install -r requirements.txt
 ```
 
 Main dependencies:
-- PySide6 (GUI interface)
-- python-dotenv (configuration management)
-- openai (LLM invocation)
+- PySide6 >= 6.5.0 (GUI interface)
+- openai >= 1.0.0 (LLM invocation)
+- sqlalchemy >= 2.0.0 (Database)
+- pydantic >= 2.0.0 (Data validation)
+- Pillow >= 9.0.0 (Image processing)
+- opencv-python >= 4.8.0 (Image matching)
+- pyautogui >= 0.9.54 (Desktop automation)
+- pandas ~= 3.0.1 (Data processing)
 
 ### Run the Application
 ```bash
@@ -243,7 +310,7 @@ python main.py
 ### Skill Document Structure
 ```markdown
 ---
-id: 100                          # Unique identifier (numeric)
+id: 100                          # Unique identifier (number or string)
 name: My Custom Skill            # Display name
 description: Brief description   # Shown in catalog
 ---
@@ -256,7 +323,14 @@ Detailed description of Skill functionality and use cases...
 2. Second step...
 
 ## Invocation Command
-`scripts/my_script.py "{parameter}"`
+`python scripts/my_script.py "{parameter}"`
+
+## Dependencies (Optional)
+Create requirements.txt in the Skill package:
+```
+ddgs
+requests
+```
 
 ## Notes
 - Constraint 1
@@ -271,7 +345,8 @@ my_skill/                # Skill package directory (first-level subfolder)
 │   └── my_script.py
 ├── example/             # Optional: example files
 │   └── demo.md
-└── output/              # Optional: output directory
+├── output/              # Optional: output directory
+└── requirements.txt     # Optional: Python dependencies
 ```
 
 ### Best Practices
@@ -280,6 +355,7 @@ my_skill/                # Skill package directory (first-level subfolder)
 ✅ **Constraint Declaration**: Mark mandatory rules with 【Mandatory Constraint】  
 ✅ **Error Handling**: Describe exception handling approaches  
 ✅ **Resource References**: Use backticks to mark intra-package file paths `` `./example/file.md` ``  
+✅ **Dependency Declaration**: Declare required Python packages in requirements.txt
 
 ---
 
@@ -322,10 +398,13 @@ A: Create a new folder under `PersonalData/Skills/`, write an `.md` document. Re
 A: Currently uses hard-coded detection logic. To adjust whitelist, modify `_is_dangerous_command()` method in `skill_agent.py`.
 
 **Q: Which LLM backends are supported?**
-A: Any OpenAI API-compatible backend (configured via `OPENAI_BASE_URL`). Tested: GPT-4, Claude, local Ollama, etc.
+A: Any OpenAI API-compatible backend (configured via `OPENAI_BASE_URL`). Built-in support: GLM, Qwen, Gemma series.
 
 **Q: How to export session records?**
-A: Session data stored in SQLite database (`database/sqllite_data/`), can query directly or use export function in UI.
+A: Session data stored in SQLite database (`PersonalData/data/`), can query directly or use export function in UI.
+
+**Q: How to install Skill dependencies?**
+A: When executing a Skill with missing dependencies, the system will automatically prompt user to confirm installation.
 
 ---
 
@@ -353,8 +432,11 @@ Issues and Pull Requests are welcome!
 - ✨ Refactored to Skill-First architecture
 - ✨ Added multi-Skill composition execution
 - ✨ Added dangerous command detection and confirmation mechanism
+- ✨ Added package installation confirmation mechanism
+- ✨ Added Skill dependency auto-detection and installation
 - ✨ Added auto-end detection
 - ✨ Added session persistence and multi-tab support
+- ✨ Added multi-model support (GLM, Qwen, Gemma)
 - 🔧 Optimized workspace sandbox security
 - 🐛 Fixed multiple stability issues
 
