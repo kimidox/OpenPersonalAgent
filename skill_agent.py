@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import config
-from base_tool import ToolContext, execute_atomic_tool
+from base_tool import (
+    ToolContext,
+    execute_atomic_tool,
+    check_skill_dependencies,
+    install_skill_dependencies,
+)
 from skill_agent_preferences import load_disabled_skill_ids
 from executor import Executor
 from llm import get_chat_model
@@ -239,6 +244,57 @@ class SkillAgent:
                 return True
         return False
 
+    def _is_package_install_command(self, command: str) -> tuple[bool, list[str]]:
+        """
+        检测是否为包安装命令，并提取要安装的包名。
+        返回 (是否为包安装命令, 包名列表)
+        """
+        import re
+        cmd_lower = command.lower().strip()
+        
+        install_patterns = [
+            (r"pip\s+install\s+(.+)", "pip"),
+            (r"pip3\s+install\s+(.+)", "pip3"),
+            (r"python\s+-m\s+pip\s+install\s+(.+)", "python -m pip"),
+            (r"python3\s+-m\s+pip\s+install\s+(.+)", "python3 -m pip"),
+            (r"conda\s+install\s+(.+)", "conda"),
+            (r"npm\s+install\s+(.+)", "npm"),
+            (r"npm\s+i\s+(.+)", "npm"),
+            (r"npm\s+add\s+(.+)", "npm"),
+            (r"yarn\s+add\s+(.+)", "yarn"),
+            (r"pnpm\s+add\s+(.+)", "pnpm"),
+            (r"cargo\s+install\s+(.+)", "cargo"),
+            (r"gem\s+install\s+(.+)", "gem"),
+            (r"go\s+get\s+(.+)", "go"),
+            (r"go\s+install\s+(.+)", "go"),
+            (r"apt\s+install\s+(.+)", "apt"),
+            (r"apt-get\s+install\s+(.+)", "apt-get"),
+            (r"choco\s+install\s+(.+)", "choco"),
+            (r"scoop\s+install\s+(.+)", "scoop"),
+            (r"winget\s+install\s+(.+)", "winget"),
+        ]
+        
+        for pattern, manager in install_patterns:
+            match = re.search(pattern, cmd_lower)
+            if match:
+                packages_part = match.group(1).strip()
+                packages = []
+                
+                for pkg in re.split(r'\s+', packages_part):
+                    pkg = pkg.strip()
+                    if not pkg or pkg.startswith('-'):
+                        continue
+                    if pkg.startswith('"') or pkg.startswith("'"):
+                        pkg = pkg.strip('"\'')
+                    if pkg:
+                        packages.append(pkg)
+                
+                if packages:
+                    return True, packages
+                return True, []
+        
+        return False, []
+
     def _check_repeated_write_success(self, command: str, result: str) -> Optional[str]:
         if "exit_code: 0" not in result:
             return None
@@ -421,8 +477,50 @@ class SkillAgent:
                                                 log_callback(f"执行命令: {command}", "base_tool")
                                                 log_callback(str(result), "base_tool")
                                             break
+                        elif user_choice == "确认安装":
+                            for record in reversed(prior_messages[:-2]):
+                                if record.get("role") == "assistant":
+                                    meta = record.get("metadata") or {}
+                                    if meta.get("type") == "tool_call":
+                                        fname = meta.get("name")
+                                        args_str = meta.get("args", "{}")
+                                        try:
+                                            args = json.loads(args_str)
+                                        except json.JSONDecodeError:
+                                            args = {}
+                                        if fname == "run_command":
+                                            skill_id = args.get("skill_id", "")
+                                            command = str(args.get("command", "") or "").strip()
+                                            
+                                            if skill_id:
+                                                success, msg = install_skill_dependencies(str(skill_id), self.registry)
+                                                if not success:
+                                                    err_msg = f"依赖安装失败: {msg}"
+                                                    if log_callback:
+                                                        log_callback(err_msg, "assistant")
+                                                    self.memory.append_message(self._conversation_id, "assistant", err_msg)
+                                                    return err_msg
+                                                if log_callback:
+                                                    log_callback(f"依赖安装成功: {msg}", "base_tool")
+                                                self.memory.append_message(self._conversation_id, "tool", f"依赖安装成功: {msg}", metadata={"name": "install_dependencies"})
+                                                messages.append({"role": "tool", "name": "install_dependencies", "content": f"依赖安装成功: {msg}"})
+                                                
+                                                result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
+                                                self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
+                                                messages.append({"role": "tool", "name": fname, "content": str(result)})
+                                                if log_callback:
+                                                    log_callback(f"执行命令: {command}", "base_tool")
+                                                    log_callback(str(result), "base_tool")
+                                            else:
+                                                result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
+                                                self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
+                                                messages.append({"role": "tool", "name": fname, "content": str(result)})
+                                                if log_callback:
+                                                    log_callback(f"执行命令: {command}", "base_tool")
+                                                    log_callback(str(result), "base_tool")
+                                            break
                         elif user_choice == "取消":
-                            cancel_msg = "命令已取消执行"
+                            cancel_msg = "操作已取消"
                             if log_callback:
                                 log_callback(cancel_msg, "assistant")
                             if self.memory is not None:
@@ -513,6 +611,78 @@ class SkillAgent:
             
             if fname == "run_command":
                 command = str(args.get("command", "") or "").strip()
+                skill_id = args.get("skill_id", "")
+                
+                if skill_id:
+                    need_install, packages_to_install, err_msg = check_skill_dependencies(
+                        str(skill_id), self.registry
+                    )
+                    if err_msg:
+                        return f"错误: {err_msg}"
+                    
+                    if need_install and packages_to_install:
+                        packages_str = ", ".join(packages_to_install)
+                        ask_args = {
+                            "question": f"Skill「{skill_id}」需要安装以下依赖包：\n\n{packages_str}\n\n是否确认安装？",
+                            "choices": ["确认安装", "取消"]
+                        }
+                        result, terminate, final = execute_skill_control_tool(
+                            "ask_user",
+                            ask_args,
+                            registry=self.registry,
+                            active_skill_text=active_skill_text,
+                            active_skill_ids=active_skill_ids,
+                            disabled_skill_ids=self._disabled_skill_ids_frozen(),
+                        )
+                        if str(result).startswith("错误"):
+                            return result
+                        if self.memory is not None:
+                            self._persist_after_tool_turn(
+                                "ask_user",
+                                ask_args,
+                                str(result),
+                                active_skill_text,
+                                active_skill_ids,
+                                messages,
+                            )
+                        else:
+                            messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
+                        if log_callback:
+                            log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+                        return SKILL_AGENT_AWAITING_USER_REPLY
+                
+                is_pkg_install, packages = self._is_package_install_command(command)
+                if is_pkg_install:
+                    packages_str = ", ".join(packages) if packages else "（未解析到包名）"
+                    ask_args = {
+                        "question": f"即将安装以下包：\n\n{packages_str}\n\n命令：{command}\n\n是否确认执行？",
+                        "choices": ["确认安装", "取消"]
+                    }
+                    result, terminate, final = execute_skill_control_tool(
+                        "ask_user",
+                        ask_args,
+                        registry=self.registry,
+                        active_skill_text=active_skill_text,
+                        active_skill_ids=active_skill_ids,
+                        disabled_skill_ids=self._disabled_skill_ids_frozen(),
+                    )
+                    if str(result).startswith("错误"):
+                        return result
+                    if self.memory is not None:
+                        self._persist_after_tool_turn(
+                            "ask_user",
+                            ask_args,
+                            str(result),
+                            active_skill_text,
+                            active_skill_ids,
+                            messages,
+                        )
+                    else:
+                        messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
+                    if log_callback:
+                        log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+                    return SKILL_AGENT_AWAITING_USER_REPLY
+                
                 if self._is_dangerous_command(command):
                     ask_args = {
                         "question": f"即将执行以下命令，可能会修改或删除文件：\n\n{command}\n\n是否确认执行？",

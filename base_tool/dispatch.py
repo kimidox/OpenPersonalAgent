@@ -138,6 +138,39 @@ def _get_installed_packages() -> set[str]:
         return set()
 
 
+def _check_skill_dependencies(skill_dir: Path) -> tuple[bool, list[str], str]:
+    """
+    检查 skill 包的依赖是否已安装。
+    返回 (是否需要安装, 需要安装的包列表, 错误消息)
+    """
+    requirements_file = skill_dir / "requirements.txt"
+    if not requirements_file.exists():
+        return False, [], ""
+    
+    required_packages = set()
+    try:
+        content = requirements_file.read_text(encoding="utf-8")
+        for line in content.strip().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                pkg_name = line.split("==")[0].split(">=")[0].split("<=")[0].split("[")[0]
+                pkg_name = pkg_name.lower().replace("-", "_")
+                required_packages.add(pkg_name)
+    except Exception as e:
+        return False, [], f"读取 requirements.txt 失败: {e}"
+    
+    if not required_packages:
+        return False, [], ""
+    
+    installed = _get_installed_packages()
+    to_install = required_packages - installed
+    
+    if not to_install:
+        return False, [], ""
+    
+    return True, sorted(to_install), ""
+
+
 def _install_skill_dependencies(skill_dir: Path) -> tuple[bool, str]:
     """
     安装 skill 包的依赖。
@@ -267,7 +300,6 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
 
         # 使用虚拟环境执行命令
         venv_python = _get_venv_python()
-        venv_activate_script = _get_venv_activate_script()
         
         # 构建使用虚拟环境的命令
         if sys.platform == "win32":
@@ -286,27 +318,9 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 # 使用虚拟环境的Python直接执行，无需激活
                 cmd = ["cmd.exe", "/c", command]
             else:
-                # 非Python命令，如果需要激活虚拟环境则先激活
-                if venv_activate_script:
-                    cmd = ["cmd.exe", "/c", f'{venv_activate_script} && cd /d "{cwd_str}" && {command}']
-                else:
-                    import shlex
-                    if command.lower().startswith("powershell"):
-                        remaining = command[len("powershell"):].strip()
-                        try:
-                            parsed = shlex.split(remaining)
-                            cmd = ["powershell.exe"] + parsed
-                        except:
-                            cmd = ["powershell.exe", "-Command", remaining]
-                    else:
-                        cmd = ["cmd.exe", "/c", command]
-        else:
-            # Unix-like 系统
-            if venv_activate_script:
-                cmd = ["/bin/bash", "-c", f"source {venv_activate_script} && cd {cwd_str} && {command}"]
-            else:
-                import shlex
+                # 非Python命令直接执行，不需要虚拟环境
                 if command.lower().startswith("powershell"):
+                    import shlex
                     remaining = command[len("powershell"):].strip()
                     try:
                         parsed = shlex.split(remaining)
@@ -315,6 +329,18 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                         cmd = ["powershell.exe", "-Command", remaining]
                 else:
                     cmd = ["cmd.exe", "/c", command]
+        else:
+            # Unix-like 系统
+            if command.lower().startswith("powershell"):
+                import shlex
+                remaining = command[len("powershell"):].strip()
+                try:
+                    parsed = shlex.split(remaining)
+                    cmd = ["powershell.exe"] + parsed
+                except:
+                    cmd = ["powershell.exe", "-Command", remaining]
+            else:
+                cmd = ["cmd.exe", "/c", command]
         
         popen_kw: dict = {
             "cwd": cwd_str,
@@ -354,3 +380,40 @@ def _decode_output(data: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return data.decode("utf-8", errors="replace")
+
+
+def check_skill_dependencies(skill_id: str, registry: SkillRegistry) -> tuple[bool, list[str], str]:
+    """
+    检查指定 skill 的依赖是否已安装。
+    返回 (是否需要安装, 需要安装的包列表, 错误消息)
+    """
+    skill = registry.get(str(skill_id))
+    if not skill:
+        return False, [], f"未找到 Skill: {skill_id}"
+    
+    if not skill.relative_path.parent:
+        return False, [], ""
+    
+    skill_dir = Path(config.WORKER_DIR) / skill.relative_path.parent
+    return _check_skill_dependencies(skill_dir)
+
+
+def install_skill_dependencies(skill_id: str, registry: SkillRegistry) -> tuple[bool, str]:
+    """
+    安装指定 skill 的依赖。
+    返回 (成功与否, 消息)
+    """
+    skill = registry.get(str(skill_id))
+    if not skill:
+        return False, f"未找到 Skill: {skill_id}"
+    
+    if not skill.relative_path.parent:
+        return True, ""
+    
+    skill_dir = Path(config.WORKER_DIR) / skill.relative_path.parent
+    return _install_skill_dependencies(skill_dir)
+
+
+def splice_skill_path(rel_path: str, skill_id: str, registry: SkillRegistry) -> str:
+    """将相对路径拼接到 skill 包目录下"""
+    return _splice_skill_path(rel_path, skill_id, registry)

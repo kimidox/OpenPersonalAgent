@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from .context import ToolContext
 from .definitions import ATOMIC_TOOL_DEFINITIONS
-from .dispatch import execute_atomic_tool
+from .dispatch import (
+    execute_atomic_tool,
+    check_skill_dependencies,
+    install_skill_dependencies,
+    splice_skill_path,
+)
 from .schema import tools_for_model
 
 
@@ -17,4 +22,7 @@ __all__ = [
     "execute_atomic_tool",
     "tools_for_model",
     "all_definition_dicts",
+    "check_skill_dependencies",
+    "install_skill_dependencies",
+    "splice_skill_path",
 ]
