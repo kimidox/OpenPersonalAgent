@@ -1,44 +1,40 @@
+"""
+数据库模块 - 使用 PathManager 统一管理数据库路径
+
+数据库文件位置:
+- 开发环境: PersonalData/data/app.db
+- 打包环境: %APPDATA%/OpenPersonalAgent/data/app.db
+"""
 from contextlib import contextmanager
-from pathlib import Path
 
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-from resource_path import is_frozen, get_app_data_path
+from resource_path import paths
+from database.models import Base
 
+DB_FILE = paths.get_database_path("app.db")
 
-def _get_db_path():
-    if is_frozen():
-        db_dir = get_app_data_path() / "data"
-        db_dir.mkdir(parents=True, exist_ok=True)
-        return db_dir / "skill_agent.db"
-    else:
-        _DB_DIR = Path(__file__).resolve().parent / "sqllite_data"
-        _DB_DIR.mkdir(parents=True, exist_ok=True)
-        return _DB_DIR / "sqllite_test.db"
+# 确保数据库目录存在
+DB_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-
-DB_FILE = _get_db_path()
+# Windows 上 SQLAlchemy 需要使用正斜杠
+db_path_str = DB_FILE.as_posix()
 
 engine = create_engine(
-    f"sqlite:///{DB_FILE.resolve().as_posix()}",
-    connect_args={"check_same_thread": False}  # SQLite特有参数，解决线程安全问题
+    f'sqlite:///{db_path_str}',
+    connect_args={"check_same_thread": False}
 )
 
-# 3. 创建会话工厂
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine,expire_on_commit= False)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 
-# 4. 创建基类（用于定义数据模型）
-Base = declarative_base()
 
-# 5. 优化后的会话获取函数（生成器 + 确保关闭）
 def get_local_session():
     db = SessionLocal()
     try:
-        yield db  # 提供会话
+        yield db
     finally:
-        db.close()  # 确保会话最终关闭
+        db.close()
 
 
 @contextmanager
@@ -53,9 +49,9 @@ def get_session():
         db.close()
 
 
-def init_db() -> None:
-    from database.models import User, Conversations, Messages
+def init_db():
     Base.metadata.create_all(engine)
 
 
-init_db()
+if __name__ == '__main__':
+    init_db()

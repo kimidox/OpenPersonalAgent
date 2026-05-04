@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import config
-from resource_path import is_frozen, get_app_dir, get_app_data_path
+from resource_path import paths
 from skill import SkillRegistry
 from .context import ToolContext
 
@@ -14,13 +14,7 @@ _RUN_COMMAND_DEFAULT_TIMEOUT = 60
 _RUN_COMMAND_MAX_TIMEOUT = 180
 _RUN_COMMAND_MAX_TOTAL_OUT = 12000
 
-# 虚拟环境目录：统一存放到用户数据目录
-# onefile 模式: %APPDATA%/Roaming/OpenPersonalAgent/venv
-# 开发模式: 项目根目录/PersonalData/venv
-if is_frozen():
-    _VENV_DIR = get_app_data_path() / "venv"
-else:
-    _VENV_DIR = Path(__file__).resolve().parent.parent / "PersonalData" / "venv"
+_VENV_DIR = paths.get_venv_dir()
 
 
 def _find_system_python() -> str | None:
@@ -30,7 +24,7 @@ def _find_system_python() -> str | None:
     """
     import shutil
     
-    if not is_frozen():
+    if not paths.is_frozen:
         return sys.executable
     
     candidate_names = ["python", "python3", "py"]
@@ -350,6 +344,11 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         }
         if sys.platform == "win32":
             popen_kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        
+        # 设置环境变量，确保 Python 脚本输出使用 UTF-8 编码
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        popen_kw["env"] = env
 
         try:
             proc = subprocess.run(cmd, **popen_kw)

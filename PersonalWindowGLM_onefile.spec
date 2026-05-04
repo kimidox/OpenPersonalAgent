@@ -16,6 +16,7 @@ a = Analysis(
     ],
     hiddenimports=[
         'resource_path',
+        'logger',
         'config',
         'agent',
         'executor',

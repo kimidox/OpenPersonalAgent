@@ -1387,11 +1387,12 @@ class SkillAgentMainWindow(QMainWindow):
     def _on_worker_finished(self, result: str, session_tab: object) -> None:
         self.send_btn.setEnabled(True)
         self.input_edit.setEnabled(True)
+        had_stream_content = self._assistant_stream_state is not None
         self._reset_stream_state()
         if isinstance(session_tab, ChatSessionTab):
             if result != SKILL_AGENT_AWAITING_USER_REPLY:
                 session_tab.clear_await_user_ui()
-                if result and result.strip():
+                if result and result.strip() and not had_stream_content:
                     self._append_assistant_markdown(session_tab.chat_view, result)
         self._sync_input_placeholder_for_active_tab()
 

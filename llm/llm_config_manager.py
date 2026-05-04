@@ -5,13 +5,13 @@ from pathlib import Path
 from typing import Optional
 
 import config
-from resource_path import is_frozen, get_app_data_path
+from resource_path import paths
 
 
 def _get_config_path() -> Path:
-    if is_frozen():
-        return get_app_data_path() / "llm_config.json"
-    return Path(__file__).resolve().parent.parent / "llm_config.json"
+    if paths.is_frozen:
+        return paths.user_data_dir / "llm_config.json"
+    return paths.project_root / "llm_config.json"
 
 
 _CONFIG_PATH = _get_config_path()

@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from resource_path import is_frozen, get_app_data_path
+from resource_path import paths
 
 
 def _get_state_path() -> Path:
-    if is_frozen():
-        return get_app_data_path() / "skill_agent_disabled_skills.json"
-    return Path(__file__).resolve().parent / "skill_agent_disabled_skills.json"
+    if paths.is_frozen:
+        return paths.user_data_dir / "skill_agent_disabled_skills.json"
+    return paths.project_root / "skill_agent_disabled_skills.json"
 
 
 _STATE_PATH = _get_state_path()

@@ -1,9 +1,11 @@
 from datetime import datetime
 
-from sqlalchemy import Column, String, Integer, TIMESTAMP, JSON, Text, UnicodeText
+from sqlalchemy import Column, String, Integer, TIMESTAMP, JSON, Text
+from sqlalchemy.ext.declarative import declarative_base
 
-from database import Base, engine
 from database.utils import get_local_time
+
+Base = declarative_base()
 
 
 class User(Base):
@@ -13,35 +15,35 @@ class User(Base):
     username = Column(String, unique=True, index=True)
     created_at = Column(TIMESTAMP, default=get_local_time())
     updated_at = Column(TIMESTAMP, default=get_local_time())
+    
     def to_dict(self):
-        return {c.name:getattr(self,c.name) for c in self.__table__.columns}
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
 class Conversations(Base):
     __tablename__ = 'conversations'
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(String, unique=True, index=True)
     user_id = Column(String, index=True)
     title = Column(String)
-    # SkillAgent 当前轮已加载的 skill id（由 Memory 同步；兼容旧库见 sqlite_memory 迁移）
-    active_skill_ids = Column(JSON, nullable=True)
+    active_skill_ids = Column(JSON, default=list)
     created_at = Column(TIMESTAMP, default=get_local_time())
     updated_at = Column(TIMESTAMP, default=get_local_time())
+    
     def to_dict(self):
-        return {c.name:getattr(self,c.name) for c in self.__table__.columns}
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
 class Messages(Base):
     __tablename__ = 'messages'
     id = Column(Integer, primary_key=True, index=True)
     message_id = Column(String, unique=True, index=True)
     conversation_id = Column(String, index=True)
     role = Column(String)
-
     content = Column(Text)
-    # 使用json,使用UnicodeText 是因为我要看数据库内容
-    ext=Column(JSON)
+    ext = Column(JSON)
     created_at = Column(TIMESTAMP, default=get_local_time())
     updated_at = Column(TIMESTAMP, default=get_local_time())
 
     def to_dict(self):
-        return {c.name:getattr(self,c.name) for c in self.__table__.columns}
-
-if __name__ == '__main__':
-    Base.metadata.create_all(engine)
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}

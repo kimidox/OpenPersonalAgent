@@ -1,15 +1,15 @@
 import os
 
-from resource_path import is_frozen, get_app_dir, get_bundled_resource
+from resource_path import paths
 
 
 def get_config(key: str):
     import dotenv
 
-    if is_frozen():
-        env_path = get_app_dir() / ".env"
+    if paths.is_frozen:
+        env_path = paths.project_root / ".env"
         if not env_path.is_file():
-            env_path = get_bundled_resource(".env")
+            env_path = paths.get_bundled_resource(".env")
         if env_path.is_file():
             dotenv.load_dotenv(str(env_path))
         return dotenv.get_key(dotenv_path=str(env_path), key_to_get=key)
@@ -44,21 +44,15 @@ def _env_bool(raw, default: bool) -> bool:
         return default
 
 
-# 为 False 时：SkillAgent 界面不显示「工具」行，也不显示 select_skill / 自动加载 的「Skill 文档」块。
 _show_tools = get_config("SKILL_AGENT_UI_SHOW_TOOL_CALLS")
 SKILL_AGENT_UI_SHOW_TOOL_CALLS = _env_bool(_show_tools, True)
-if is_frozen():
-    _worker_dir_name = str(get_config("WORKER_DIR"))
-    _worker_candidate = get_app_dir() / _worker_dir_name
-    if _worker_candidate.is_dir():
-        WORKER_DIR = str(_worker_candidate)
-    else:
-        WORKER_DIR = str(get_bundled_resource(_worker_dir_name))
-    SKILLS_DIR = os.path.join(WORKER_DIR, str(get_config("SKILLS_DIR")))
+
+if paths.is_frozen:
+    WORKER_DIR = str(paths.user_data_dir)
 else:
-    WORKER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), str(get_config("WORKER_DIR")))
-    SKILLS_DIR = os.path.join(WORKER_DIR, str(get_config("SKILLS_DIR")))
-# 为 False 时：不在每轮开头按 auto_load / description 匹配自动注入 Skill（仅依赖模型 select_skill）。
+    WORKER_DIR = str(paths.personal_data_dir)
+SKILLS_DIR = str(paths.get_skills_dir())
+
 _auto_load = get_config("SKILL_AGENT_AUTO_LOAD")
 SKILL_AGENT_AUTO_LOAD = _env_bool(_auto_load, True)
 DEFAULT_SKILL_AGENT_USER = get_config("DEFAULT_SKILL_AGENT_USER")
@@ -71,4 +65,3 @@ except (TypeError, ValueError):
     SCREENSHOT_GRID_STEP_PX = 32
 if SCREENSHOT_GRID_STEP_PX < 1:
     SCREENSHOT_GRID_STEP_PX = 32
-
