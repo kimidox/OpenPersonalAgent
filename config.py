@@ -47,10 +47,7 @@ def _env_bool(raw, default: bool) -> bool:
 _show_tools = get_config("SKILL_AGENT_UI_SHOW_TOOL_CALLS")
 SKILL_AGENT_UI_SHOW_TOOL_CALLS = _env_bool(_show_tools, True)
 
-if paths.is_frozen:
-    WORKER_DIR = str(paths.user_data_dir)
-else:
-    WORKER_DIR = str(paths.personal_data_dir)
+WORKER_DIR = str(paths.personal_data_dir)
 SKILLS_DIR = str(paths.get_skills_dir())
 
 _auto_load = get_config("SKILL_AGENT_AUTO_LOAD")

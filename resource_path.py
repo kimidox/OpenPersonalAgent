@@ -7,7 +7,7 @@
 ├─────────────────┼─────────────────────┼──────────────────────────┤
 │ 只读资源        │ 项目根目录           │ sys._MEIPASS (打包内部)   │
 │ 用户数据        │ PersonalData/       │ %APPDATA%/App/           │
-│ 工作目录        │ PersonalData/       │ exe目录/PersonalData/    │
+│ 工作目录        │ PersonalData/       │ %APPDATA%/App/           │
 └─────────────────┴─────────────────────┴──────────────────────────┘
 """
 import sys
@@ -74,8 +74,10 @@ class PathManager:
         """
         PersonalData目录 - 统一存放用户工作数据
         开发: 项目根目录/PersonalData/
-        打包: exe所在目录/PersonalData/
+        打包: %APPDATA%/OpenPersonalAgent/
         """
+        if self._is_frozen:
+            return self.user_data_dir
         data_dir = self.project_root / self._personal_data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir
