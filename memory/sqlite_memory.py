@@ -188,3 +188,62 @@ class SqliteMemory(Memory):
 
     def update_long_term_memory(self, content: str) -> None:
         self._long_term_memory.update(content)
+
+    def get_messages_for_compaction(
+        self,
+        conversation_id: str,
+        keep_recent: int,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        with get_session() as db:
+            rows = (
+                db.query(Messages)
+                .filter(Messages.conversation_id == conversation_id)
+                .order_by(Messages.id.asc())
+                .all()
+            )
+        eligible_messages = []
+        for row in rows:
+            if row.role == "system":
+                continue
+            if row.ext and row.ext.get("type") == "compaction_summary":
+                continue
+            eligible_messages.append(Message.from_orm(row).to_record_dict())
+        if len(eligible_messages) <= keep_recent:
+            return [], eligible_messages
+        to_compact = eligible_messages[:-keep_recent]
+        to_keep = eligible_messages[-keep_recent:]
+        return to_compact, to_keep
+
+    def save_compaction_summary(
+        self,
+        conversation_id: str,
+        summary: str,
+        compacted_message_ids: list[str],
+    ) -> None:
+        with get_session() as db:
+            self._ensure_conversation_row(db, conversation_id)
+            mid = str(uuid.uuid4())
+            metadata = {
+                "type": "compaction_summary",
+                "compacted_count": len(compacted_message_ids),
+            }
+            db.add(
+                Messages(
+                    message_id=mid,
+                    conversation_id=conversation_id,
+                    role="system",
+                    content=summary,
+                    ext=metadata,
+                )
+            )
+            for msg_id in compacted_message_ids:
+                msg = (
+                    db.query(Messages)
+                    .filter(Messages.message_id == msg_id)
+                    .first()
+                )
+                if msg:
+                    if msg.ext is None:
+                        msg.ext = {}
+                    msg.ext["compacted"] = True
+            db.commit()

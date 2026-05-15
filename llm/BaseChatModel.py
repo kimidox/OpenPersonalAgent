@@ -10,6 +10,7 @@ from openai import OpenAI, APIError, BadRequestError, AuthenticationError, RateL
 import config
 from executor import Executor
 from base_tool import ATOMIC_TOOL_DEFINITIONS, CONTROL_TOOL_DEFINITIONS
+from llm.token_usage import TokenUsage
 
 
 class BaseChatModel(ABC):
@@ -95,6 +96,18 @@ class BaseChatModel(ABC):
                 return {"name": str(name), "arguments": str(arguments)}
 
         return None
+
+    def _estimate_tokens_from_messages(self, messages: list[dict]) -> int:
+        total_chars = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total_chars += len(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        total_chars += len(item.get("text", ""))
+        return max(1, total_chars // 4)
 
     def complete_with_tools(self, messages: list[dict], tools: list[dict]) -> Any:
         """发起一次带 tools 的补全，返回 choices[0].message。"""
@@ -185,6 +198,9 @@ class BaseChatModel(ABC):
         """
         import time as _time
 
+        token_usage: Optional[TokenUsage] = None
+        all_content_chars = 0
+
         try:
             stream = self.get_client().chat.completions.create(
                 model=self.model_name,
@@ -196,6 +212,7 @@ class BaseChatModel(ABC):
                 frequency_penalty=self.frequency_penalty,
                 extra_body=self.extra_body,
                 stream=True,
+                stream_options={"include_usage": True},
             )
         except BadRequestError as e:
             error_msg = f"请求参数错误: {e}"
@@ -246,6 +263,13 @@ class BaseChatModel(ABC):
 
         try:
             for chunk in stream:
+                usage = getattr(chunk, 'usage', None)
+                if usage:
+                    token_usage = TokenUsage(
+                        prompt_tokens=getattr(usage, 'prompt_tokens', 0) or 0,
+                        completion_tokens=getattr(usage, 'completion_tokens', 0) or 0,
+                        total_tokens=getattr(usage, 'total_tokens', 0) or 0,
+                    )
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -253,9 +277,11 @@ class BaseChatModel(ABC):
                 reasoning = getattr(delta, 'reasoning_content', None)
                 if reasoning:
                     reasoning_buffer.append(reasoning)
+                    all_content_chars += len(reasoning)
                 content = getattr(delta, 'content', None)
                 if content:
                     content_buffer.append(content)
+                    all_content_chars += len(content)
 
                 current_time = _time.time()
                 total_buffered = sum(len(s) for s in reasoning_buffer) + sum(len(s) for s in content_buffer)
@@ -284,12 +310,20 @@ class BaseChatModel(ABC):
             _flush_buffer()
             error_msg = f"流式响应处理错误: {e}"
             stream_callback(error_msg, "content")
-            return {"name": "finish", "arguments": json.dumps({"message": error_msg}, ensure_ascii=False)}
+            return {"name": "finish", "arguments": json.dumps({"message": error_msg}, ensure_ascii=False), "token_usage": None}
 
         _flush_buffer()
 
+        if token_usage is None:
+            estimated_prompt = self._estimate_tokens_from_messages(messages)
+            estimated_completion = max(1, all_content_chars // 4)
+            token_usage = TokenUsage(
+                prompt_tokens=estimated_prompt,
+                completion_tokens=estimated_completion,
+                total_tokens=estimated_prompt + estimated_completion,
+            )
+
         if not tool_call_chunks:
-            # 没有工具调用，返回纯文本内容
             content_text = "".join(content_buffer).strip()
             reasoning_text = "".join(reasoning_buffer).strip()
             if not content_text and not reasoning_text:
@@ -299,6 +333,7 @@ class BaseChatModel(ABC):
                 "arguments": None,
                 "content": content_text,
                 "reasoning_content": reasoning_text,
+                "token_usage": token_usage,
             }
 
         first_tc = tool_call_chunks[min(tool_call_chunks.keys())]
@@ -306,7 +341,6 @@ class BaseChatModel(ABC):
         arguments = first_tc["arguments"].strip()
 
         if not name:
-            # 有内容但无有效工具调用，当作纯文本处理
             content_text = "".join(content_buffer).strip()
             reasoning_text = "".join(reasoning_buffer).strip()
             return {
@@ -314,10 +348,11 @@ class BaseChatModel(ABC):
                 "arguments": None,
                 "content": content_text,
                 "reasoning_content": reasoning_text,
+                "token_usage": token_usage,
             }
 
         reasoning_content = "".join(reasoning_buffer)
-        return {"name": name, "arguments": arguments, "reasoning_content": reasoning_content}
+        return {"name": name, "arguments": arguments, "reasoning_content": reasoning_content, "token_usage": token_usage}
 
     def stream_complete(
         self,
@@ -334,6 +369,9 @@ class BaseChatModel(ABC):
         """
         import time as _time
 
+        token_usage: Optional[TokenUsage] = None
+        all_content_chars = 0
+
         try:
             stream = self.get_client().chat.completions.create(
                 model=self.model_name,
@@ -343,6 +381,7 @@ class BaseChatModel(ABC):
                 frequency_penalty=self.frequency_penalty,
                 extra_body=self.extra_body,
                 stream=True,
+                stream_options={"include_usage": True},
             )
         except BadRequestError as e:
             error_msg = f"请求参数错误: {e}"
@@ -353,6 +392,7 @@ class BaseChatModel(ABC):
             msg = SimpleNamespace()
             msg.content = error_msg
             msg.reasoning_content = ""
+            msg.token_usage = None
             return msg
         except AuthenticationError as e:
             error_msg = f"API认证失败: {e}"
@@ -361,6 +401,7 @@ class BaseChatModel(ABC):
             msg = SimpleNamespace()
             msg.content = error_msg
             msg.reasoning_content = ""
+            msg.token_usage = None
             return msg
         except RateLimitError as e:
             error_msg = f"API请求频率超限: {e}"
@@ -369,6 +410,7 @@ class BaseChatModel(ABC):
             msg = SimpleNamespace()
             msg.content = error_msg
             msg.reasoning_content = ""
+            msg.token_usage = None
             return msg
         except APIConnectionError as e:
             error_msg = f"API连接失败: {e}"
@@ -377,6 +419,7 @@ class BaseChatModel(ABC):
             msg = SimpleNamespace()
             msg.content = error_msg
             msg.reasoning_content = ""
+            msg.token_usage = None
             return msg
         except APIError as e:
             error_msg = f"API错误: {e}"
@@ -385,6 +428,7 @@ class BaseChatModel(ABC):
             msg = SimpleNamespace()
             msg.content = error_msg
             msg.reasoning_content = ""
+            msg.token_usage = None
             return msg
         except Exception as e:
             error_msg = f"未知错误: {e}"
@@ -393,14 +437,15 @@ class BaseChatModel(ABC):
             msg = SimpleNamespace()
             msg.content = error_msg
             msg.reasoning_content = ""
+            msg.token_usage = None
             return msg
 
         reasoning_buffer: list[str] = []
         content_buffer: list[str] = []
 
         last_callback_time = _time.time()
-        callback_interval = 0.05  # 50ms
-        min_chars_for_callback = 30  # 最少累积30字符
+        callback_interval = 0.05
+        min_chars_for_callback = 30
 
         def _flush_buffer():
             nonlocal last_callback_time
@@ -416,6 +461,13 @@ class BaseChatModel(ABC):
 
         try:
             for chunk in stream:
+                usage = getattr(chunk, 'usage', None)
+                if usage:
+                    token_usage = TokenUsage(
+                        prompt_tokens=getattr(usage, 'prompt_tokens', 0) or 0,
+                        completion_tokens=getattr(usage, 'completion_tokens', 0) or 0,
+                        total_tokens=getattr(usage, 'total_tokens', 0) or 0,
+                    )
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -423,9 +475,11 @@ class BaseChatModel(ABC):
                 reasoning = getattr(delta, 'reasoning_content', None)
                 if reasoning:
                     reasoning_buffer.append(reasoning)
+                    all_content_chars += len(reasoning)
                 content = getattr(delta, 'content', None)
                 if content:
                     content_buffer.append(content)
+                    all_content_chars += len(content)
 
                 current_time = _time.time()
                 total_buffered = sum(len(s) for s in reasoning_buffer) + sum(len(s) for s in content_buffer)
@@ -443,14 +497,25 @@ class BaseChatModel(ABC):
             msg = SimpleNamespace()
             msg.content = error_msg
             msg.reasoning_content = ""
+            msg.token_usage = None
             return msg
 
         _flush_buffer()
+
+        if token_usage is None:
+            estimated_prompt = self._estimate_tokens_from_messages(messages)
+            estimated_completion = max(1, all_content_chars // 4)
+            token_usage = TokenUsage(
+                prompt_tokens=estimated_prompt,
+                completion_tokens=estimated_completion,
+                total_tokens=estimated_prompt + estimated_completion,
+            )
 
         from types import SimpleNamespace
         msg = SimpleNamespace()
         msg.content = "".join(content_buffer)
         msg.reasoning_content = "".join(reasoning_buffer)
+        msg.token_usage = token_usage
         return msg
 
     def execute_function_call(self, fname: str, args: dict, executor: Executor) -> str:

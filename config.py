@@ -73,3 +73,36 @@ except (TypeError, ValueError):
     SCREENSHOT_GRID_STEP_PX = 32
 if SCREENSHOT_GRID_STEP_PX < 1:
     SCREENSHOT_GRID_STEP_PX = 32
+
+_cws = get_config("CONTEXT_WINDOW_SIZE")
+try:
+    CONTEXT_WINDOW_SIZE = int(_cws) if _cws not in (None, "") else 128000
+except (TypeError, ValueError):
+    CONTEXT_WINDOW_SIZE = 128000
+if CONTEXT_WINDOW_SIZE < 1:
+    CONTEXT_WINDOW_SIZE = 128000
+
+_ct = get_config("COMPACTION_THRESHOLD")
+try:
+    COMPACTION_THRESHOLD = float(_ct) if _ct not in (None, "") else 0.8
+except (TypeError, ValueError):
+    COMPACTION_THRESHOLD = 0.8
+if COMPACTION_THRESHOLD <= 0 or COMPACTION_THRESHOLD > 1:
+    COMPACTION_THRESHOLD = 0.8
+
+_ckr = get_config("COMPACTION_KEEP_RECENT")
+try:
+    COMPACTION_KEEP_RECENT = int(_ckr) if _ckr not in (None, "") else 10
+except (TypeError, ValueError):
+    COMPACTION_KEEP_RECENT = 10
+if COMPACTION_KEEP_RECENT < 0:
+    COMPACTION_KEEP_RECENT = 10
+
+_ce = get_config("COMPACTION_ENABLED")
+COMPACTION_ENABLED = _env_bool(_ce, True)
+
+_tue = get_config("TOKEN_USAGE_ENABLED")
+TOKEN_USAGE_ENABLED = _env_bool(_tue, True)
+
+_tusiu = get_config("TOKEN_USAGE_SHOW_IN_UI")
+TOKEN_USAGE_SHOW_IN_UI = _env_bool(_tusiu, True)

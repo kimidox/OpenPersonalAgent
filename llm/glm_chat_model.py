@@ -7,6 +7,7 @@ from typing import Any, Callable, Optional
 from openai import APIError, BadRequestError, AuthenticationError, RateLimitError, APIConnectionError
 
 from .BaseChatModel import BaseChatModel
+from .token_usage import TokenUsage
 
 
 class GLMChatModel(BaseChatModel):
@@ -75,6 +76,9 @@ class GLMChatModel(BaseChatModel):
         - 使用 functions 参数（GLM 兼容格式）
         - 内置智能缓冲：每 50ms 或累积 30 字符触发一次回调
         """
+        token_usage: Optional[TokenUsage] = None
+        all_content_chars = 0
+
         try:
             stream = self.get_client().chat.completions.create(
                 model=self.model_name,
@@ -84,6 +88,7 @@ class GLMChatModel(BaseChatModel):
                 temperature=self.temperature,
                 extra_body=self.extra_body,
                 stream=True,
+                stream_options={"include_usage": True},
             )
         except BadRequestError as e:
             error_msg = f"请求参数错误: {e}"
@@ -134,6 +139,13 @@ class GLMChatModel(BaseChatModel):
 
         try:
             for chunk in stream:
+                usage = getattr(chunk, 'usage', None)
+                if usage:
+                    token_usage = TokenUsage(
+                        prompt_tokens=getattr(usage, 'prompt_tokens', 0) or 0,
+                        completion_tokens=getattr(usage, 'completion_tokens', 0) or 0,
+                        total_tokens=getattr(usage, 'total_tokens', 0) or 0,
+                    )
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -141,9 +153,11 @@ class GLMChatModel(BaseChatModel):
                 reasoning = getattr(delta, 'reasoning_content', None)
                 if reasoning:
                     reasoning_buffer.append(reasoning)
+                    all_content_chars += len(reasoning)
                 content = getattr(delta, 'content', None)
                 if content:
                     content_buffer.append(content)
+                    all_content_chars += len(content)
 
                 current_time = _time.time()
                 total_buffered = sum(len(s) for s in reasoning_buffer) + sum(len(s) for s in content_buffer)
@@ -176,16 +190,32 @@ class GLMChatModel(BaseChatModel):
 
         _flush_buffer()
 
+        if token_usage is None:
+            estimated_prompt = self._estimate_tokens_from_messages(messages)
+            estimated_completion = max(1, all_content_chars // 4)
+            token_usage = TokenUsage(
+                prompt_tokens=estimated_prompt,
+                completion_tokens=estimated_completion,
+                total_tokens=estimated_prompt + estimated_completion,
+            )
+
         if not tool_call_chunks:
             content_text = "".join(content_buffer).strip()
             reasoning_text = "".join(reasoning_buffer).strip()
             if not content_text and not reasoning_text:
-                return None
+                return {
+                    "name": None,
+                    "arguments": None,
+                    "content": "",
+                    "reasoning_content": "",
+                    "token_usage": token_usage,
+                }
             return {
                 "name": None,
                 "arguments": None,
                 "content": content_text,
                 "reasoning_content": reasoning_text,
+                "token_usage": token_usage,
             }
 
         first_tc = tool_call_chunks[min(tool_call_chunks.keys())]
@@ -200,10 +230,11 @@ class GLMChatModel(BaseChatModel):
                 "arguments": None,
                 "content": content_text,
                 "reasoning_content": reasoning_text,
+                "token_usage": token_usage,
             }
 
         reasoning_content = "".join(reasoning_buffer)
-        return {"name": name, "arguments": arguments, "reasoning_content": reasoning_content}
+        return {"name": name, "arguments": arguments, "reasoning_content": reasoning_content, "token_usage": token_usage}
 
     def stream_complete(
         self,

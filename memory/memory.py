@@ -72,3 +72,34 @@ class Memory(ABC):
     @abstractmethod
     def update_long_term_memory(self, content: str) -> None:
         """更新（覆盖）长期记忆内容。"""
+
+    @abstractmethod
+    def get_messages_for_compaction(
+        self,
+        conversation_id: str,
+        keep_recent: int,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """获取用于压缩的消息，返回 (待压缩消息, 保留消息) 元组。
+
+        Args:
+            conversation_id: 会话 ID。
+            keep_recent: 保留最近 N 条消息不参与压缩。
+
+        Returns:
+            元组：(待压缩消息列表, 保留消息列表)。
+        """
+
+    @abstractmethod
+    def save_compaction_summary(
+        self,
+        conversation_id: str,
+        summary: str,
+        compacted_message_ids: list[str],
+    ) -> None:
+        """保存压缩摘要，并标记已压缩的消息。
+
+        Args:
+            conversation_id: 会话 ID。
+            summary: 压缩后的摘要内容。
+            compacted_message_ids: 已被压缩的消息 ID 列表。
+        """

@@ -722,6 +722,7 @@ class SkillAgentMainWindow(QMainWindow):
         self._current_stream_type: str | None = None
         self._current_stream_session: ChatSessionTab | None = None
         self._assistant_final_content_sent: bool = False
+        self._last_token_usage: dict[str, Any] | None = None
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -1039,10 +1040,10 @@ class SkillAgentMainWindow(QMainWindow):
         end_marker_end = max(hit_end.anchor(), hit_end.position())
         return (start_pos, content_start, content_end, end_marker_end)
 
-    def _replace_stream_range_with_markdown(self, chat_view: QTextEdit, marker_start: str, marker_end: str, full: str) -> None:
+    def _replace_stream_range_with_markdown(self, chat_view: QTextEdit, marker_start: str, marker_end: str, full: str, token_usage: dict[str, Any] | None = None) -> None:
         span = self._find_stream_marker_span(chat_view, marker_start, marker_end)
         if span is None:
-            self._append_assistant_markdown(chat_view, full)
+            self._append_assistant_markdown(chat_view, full, token_usage=token_usage)
             return
         start_marker_pos, _, _, end_marker_end = span
         doc = chat_view.document()
@@ -1050,17 +1051,24 @@ class SkillAgentMainWindow(QMainWindow):
         cur.setPosition(start_marker_pos)
         cur.setPosition(end_marker_end, QTextCursor.MoveMode.KeepAnchor)
         cur.removeSelectedText()
-        cur.insertHtml(_markdown_fragment_html(full))
+        frag = _markdown_fragment_html(full)
+        token_html = ""
+        if config.TOKEN_USAGE_SHOW_IN_UI and token_usage:
+            total = token_usage.get("total_tokens")
+            if total is not None:
+                token_html = f'<div style="color:#9ca3af;font-size:9pt;margin-top:8px;">Token: {total}</div>'
+        st_b = _UI_STYLES["chat_bubble_assistant_body"]
+        combined = f'{frag}{token_html}'
+        cur.insertHtml(combined)
         self._scroll_to_end(chat_view)
 
-    def _flush_assistant_stream_to_markdown(self) -> None:
-        """将当前流式占位区间替换为完整 Markdown（用于打断或收尾）。"""
+    def _flush_assistant_stream_to_markdown(self, token_usage: dict[str, Any] | None = None) -> None:
         st = self._assistant_stream_state
         if st is None:
             return
         chat_view: QTextEdit = st["chat_view"]
         self._replace_stream_range_with_markdown(
-            chat_view, st["marker_start"], st["marker_end"], st["full"]
+            chat_view, st["marker_start"], st["marker_end"], st["full"], token_usage=token_usage
         )
         self._assistant_stream_state = None
         self._stop_assistant_stream_timer()
@@ -1081,7 +1089,8 @@ class SkillAgentMainWindow(QMainWindow):
         if span is None:
             self._assistant_stream_state = None
             self._stop_assistant_stream_timer()
-            self._append_assistant_markdown(chat_view, full)
+            token_usage_from_state = st.get("token_usage")
+            self._append_assistant_markdown(chat_view, full, token_usage=token_usage_from_state)
             return
         _, content_start, content_end, _ = span
         doc = chat_view.document()
@@ -1093,13 +1102,14 @@ class SkillAgentMainWindow(QMainWindow):
         st["shown"] = next_shown
         self._scroll_to_end(chat_view)
         if next_shown >= n:
+            token_usage_from_state = st.get("token_usage")
             self._replace_stream_range_with_markdown(
-                chat_view, marker_start, marker_end, full
+                chat_view, marker_start, marker_end, full, token_usage=token_usage_from_state
             )
             self._assistant_stream_state = None
             self._stop_assistant_stream_timer()
 
-    def _append_assistant_markdown_streaming(self, chat_view: QTextEdit, markdown: str) -> None:
+    def _append_assistant_markdown_streaming(self, chat_view: QTextEdit, markdown: str, token_usage: dict[str, Any] | None = None) -> None:
         """助手气泡：先按字符铺开，再一次性替换为 Markdown 渲染结果。"""
         full = _normalize_newlines(markdown or "")
         if not full.strip():
@@ -1140,6 +1150,7 @@ class SkillAgentMainWindow(QMainWindow):
             "full": full,
             "shown": 0,
             "chars_per_tick": _STREAM_CHARS_PER_TICK,
+            "token_usage": token_usage,
         }
         self._assistant_stream_timer = QTimer(self)
         self._assistant_stream_timer.setInterval(_STREAM_TIMER_MS)
@@ -1189,15 +1200,20 @@ class SkillAgentMainWindow(QMainWindow):
         self._insert_row(chat_view, bubble, align="right")
 
     def _append_assistant_card(
-        self, chat_view: QTextEdit, body_html: str, *, subtitle: str = "助手"
+        self, chat_view: QTextEdit, body_html: str, *, subtitle: str = "助手", token_usage: dict[str, Any] | None = None
     ) -> None:
         st_o = _UI_STYLES["chat_bubble_assistant_outer"]
         st_c = _UI_STYLES["chat_bubble_assistant_caption"]
         st_b = _UI_STYLES["chat_bubble_assistant_body"]
+        token_html = ""
+        if config.TOKEN_USAGE_SHOW_IN_UI and token_usage:
+            total = token_usage.get("total_tokens")
+            if total is not None:
+                token_html = f'<div style="color:#9ca3af;font-size:9pt;margin-top:8px;">Token: {total}</div>'
         bubble = (
             f'<div style="{st_o}">'
             f'<div style="{st_c}">{escape(subtitle)}</div>'
-            f'<div style="{st_b}">{body_html}</div></div>'
+            f'<div style="{st_b}">{body_html}{token_html}</div></div>'
         )
         self._insert_row(chat_view, bubble, align="left")
     def _append_assistant_think_card(
@@ -1225,9 +1241,9 @@ class SkillAgentMainWindow(QMainWindow):
         )
         self._insert_row(chat_view, inner, align="left")
 
-    def _append_assistant_markdown(self, chat_view: QTextEdit, markdown: str) -> None:
+    def _append_assistant_markdown(self, chat_view: QTextEdit, markdown: str, token_usage: dict[str, Any] | None = None) -> None:
         frag = _markdown_fragment_html(markdown)
-        self._append_assistant_card(chat_view, frag, subtitle="助手")
+        self._append_assistant_card(chat_view, frag, subtitle="助手", token_usage=token_usage)
     def _append_assistant_think_markdown(self, chat_view: QTextEdit, markdown: str):
         frag = _markdown_fragment_html(markdown)
         self._append_assistant_think_card(chat_view, frag, subtitle="助手-think")
@@ -1358,11 +1374,17 @@ class SkillAgentMainWindow(QMainWindow):
                 spec,
                 on_confirm_send=lambda t, _st=st: self._send_user_message(t, session_tab=_st),
             )
+        elif msg_type == "token_usage":
+            try:
+                data = json.loads(message)
+                if isinstance(data, dict):
+                    self._last_token_usage = data
+            except json.JSONDecodeError:
+                pass
 
-    def _reset_stream_state(self) -> None:
-        """重置当前流式输出状态"""
+    def _reset_stream_state(self, token_usage: dict[str, Any] | None = None) -> None:
         if self._assistant_stream_state is not None:
-            self._flush_assistant_stream_to_markdown()
+            self._flush_assistant_stream_to_markdown(token_usage=token_usage)
         self._current_stream_type = None
         self._current_stream_session = None
         self._assistant_final_content_sent = False
@@ -1391,13 +1413,35 @@ class SkillAgentMainWindow(QMainWindow):
         self.send_btn.setEnabled(True)
         self.input_edit.setEnabled(True)
         final_content_already_sent = self._assistant_final_content_sent
-        self._reset_stream_state()
+        token_usage = self._last_token_usage
+        self._reset_stream_state(token_usage=token_usage)
+        self._last_token_usage = None
         if isinstance(session_tab, ChatSessionTab):
             if result != SKILL_AGENT_AWAITING_USER_REPLY:
                 session_tab.clear_await_user_ui()
-                if result and result.strip() and not final_content_already_sent:
-                    self._append_assistant_markdown(session_tab.chat_view, result)
+                if result and result.strip():
+                    if final_content_already_sent and token_usage:
+                        self._append_token_usage_badge(session_tab.chat_view, token_usage)
+                    elif not final_content_already_sent:
+                        self._append_assistant_markdown(session_tab.chat_view, result, token_usage=token_usage)
         self._sync_input_placeholder_for_active_tab()
+
+    def _append_token_usage_badge(self, chat_view: QTextEdit, token_usage: dict[str, Any]) -> None:
+        if not config.TOKEN_USAGE_SHOW_IN_UI:
+            return
+        total = token_usage.get("total_tokens") if token_usage else None
+        if total is None:
+            return
+        token_html = f'<div style="color:#9ca3af;font-size:9pt;margin-top:8px;">Token: {total}</div>'
+        st_o = _UI_STYLES["chat_bubble_assistant_outer"]
+        st_c = _UI_STYLES["chat_bubble_assistant_caption"]
+        st_b = _UI_STYLES["chat_bubble_assistant_body"]
+        bubble = (
+            f'<div style="{st_o}">'
+            f'<div style="{st_c}">Token 统计</div>'
+            f'<div style="{st_b}">{token_html}</div></div>'
+        )
+        self._insert_row(chat_view, bubble, align="left")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         if self._assistant_stream_state is not None:

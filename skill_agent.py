@@ -15,7 +15,9 @@ from base_tool import (
 from skill_agent_preferences import load_disabled_skill_ids
 from executor import Executor
 from llm import get_chat_model
+from llm.token_usage import TokenUsage
 from memory import Memory
+from memory.compactor import ContextCompactor, estimate_messages_tokens
 from memory.conversation import Conversation
 from skill import (
     SkillRegistry,
@@ -110,6 +112,33 @@ class SkillAgent:
             self._conversation_id = (conversation_id or "").strip()
         self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor, memory=memory)
         self._recent_commands: list[tuple[str, str]] = []
+        self._compactor: ContextCompactor | None = None
+        self._token_usage = TokenUsage.empty()
+
+    @property
+    def _get_compactor(self) -> ContextCompactor | None:
+        if self._compactor is None and self.memory is not None:
+            model = get_chat_model()
+            self._compactor = ContextCompactor(self.memory, model)
+        return self._compactor
+
+    def _should_compact(self, messages: list[dict[str, Any]]) -> bool:
+        if self.memory is None:
+            return False
+        compactor = self._get_compactor
+        if compactor is None:
+            return False
+        return compactor.should_compact(messages)
+
+    def _perform_compaction(
+        self,
+        messages: list[dict[str, Any]],
+        log_callback: Callable[[str, str], Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        compactor = self._get_compactor
+        if compactor is None:
+            return messages
+        return compactor.compact(self._conversation_id, messages, log_callback)
 
     def _disabled_skill_ids_frozen(self) -> frozenset[str]:
         return frozenset(load_disabled_skill_ids())
@@ -409,6 +438,14 @@ class SkillAgent:
 
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
         self._recent_commands = []
+        self._token_usage = TokenUsage.empty()
+
+        def _emit_token_usage():
+            if log_callback and getattr(config, "TOKEN_USAGE_ENABLED", False):
+                from dataclasses import asdict
+                token_usage_json = json.dumps(asdict(self._token_usage), ensure_ascii=False)
+                log_callback(token_usage_json, "token_usage")
+
         model = get_chat_model()
         disabled = self._disabled_skill_ids_frozen()
         skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
@@ -474,6 +511,7 @@ class SkillAgent:
                                                     if log_callback:
                                                         log_callback(err_msg, "assistant")
                                                     self.memory.append_message(self._conversation_id, "assistant", err_msg)
+                                                    _emit_token_usage()
                                                     return err_msg
                                                 if log_callback:
                                                     log_callback(f"依赖安装成功: {msg}", "base_tool")
@@ -493,6 +531,7 @@ class SkillAgent:
                                                 if log_callback:
                                                     log_callback(f"执行命令: {command}", "base_tool")
                                                     log_callback(str(result), "base_tool")
+                                            _emit_token_usage()
                                             return result
                         elif user_choice == "取消":
                             cancel_msg = "操作已取消"
@@ -500,7 +539,13 @@ class SkillAgent:
                                 log_callback(cancel_msg, "assistant")
                             if self.memory is not None:
                                 self.memory.append_message(self._conversation_id, "assistant", cancel_msg)
+                            _emit_token_usage()
                             return cancel_msg
+
+        if self._should_compact(messages):
+            if log_callback:
+                log_callback("检测到上下文过长，正在自动压缩...", "info")
+            messages = self._perform_compaction(messages, log_callback)
 
         for step in range(self.max_steps):
             thinking_parts: list[str] = []
@@ -515,6 +560,9 @@ class SkillAgent:
                     content_parts.append(content)
 
             function_call = model.stream_request_llm_with_tools(messages, tools, _stream_callback)
+
+            if function_call is not None and function_call.get("token_usage") is not None:
+                self._token_usage = self._token_usage + function_call["token_usage"]
 
             full_thinking = "".join(thinking_parts).strip()
 
@@ -548,10 +596,12 @@ class SkillAgent:
                         log_callback(err, "assistant")
                     if self.memory is not None:
                         self.memory.append_message(self._conversation_id, "assistant", err)
+                    _emit_token_usage()
                     return err
 
                 if self.memory is not None:
                     self.memory.append_message(self._conversation_id, "assistant", final_text)
+                _emit_token_usage()
                 return final_text
 
             fname = function_call.get("name")
@@ -593,6 +643,7 @@ class SkillAgent:
                         str(skill_id), self.registry
                     )
                     if err_msg:
+                        _emit_token_usage()
                         return f"错误: {err_msg}"
                     
                     if need_install and packages_to_install:
@@ -610,6 +661,7 @@ class SkillAgent:
                             disabled_skill_ids=self._disabled_skill_ids_frozen(),
                         )
                         if str(result).startswith("错误"):
+                            _emit_token_usage()
                             return result
                         if self.memory is not None:
                             self._persist_after_tool_turn(
@@ -624,6 +676,7 @@ class SkillAgent:
                             messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
                         if log_callback:
                             log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+                        _emit_token_usage()
                         return SKILL_AGENT_AWAITING_USER_REPLY
                 
                 is_pkg_install, packages = self._is_package_install_command(command)
@@ -642,6 +695,7 @@ class SkillAgent:
                         disabled_skill_ids=self._disabled_skill_ids_frozen(),
                     )
                     if str(result).startswith("错误"):
+                        _emit_token_usage()
                         return result
                     if self.memory is not None:
                         self._persist_after_tool_turn(
@@ -656,6 +710,7 @@ class SkillAgent:
                         messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
                     if log_callback:
                         log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+                    _emit_token_usage()
                     return SKILL_AGENT_AWAITING_USER_REPLY
                 
                 if self._is_dangerous_command(command):
@@ -672,6 +727,7 @@ class SkillAgent:
                         disabled_skill_ids=self._disabled_skill_ids_frozen(),
                     )
                     if str(result).startswith("错误"):
+                        _emit_token_usage()
                         return result
                     if self.memory is not None:
                         self._persist_after_tool_turn(
@@ -686,6 +742,7 @@ class SkillAgent:
                         messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
                     if log_callback:
                         log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+                    _emit_token_usage()
                     return SKILL_AGENT_AWAITING_USER_REPLY
             
             result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
@@ -733,6 +790,7 @@ class SkillAgent:
                     if auto_end_msg:
                         log_callback(auto_end_msg, "assistant")
                         self.memory.append_message(self._conversation_id, "assistant", auto_end_msg)
+                        _emit_token_usage()
                         return auto_end_msg
                 log_callback(r, "base_tool")
 
@@ -743,6 +801,7 @@ class SkillAgent:
                     self.memory.append_message(cid, "assistant", str(final))
                 if log_callback:
                     log_callback(str(final), "assistant")
+                _emit_token_usage()
                 return final
 
             if fname == "ask_user" and not str(result).startswith("错误"):
@@ -759,6 +818,7 @@ class SkillAgent:
                     messages.append({"role": "tool", "name": fname, "content": str(result)})
                 if log_callback:
                     log_callback(_ask_user_ui_log_payload(args), "await_user")
+                _emit_token_usage()
                 return SKILL_AGENT_AWAITING_USER_REPLY
 
             if self.memory is not None:
@@ -786,4 +846,5 @@ class SkillAgent:
             log_callback(tail, "assistant")
         if self.memory is not None:
             self.memory.append_message(self._conversation_id, "assistant", tail)
+        _emit_token_usage()
         return tail
