@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from executor import Executor
+    from memory.memory import Memory
 
 
 @dataclass
@@ -13,3 +14,4 @@ class ToolContext:
 
     work_dir: str
     executor: "Executor | None" = None
+    memory: "Memory | None" = None

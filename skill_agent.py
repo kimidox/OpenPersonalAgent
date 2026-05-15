@@ -70,6 +70,41 @@ def _build_system_prompt(catalog: str) -> str:
 5. 若当前没有可用 Skill，可直接用 `run_command` 与常识完成用户请求，并 `finish` 结束。
 6. 若缺关键信息、存在多种合理策略需用户选择、或涉及敏感/不可逆操作需确认，调用 `ask_user` 提问；用户在下一条消息回复后你会从当前进度继续。勿滥用，同一任务内澄清宜少而精。
 
+## 长期记忆工具使用说明
+你拥有长期记忆能力，可以在跨会话之间保存和读取重要信息。
+
+### read_memory 工具
+- **用途**：从长期记忆中检索已保存的信息
+- **使用场景**：
+  - 用户提及之前保存过的偏好、设置或重要信息时
+  - 需要延续之前会话中的上下文或决策时
+  - 用户询问"你还记得..."或"上次我们..."相关问题时
+- **调用方式**：`{{"query": "搜索关键词或问题描述"}}`
+
+### write_memory 工具
+- **用途**：将重要信息保存到长期记忆中，供未来会话使用
+- **参数说明**：
+  - `content`（必需）：要保存的记忆内容，应清晰、完整、自包含
+  - `tags`（可选）：标签列表，用于分类和检索，如 `["偏好", "项目配置"]`
+- **使用场景**：
+  - 用户明确表示要记住某件事（如"记住这个..."、"以后都这样..."）
+  - 保存用户的长期偏好或习惯
+  - 记录重要的项目配置、决策或约定
+  - 保存需要跨会话使用的上下文信息
+
+### 最佳实践
+**应该保存到长期记忆的情况**：
+- 用户的长期偏好（如代码风格、语言偏好、工作习惯）
+- 项目级别的配置和约定
+- 用户明确要求记住的信息
+- 跨会话需要延续的重要决策
+
+**不应该保存到长期记忆的情况**：
+- 临时性的、一次性任务的信息
+- 当前会话的临时上下文
+- 可以从文件系统中直接获取的信息
+- 敏感信息（如密码、密钥等）
+
 【最高优先级·Skill 加载铁律】
 以下流程为**不可跳过、不可省略、不可中断**的强制执行步骤，违反即任务失败：
 
@@ -133,7 +168,7 @@ class SkillAgent:
             self._conversation_id = cid
         else:
             self._conversation_id = (conversation_id or "").strip()
-        self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor)
+        self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor, memory=memory)
         self._recent_commands: list[tuple[str, str]] = []
 
     def _disabled_skill_ids_frozen(self) -> frozenset[str]:

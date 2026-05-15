@@ -32,4 +32,36 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "required": ["command"],
         },
     },
+    {
+        "name": "read_memory",
+        "description": (
+            "读取长期记忆。从 MEMORY.md 文件中读取已保存的长期记忆内容。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "write_memory",
+        "description": (
+            "写入长期记忆。将内容写入到 MEMORY.md 文件中保存。"
+            "mode 参数可指定写入模式：append（追加，默认）或 overwrite（覆盖）。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "要保存到长期记忆的内容",
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "写入模式：append（追加）或 overwrite（覆盖），默认为 append",
+                },
+            },
+            "required": ["content"],
+        },
+    },
 ]

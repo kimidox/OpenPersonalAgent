@@ -397,6 +397,26 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         )
         return _truncate_run_output(merged)
 
+    if name == "read_memory":
+        if ctx.memory is None:
+            return "错误: memory 对象不可用"
+        return ctx.memory.get_long_term_memory()
+
+    if name == "write_memory":
+        content = args.get("content", "")
+        mode = args.get("mode", "append")
+
+        if ctx.memory is None:
+            return "错误: memory 对象不可用"
+
+        if mode == "append":
+            ctx.memory.append_long_term_memory(content)
+            return "已追加到长期记忆"
+        elif mode == "overwrite":
+            ctx.memory.update_long_term_memory(content)
+            return "已更新长期记忆"
+        else:
+            return f"错误: 未知的 mode 参数: {mode}，支持 'append' 或 'overwrite'"
 
     return f"未知原子工具: {name}"
 

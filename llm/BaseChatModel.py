@@ -9,6 +9,7 @@ from openai import OpenAI, APIError, BadRequestError, AuthenticationError, RateL
 
 import config
 from executor import Executor
+from base_tool import ATOMIC_TOOL_DEFINITIONS
 
 
 class BaseChatModel(ABC):
@@ -51,7 +52,7 @@ class BaseChatModel(ABC):
 
     def build_skill_agent_tools(self) -> list[dict]:
         """返回 SkillAgent 专用工具 schema。"""
-        return [
+        tools = [
             {
                 "type": "function",
                 "function": {
@@ -142,6 +143,13 @@ class BaseChatModel(ABC):
                 }
             }
         ]
+        for tool_def in ATOMIC_TOOL_DEFINITIONS:
+            if tool_def["name"] in ("read_memory", "write_memory"):
+                tools.append({
+                    "type": "function",
+                    "function": tool_def
+                })
+        return tools
 
     def encode_image(self, image_path: str) -> str:
         with open(image_path, "rb") as image_file:
