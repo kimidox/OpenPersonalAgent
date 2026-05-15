@@ -518,7 +518,7 @@ class SkillAgent:
                                                 if log_callback:
                                                     log_callback(f"执行命令: {command}", "base_tool")
                                                     log_callback(str(result), "base_tool")
-                                            break
+                                            return result
                         elif user_choice == "取消":
                             cancel_msg = "操作已取消"
                             if log_callback:

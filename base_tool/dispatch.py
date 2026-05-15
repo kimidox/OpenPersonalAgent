@@ -19,22 +19,21 @@ _VENV_DIR = paths.get_venv_dir()
 
 def _find_system_python() -> str | None:
     """
-    查找系统安装的 Python 解释器。
-    onefile 模式下 sys.executable 指向打包的 exe，不能用来创建虚拟环境。
+    查找系统安装的 Python 解释器（非虚拟环境）。
+    始终查找系统级 Python，避免使用虚拟环境中的 Python 来创建新虚拟环境，
+    因为虚拟环境可能缺少 ensurepip 模块导致创建的 venv 没有 pip。
     """
     import shutil
-    
-    if not paths.is_frozen:
-        return sys.executable
     
     candidate_names = ["python", "python3", "py"]
     
     for name in candidate_names:
         python_path = shutil.which(name)
-        if python_path:
+        if python_path and python_path.lower().find("\\venv\\") == -1 and python_path.lower().find("\\virtualenvs\\") == -1:
             return python_path
     
     common_paths = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python311" / "python.exe",
         Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "python.exe",
         Path(os.environ.get("PROGRAMFILES", "")) / "Python" / "python.exe",
         Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Python" / "python.exe",
@@ -76,8 +75,40 @@ def _ensure_venv_exists() -> bool:
             timeout=60,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
         )
-        return (_VENV_DIR / "Scripts" / "python.exe").exists()
-    except Exception:
+        
+        venv_python = str(_VENV_DIR / "Scripts" / "python.exe")
+        if not Path(venv_python).exists():
+            return False
+        
+        pip_exe = _VENV_DIR / "Scripts" / "pip.exe"
+        if not pip_exe.exists():
+            import urllib.request
+            import tempfile
+            
+            get_pip_url = "https://bootstrap.pypa.io/get-pip.py"
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+                temp_file = f.name
+            
+            try:
+                urllib.request.urlretrieve(get_pip_url, temp_file)
+                subprocess.run(
+                    [venv_python, temp_file],
+                    capture_output=True,
+                    timeout=120,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
+                )
+            except Exception as e:
+                print(f"安装pip失败: {e}")
+            finally:
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
+        
+        return True
+    except Exception as e:
+        print(f"创建虚拟环境异常: {e}")
         return False
 
 
