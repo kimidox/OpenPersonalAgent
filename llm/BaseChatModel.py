@@ -9,7 +9,7 @@ from openai import OpenAI, APIError, BadRequestError, AuthenticationError, RateL
 
 import config
 from executor import Executor
-from base_tool import ATOMIC_TOOL_DEFINITIONS
+from base_tool import ATOMIC_TOOL_DEFINITIONS, CONTROL_TOOL_DEFINITIONS
 
 
 class BaseChatModel(ABC):
@@ -52,103 +52,17 @@ class BaseChatModel(ABC):
 
     def build_skill_agent_tools(self) -> list[dict]:
         """返回 SkillAgent 专用工具 schema。"""
-        tools = [
-            {
+        tools: list[dict] = []
+        for tool_def in CONTROL_TOOL_DEFINITIONS:
+            tools.append({
                 "type": "function",
-                "function": {
-                    "name": "select_skill",
-                    "description": "加载指定的 Skill 文档，获取完整的操作指南",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "skill_id": {
-                                "type": "string",
-                                "description": "要加载的 Skill 的 ID"
-                            }
-                        },
-                        "required": ["skill_id"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "run_command",
-                    "description": "执行 Windows CMD 命令，用于文件操作、脚本执行等",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "要执行的命令"
-                            },
-                            "cwd": {
-                                "type": "string",
-                                "description": "工作目录，默认为当前目录"
-                            },
-                            "skill_id": {
-                                "type": "string",
-                                "description": "技能ID，用于读取Skill包内文件时指定"
-                            },
-                            "timeout_sec": {
-                                "type": "integer",
-                                "description": "命令执行超时时间（秒）"
-                            }
-                        },
-                        "required": ["command"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "ask_user",
-                    "description": "向用户询问关键信息或请求确认",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "question": {
-                                "type": "string",
-                                "description": "要问用户的问题"
-                            },
-                            "choices": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "可选的回答选项列表"
-                            },
-                            "context": {
-                                "type": "string",
-                                "description": "问题的上下文信息"
-                            }
-                        },
-                        "required": ["question"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "finish",
-                    "description": "完成任务，向用户提供最终答复",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "message": {
-                                "type": "string",
-                                "description": "给用户的最终答复消息"
-                            }
-                        },
-                        "required": ["message"]
-                    }
-                }
-            }
-        ]
+                "function": tool_def
+            })
         for tool_def in ATOMIC_TOOL_DEFINITIONS:
-            if tool_def["name"] in ("read_memory", "write_memory"):
-                tools.append({
-                    "type": "function",
-                    "function": tool_def
-                })
+            tools.append({
+                "type": "function",
+                "function": tool_def
+            })
         return tools
 
     def encode_image(self, image_path: str) -> str:

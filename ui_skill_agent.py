@@ -721,6 +721,7 @@ class SkillAgentMainWindow(QMainWindow):
         self._assistant_stream_state: dict[str, Any] | None = None
         self._current_stream_type: str | None = None
         self._current_stream_session: ChatSessionTab | None = None
+        self._assistant_final_content_sent: bool = False
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -1333,6 +1334,7 @@ class SkillAgentMainWindow(QMainWindow):
             if show_tool_ui:
                 self._append_doc_markdown(target_chat, message)
         elif msg_type in ("assistant", "response", "content"):
+            self._assistant_final_content_sent = True
             if self._current_stream_type == "content" and self._current_stream_session is session_tab:
                 self._append_assistant_content_append(target_chat, message)
             else:
@@ -1363,6 +1365,7 @@ class SkillAgentMainWindow(QMainWindow):
             self._flush_assistant_stream_to_markdown()
         self._current_stream_type = None
         self._current_stream_session = None
+        self._assistant_final_content_sent = False
 
     def _append_assistant_think_append(self, chat_view: QTextEdit, text: str) -> None:
         """追加思考内容到现有的 think 块"""
@@ -1387,12 +1390,12 @@ class SkillAgentMainWindow(QMainWindow):
     def _on_worker_finished(self, result: str, session_tab: object) -> None:
         self.send_btn.setEnabled(True)
         self.input_edit.setEnabled(True)
-        had_stream_content = self._assistant_stream_state is not None
+        final_content_already_sent = self._assistant_final_content_sent
         self._reset_stream_state()
         if isinstance(session_tab, ChatSessionTab):
             if result != SKILL_AGENT_AWAITING_USER_REPLY:
                 session_tab.clear_await_user_ui()
-                if result and result.strip() and not had_stream_content:
+                if result and result.strip() and not final_content_already_sent:
                     self._append_assistant_markdown(session_tab.chat_view, result)
         self._sync_input_placeholder_for_active_tab()
 

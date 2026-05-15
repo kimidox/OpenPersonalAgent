@@ -6,9 +6,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from config import WORKER_DIR
 from database import get_session
 from database.models import Conversations, Messages, User
 from memory.conversation import Conversation
+from memory.long_term_memory import LongTermMemory
 from memory.memory import Memory
 from memory.message import Message
 
@@ -32,6 +34,8 @@ class SqliteMemory(Memory):
 
     def __init__(self, *, username) -> None:
         self._username = username
+        memory_file_path = f"{WORKER_DIR}/MEMORY.md"
+        self._long_term_memory = LongTermMemory(memory_file_path)
 
     @property
     def username(self) -> str:
@@ -175,3 +179,12 @@ class SqliteMemory(Memory):
             if not row:
                 return None
             return Conversation.from_orm(row)
+
+    def get_long_term_memory(self) -> str:
+        return self._long_term_memory.read()
+
+    def append_long_term_memory(self, content: str) -> None:
+        self._long_term_memory.append(content)
+
+    def update_long_term_memory(self, content: str) -> None:
+        self._long_term_memory.update(content)

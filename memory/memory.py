@@ -60,3 +60,15 @@ class Memory(ABC):
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """按时间顺序返回消息记录，每条含 `role`、`content`、可选 `name`（tool）及可选 `metadata`（来自持久化的 ext）。"""
+
+    @abstractmethod
+    def get_long_term_memory(self) -> str:
+        """读取长期记忆内容。"""
+
+    @abstractmethod
+    def append_long_term_memory(self, content: str) -> None:
+        """追加内容到长期记忆。"""
+
+    @abstractmethod
+    def update_long_term_memory(self, content: str) -> None:
+        """更新（覆盖）长期记忆内容。"""
