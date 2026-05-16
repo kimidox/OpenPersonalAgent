@@ -995,6 +995,7 @@ class SkillAgentMainWindow(QMainWindow):
             if page.conversation_id == self.worker_thread.conversation_id:
                 QMessageBox.warning(self, "提示", "该会话正在执行中，请结束后再关闭标签。")
                 return
+
         self._memory.clear_conversation(page.conversation_id)
         self.chat_tabs.removeTab(index)
         page.deleteLater()

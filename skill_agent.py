@@ -25,6 +25,7 @@ from skill import (
     execute_skill_control_tool,
     skills_auto_matched_for_query,
 )
+from skill.memory_summarizer import summarize_skill_execution, save_skill_memory
 
 SKILL_AGENT_AWAITING_USER_REPLY = "__SKILL_AGENT_AWAITING_USER_REPLY__"
 
@@ -436,6 +437,31 @@ class SkillAgent:
             self.memory.append_message(cid, "user", extra_user,metadata={"type":"skill_content"})
             messages.append({"role": "user", "content": extra_user})
 
+    def _summarize_session_skills(self, conversation_id: str, active_skill_ids: list[str]) -> None:
+        """
+        总结会话中执行过的skill的经验。
+        
+        Args:
+            conversation_id: 会话ID
+            active_skill_ids: 该会话中活跃的skill ID列表
+        """
+        if not active_skill_ids or not self.memory:
+            return
+        
+        messages = self.memory.get_message_records(conversation_id)
+        if not messages:
+            return
+        
+        model = get_chat_model()
+        
+        for skill_id in active_skill_ids:
+            try:
+                memory = summarize_skill_execution(skill_id, messages, model)
+                if memory:
+                    save_skill_memory(skill_id, memory, self.registry)
+            except Exception as e:
+                print(f"总结skill {skill_id} 执行经验失败: {e}")
+
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
         self._recent_commands = []
         self._token_usage = TokenUsage.empty()
@@ -798,6 +824,7 @@ class SkillAgent:
                     cid = self._conversation_id
                     self.memory.append_message(cid, "tool", str(result), metadata={"name": fname})
                     self.memory.append_message(cid, "assistant", str(final))
+                self._summarize_session_skills(self._conversation_id, active_skill_ids)
                 if log_callback:
                     log_callback(str(final), "assistant")
                 _emit_token_usage()

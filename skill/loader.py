@@ -57,6 +57,41 @@ def resolve_skill_markdown_in_package(package_dir: Path) -> Path | None:
     return md_files[0] if md_files else None
 
 
+def resolve_skill_memory_path(skill_md_path: Path) -> Path | None:
+    """
+    获取 skill 主文档同目录下的 skill_memory.md 路径。
+
+    参数：
+        skill_md_path: skill 主文档路径
+
+    返回：
+        如果存在 skill_memory.md 则返回其路径，否则返回 None
+    """
+    memory_path = skill_md_path.parent / "skill_memory.md"
+    if memory_path.is_file():
+        return memory_path
+    return None
+
+
+def load_skill_memory(skill_md_path: Path) -> str | None:
+    """
+    读取 skill_memory.md 文件内容。
+
+    参数：
+        skill_md_path: skill 主文档路径
+
+    返回：
+        文件内容字符串，如果文件不存在则返回 None
+    """
+    memory_path = resolve_skill_memory_path(skill_md_path)
+    if memory_path is None:
+        return None
+    try:
+        return memory_path.read_text(encoding="utf-8", errors="replace").strip()
+    except Exception:
+        return None
+
+
 def load_skill_from_path(path: Path) -> SkillDefinition:
     raw = path.read_text(encoding="utf-8", errors="replace")
     meta, body = _parse_simple_frontmatter(raw)
@@ -73,6 +108,9 @@ def load_skill_from_path(path: Path) -> SkillDefinition:
             relative_path = Path(*relative.parts[1:]) if len(relative.parts) > 1 else relative
         except ValueError:
             relative_path = path.name
+
+    memory_content = load_skill_memory(path)
+
     return SkillDefinition(
         skill_id=skill_id,
         name=name,
@@ -80,6 +118,7 @@ def load_skill_from_path(path: Path) -> SkillDefinition:
         body=body.strip(),
         relative_path=relative_path,
         extra_meta=extra,
+        memory_content=memory_content,
     )
 
 
