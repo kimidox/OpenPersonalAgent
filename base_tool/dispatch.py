@@ -268,8 +268,20 @@ def _splice_skill_path(rel_path: str, skill_id: str, registry: SkillRegistry) ->
     if skill:
         skill_relative_path_parent = skill.relative_path.parent
         if skill_relative_path_parent:
-            rel_path = os.path.join(str(skill_relative_path_parent), rel_path)
-            return rel_path
+            skill_dir = str(skill_relative_path_parent)
+            normalized_rel_path = rel_path.replace("\\", "/")
+            normalized_skill_dir = skill_dir.replace("\\", "/")
+            if normalized_rel_path.startswith(normalized_skill_dir + "/"):
+                return rel_path
+            if normalized_skill_dir in normalized_rel_path:
+                idx = normalized_rel_path.find(normalized_skill_dir)
+                if idx >= 0:
+                    start = idx + len(normalized_skill_dir)
+                    suffix = normalized_rel_path[start:]
+                    if suffix.startswith("/"):
+                        suffix = suffix[1:]
+                    return f"{skill_dir}/{suffix}" if suffix else skill_dir
+            return os.path.join(skill_dir, rel_path)
         raise ValueError(f"未找到 Skill 的相对路径: {skill_id}")
     raise ValueError(f"未找到 Skill: {skill_id}")
 

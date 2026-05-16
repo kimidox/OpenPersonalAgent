@@ -89,11 +89,11 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "工作目录（相对 work_dir 的路径，可选）",
+                    "description": "工作目录路径。若指定 skill_id，则为相对于该 skill 包目录的路径（如 \"scripts\"）；否则为相对于 work_dir 的路径",
                 },
                 "skill_id": {
                     "type": "string",
-                    "description": "Skill 的 id，若指定则 cwd 为相对于该 skill 包目录的路径",
+                    "description": "Skill 的 id。指定后，cwd 将相对于该 skill 包目录解析。示例：skill_id=\"8\" 时，cwd=\"scripts\" 表示 DuckDuckGoSearch/scripts 目录",
                 },
                 "timeout_sec": {
                     "type": "number",

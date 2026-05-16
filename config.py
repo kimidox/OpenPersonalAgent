@@ -5,14 +5,16 @@ import dotenv
 from resource_path import paths
 
 
+env_file='.env.dev'
+
 def get_config(key: str):
     import shutil
 
     if paths.is_frozen:
         # 用户配置路径
-        user_env = paths.user_data_dir / ".env"
+        user_env = paths.user_data_dir /env_file
         # 默认配置路径（打包内部）
-        default_env = paths.get_bundled_resource(".env")
+        default_env = paths.get_bundled_resource(env_file)
 
         # 首次运行：复制默认配置到用户目录
         if not user_env.exists() and default_env.exists():
@@ -21,7 +23,7 @@ def get_config(key: str):
         # 优先读取用户配置
         env_path = user_env if user_env.exists() else default_env
     else:
-        env_path = paths.project_root / ".env"
+        env_path = paths.project_root / env_file
 
     if env_path.is_file():
         dotenv.load_dotenv(str(env_path))
