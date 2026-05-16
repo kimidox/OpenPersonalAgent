@@ -197,6 +197,7 @@ def save_skill_memory(
     """
     skill_def = registry.get(skill_id)
     if not skill_def or not skill_def.relative_path:
+        print(f"[SkillSummary] save_skill_memory: 未找到 skill {skill_id} 或缺少 relative_path")
         return None
 
     skill_package_dir = skill_def.relative_path.parent
@@ -208,8 +209,10 @@ def save_skill_memory(
 
     if memory_path.exists():
         append_skill_memory(memory_path, memory_content)
+        print(f"[SkillSummary] save_skill_memory: 追加到已有文件 {memory_path}")
     else:
         memory_path.write_text(memory_content, encoding="utf-8")
+        print(f"[SkillSummary] save_skill_memory: 创建新文件 {memory_path}")
 
     return memory_path
 

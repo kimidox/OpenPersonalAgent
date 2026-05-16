@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -437,30 +438,54 @@ class SkillAgent:
             self.memory.append_message(cid, "user", extra_user,metadata={"type":"skill_content"})
             messages.append({"role": "user", "content": extra_user})
 
-    def _summarize_session_skills(self, conversation_id: str, active_skill_ids: list[str]) -> None:
-        """
-        总结会话中执行过的skill的经验。
-        
-        Args:
-            conversation_id: 会话ID
-            active_skill_ids: 该会话中活跃的skill ID列表
-        """
-        if not active_skill_ids or not self.memory:
+    def _summarize_session_skills(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
+        if not self.memory:
+            print(f"[SkillSummary] 跳过总结: memory 为空 (conversation_id={conversation_id})")
             return
-        
+
+        if active_skill_ids is None:
+            active_skill_ids = self.memory.get_active_skills(conversation_id)
+
+        print(f"[SkillSummary] 开始总结: conversation_id={conversation_id}, active_skill_ids={active_skill_ids}")
+
+        if not active_skill_ids:
+            print(f"[SkillSummary] 跳过总结: 无活跃 skill (conversation_id={conversation_id})")
+            return
+
         messages = self.memory.get_message_records(conversation_id)
         if not messages:
+            print(f"[SkillSummary] 跳过总结: 无会话消息 (conversation_id={conversation_id})")
             return
-        
+
         model = get_chat_model()
-        
+
         for skill_id in active_skill_ids:
             try:
+                print(f"[SkillSummary] 正在总结 skill: {skill_id}")
                 memory = summarize_skill_execution(skill_id, messages, model)
                 if memory:
-                    save_skill_memory(skill_id, memory, self.registry)
+                    saved_path = save_skill_memory(skill_id, memory, self.registry)
+                    print(f"[SkillSummary] skill {skill_id} 总结完成, 保存至: {saved_path}")
+                else:
+                    print(f"[SkillSummary] skill {skill_id} 总结结果为空, 未保存")
             except Exception as e:
-                print(f"总结skill {skill_id} 执行经验失败: {e}")
+                print(f"[SkillSummary] 总结 skill {skill_id} 执行经验失败: {e}")
+
+    def _start_summary_in_background(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
+        if not self.memory:
+            return
+        if active_skill_ids is None:
+            active_skill_ids = self.memory.get_active_skills(conversation_id)
+        if not active_skill_ids:
+            return
+        t = threading.Thread(
+            target=self._summarize_session_skills,
+            args=(conversation_id, active_skill_ids),
+            name=f"skill-summary-{conversation_id[:8]}",
+            daemon=True,
+        )
+        t.start()
+        print(f"[SkillSummary] 后台线程已启动: {t.name}, active_skill_ids={active_skill_ids}")
 
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
         self._recent_commands = []
@@ -621,11 +646,13 @@ class SkillAgent:
                         log_callback(err, "assistant")
                     if self.memory is not None:
                         self.memory.append_message(self._conversation_id, "assistant", err)
+                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     _emit_token_usage()
                     return err
 
                 if self.memory is not None:
                     self.memory.append_message(self._conversation_id, "assistant", final_text)
+                self._start_summary_in_background(self._conversation_id, active_skill_ids)
                 _emit_token_usage()
                 return final_text
 
@@ -815,6 +842,7 @@ class SkillAgent:
                     if auto_end_msg:
                         log_callback(auto_end_msg, "assistant")
                         self.memory.append_message(self._conversation_id, "assistant", auto_end_msg)
+                        self._start_summary_in_background(self._conversation_id, active_skill_ids)
                         _emit_token_usage()
                         return auto_end_msg
                 log_callback(r, "base_tool")
@@ -824,7 +852,7 @@ class SkillAgent:
                     cid = self._conversation_id
                     self.memory.append_message(cid, "tool", str(result), metadata={"name": fname})
                     self.memory.append_message(cid, "assistant", str(final))
-                self._summarize_session_skills(self._conversation_id, active_skill_ids)
+                self._start_summary_in_background(self._conversation_id, active_skill_ids)
                 if log_callback:
                     log_callback(str(final), "assistant")
                 _emit_token_usage()
@@ -872,5 +900,6 @@ class SkillAgent:
             log_callback(tail, "assistant")
         if self.memory is not None:
             self.memory.append_message(self._conversation_id, "assistant", tail)
+        self._start_summary_in_background(self._conversation_id, active_skill_ids)
         _emit_token_usage()
         return tail
