@@ -16,33 +16,31 @@ class SkillExecutionMemory:
     session_id: str
     timestamp: str
     success: bool
-    errors: list[str] = field(default_factory=list)
-    fixes: list[str] = field(default_factory=list)
-    best_practices: list[str] = field(default_factory=list)
+    errors_and_fixes: list[str] = field(default_factory=list)
+    tips: list[str] = field(default_factory=list)
     summary: str = ""
 
 
-SUMMARIZE_PROMPT = """请分析以下 Skill 执行会话历史，提取关键经验。
+SUMMARIZE_PROMPT = """分析以下 Skill 执行会话，提取关键经验。只返回 JSON，不要其他文字。
 
 Skill ID: {skill_id}
 
 会话历史:
 {conversation}
 
-请以 JSON 格式返回以下字段（不要包含任何其他文字，只返回 JSON）:
+返回格式:
 {{
     "success": true/false,
-    "errors": ["错误1", "错误2"],
-    "fixes": ["修复方法1", "修复方法2"],
-    "best_practices": ["最佳实践1", "最佳实践2"],
-    "summary": "本次执行的简要总结"
+    "errors_and_fixes": ["错误: xxx → 修复: xxx"],
+    "tips": ["对未来执行的建议1", "建议2"],
+    "summary": "一句话总结"
 }}
 
-分析要点：
-1. 执行过程中遇到的错误（包括错误类型、错误信息、发生原因）
-2. 错误是如何被修复的（具体的修复步骤、解决方案）
-3. 成功的执行步骤（哪些操作顺利完成）
-4. 最佳实践建议（基于本次执行经验，对未来类似任务的建议）
+要求：
+1. errors_and_fixes: 将错误和对应修复合并，格式"错误: ... → 修复: ..."；无错误则留空数组
+2. tips: 对未来执行该skill最有价值的建议，合并最佳实践
+3. summary: 一句话概括本次执行结果
+4. 所有字段内容精简，避免重复
 """
 
 
@@ -78,9 +76,8 @@ def summarize_skill_execution(
     except Exception as e:
         result = {
             "success": False,
-            "errors": [f"LLM 分析失败: {str(e)}"],
-            "fixes": [],
-            "best_practices": [],
+            "errors_and_fixes": [f"LLM 分析失败: {str(e)}"],
+            "tips": [],
             "summary": "无法生成执行总结",
         }
 
@@ -89,9 +86,8 @@ def summarize_skill_execution(
         session_id=str(uuid.uuid4())[:8],
         timestamp=datetime.now().isoformat(),
         success=result.get("success", False),
-        errors=result.get("errors", []),
-        fixes=result.get("fixes", []),
-        best_practices=result.get("best_practices", []),
+        errors_and_fixes=result.get("errors_and_fixes", []),
+        tips=result.get("tips", []),
         summary=result.get("summary", ""),
     )
 
@@ -172,9 +168,8 @@ def _parse_llm_response(response: str) -> dict:
         return json.loads(json_match.group())
     return {
         "success": False,
-        "errors": ["无法解析 LLM 响应"],
-        "fixes": [],
-        "best_practices": [],
+        "errors_and_fixes": ["无法解析 LLM 响应"],
+        "tips": [],
         "summary": response,
     }
 
@@ -231,49 +226,20 @@ def append_skill_memory(skill_memory_path: Path, new_content: str) -> None:
 
 
 def format_memory_for_file(memory: SkillExecutionMemory) -> str:
-    """
-    将 SkillExecutionMemory 格式化为 Markdown 字符串。
+    status = "成功" if memory.success else "失败"
+    parts = [f"### {status} | {memory.timestamp[:10]}", ""]
 
-    Args:
-        memory: SkillExecutionMemory 对象
+    if memory.errors_and_fixes:
+        parts.append("- 错误与修复:")
+        for ef in memory.errors_and_fixes:
+            parts.append(f"  - {ef}")
 
-    Returns:
-        格式化的 Markdown 字符串
-    """
-    lines = [
-        f"# Skill 执行记录",
-        "",
-        f"- **Skill ID**: {memory.skill_id}",
-        f"- **会话 ID**: {memory.session_id}",
-        f"- **时间戳**: {memory.timestamp}",
-        f"- **执行状态**: {'成功' if memory.success else '失败'}",
-        "",
-    ]
-
-    if memory.errors:
-        lines.append("## 遇到的错误")
-        lines.append("")
-        for err in memory.errors:
-            lines.append(f"- {err}")
-        lines.append("")
-
-    if memory.fixes:
-        lines.append("## 修复方法")
-        lines.append("")
-        for fix in memory.fixes:
-            lines.append(f"- {fix}")
-        lines.append("")
-
-    if memory.best_practices:
-        lines.append("## 最佳实践")
-        lines.append("")
-        for bp in memory.best_practices:
-            lines.append(f"- {bp}")
-        lines.append("")
+    if memory.tips:
+        parts.append("- 要点:")
+        for tip in memory.tips:
+            parts.append(f"  - {tip}")
 
     if memory.summary:
-        lines.append("## 总结")
-        lines.append("")
-        lines.append(memory.summary)
+        parts.append(f"- 总结: {memory.summary}")
 
-    return "\n".join(lines)
+    return "\n".join(parts)
