@@ -244,19 +244,23 @@ class BaseChatModel(ABC):
         reasoning_buffer: list[str] = []
         content_buffer: list[str] = []
         tool_call_chunks: dict[int, dict[str, Any]] = {}
+        all_reasoning_parts: list[str] = []
+        all_content_parts: list[str] = []
 
         last_callback_time = _time.time()
-        callback_interval = 0.05  # 50ms
-        min_chars_for_callback = 30  # 最少累积30字符
+        callback_interval = 0.05
+        min_chars_for_callback = 30
 
         def _flush_buffer():
             nonlocal last_callback_time
             if reasoning_buffer:
                 text = "".join(reasoning_buffer)
+                all_reasoning_parts.append(text)
                 reasoning_buffer.clear()
                 stream_callback(text, "think")
             if content_buffer:
                 text = "".join(content_buffer)
+                all_content_parts.append(text)
                 content_buffer.clear()
                 stream_callback(text, "content")
             last_callback_time = _time.time()
@@ -324,8 +328,8 @@ class BaseChatModel(ABC):
             )
 
         if not tool_call_chunks:
-            content_text = "".join(content_buffer).strip()
-            reasoning_text = "".join(reasoning_buffer).strip()
+            content_text = "".join(all_content_parts).strip()
+            reasoning_text = "".join(all_reasoning_parts).strip()
             if not content_text and not reasoning_text:
                 return None
             return {
@@ -341,8 +345,8 @@ class BaseChatModel(ABC):
         arguments = first_tc["arguments"].strip()
 
         if not name:
-            content_text = "".join(content_buffer).strip()
-            reasoning_text = "".join(reasoning_buffer).strip()
+            content_text = "".join(all_content_parts).strip()
+            reasoning_text = "".join(all_reasoning_parts).strip()
             return {
                 "name": None,
                 "arguments": None,
@@ -351,7 +355,7 @@ class BaseChatModel(ABC):
                 "token_usage": token_usage,
             }
 
-        reasoning_content = "".join(reasoning_buffer)
+        reasoning_content = "".join(all_reasoning_parts)
         return {"name": name, "arguments": arguments, "reasoning_content": reasoning_content, "token_usage": token_usage}
 
     def stream_complete(
@@ -442,6 +446,8 @@ class BaseChatModel(ABC):
 
         reasoning_buffer: list[str] = []
         content_buffer: list[str] = []
+        all_reasoning_parts: list[str] = []
+        all_content_parts: list[str] = []
 
         last_callback_time = _time.time()
         callback_interval = 0.05
@@ -451,10 +457,12 @@ class BaseChatModel(ABC):
             nonlocal last_callback_time
             if reasoning_buffer:
                 text = "".join(reasoning_buffer)
+                all_reasoning_parts.append(text)
                 reasoning_buffer.clear()
                 stream_callback(text, "think")
             if content_buffer:
                 text = "".join(content_buffer)
+                all_content_parts.append(text)
                 content_buffer.clear()
                 stream_callback(text, "content")
             last_callback_time = _time.time()
@@ -513,8 +521,8 @@ class BaseChatModel(ABC):
 
         from types import SimpleNamespace
         msg = SimpleNamespace()
-        msg.content = "".join(content_buffer)
-        msg.reasoning_content = "".join(reasoning_buffer)
+        msg.content = "".join(all_content_parts)
+        msg.reasoning_content = "".join(all_reasoning_parts)
         msg.token_usage = token_usage
         return msg
 

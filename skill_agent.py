@@ -566,7 +566,6 @@ class SkillAgent:
 
             full_thinking = "".join(thinking_parts).strip()
 
-            # 判断是否为纯文本回复（无工具调用）
             is_text_only = (
                 function_call is not None and
                 function_call.get("name") is None and
@@ -574,12 +573,12 @@ class SkillAgent:
             )
 
             if is_text_only or (function_call is None):
-                # 纯文本回复：内容已经在流式过程中显示过，只需入库
                 final_text = ""
                 if is_text_only:
                     final_text = function_call.get("content", "")
-                else:
+                if not final_text:
                     final_text = "".join(content_parts).strip()
+                if not full_thinking:
                     full_thinking = "".join(thinking_parts).strip()
 
                 if full_thinking and self.memory is not None:
