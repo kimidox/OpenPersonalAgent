@@ -30,11 +30,11 @@ class MessageCardWidget(QWidget):
     def set_available_width(self, available_width: int) -> None:
         """根据可用宽度设置气泡的最大宽度"""
         if self._msg_type == "user":
-            max_width = min(600, int(available_width * 0.7))
+            max_width = min(700, int(available_width * 0.75))
             self._bubble_frame.setMaximumWidth(max_width)
             self._bubble_container.setMaximumWidth(max_width)
         else:
-            max_width = min(int(available_width * 0.8), 900)
+            max_width = min(int(available_width * 0.92), 1200)
             self._bubble_frame.setMaximumWidth(max_width)
             self._bubble_container.setMaximumWidth(max_width)
 
@@ -47,7 +47,11 @@ class MessageCardWidget(QWidget):
 
         # 气泡整体容器（包含标题和内容）
         self._bubble_container = QWidget()
-        self._bubble_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
+        # 用户消息用 Maximum 保持紧凑，其他消息用 Expanding 充分利用空间
+        if self._msg_type == "user":
+            self._bubble_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
+        else:
+            self._bubble_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._container_layout = QVBoxLayout(self._bubble_container)
         self._container_layout.setContentsMargins(0, 0, 0, 0)
         self._container_layout.setSpacing(2)
@@ -88,13 +92,13 @@ class MessageCardWidget(QWidget):
         if self._msg_type == "user":
             self._main_layout.addStretch()
             self._main_layout.addWidget(self._bubble_container)
-            self._bubble_frame.setMaximumWidth(600)
-            self._bubble_container.setMaximumWidth(600)
+            self._bubble_frame.setMaximumWidth(700)
+            self._bubble_container.setMaximumWidth(700)
         else:
             self._main_layout.addWidget(self._bubble_container)
             self._main_layout.addStretch()
-            self._bubble_frame.setMaximumWidth(900)
-            self._bubble_container.setMaximumWidth(900)
+            self._bubble_frame.setMaximumWidth(1200)
+            self._bubble_container.setMaximumWidth(1200)
 
     def _get_caption(self) -> str:
         captions = {
