@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import config
+from resource_path import paths
 from .registry import SkillRegistry
 
 
@@ -180,7 +182,7 @@ def save_skill_memory(
     registry: SkillRegistry,
 ) -> Path | None:
     """
-    在 Skill 包目录下创建或追加 skill_memory.md 文件。
+    在 PersonalData/Skills 下对应 Skill 包目录创建或追加 skill_memory.md 文件。
 
     Args:
         skill_id: Skill 标识符
@@ -195,7 +197,13 @@ def save_skill_memory(
         print(f"[SkillSummary] save_skill_memory: 未找到 skill {skill_id} 或缺少 relative_path")
         return None
 
-    skill_package_dir = skill_def.relative_path.parent
+    # 获取 PersonalData/Skills 作为基础目录
+    skills_base_dir = paths.get_skills_dir()
+    # 从 relative_path 中提取 skill 包目录名
+    skill_package_name = skill_def.relative_path.parent.name
+    # 构建完整的 skill 包目录路径
+    skill_package_dir = skills_base_dir / skill_package_name
+    
     if not skill_package_dir.exists():
         skill_package_dir.mkdir(parents=True, exist_ok=True)
 

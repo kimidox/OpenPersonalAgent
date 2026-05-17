@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .types import SkillDefinition
 import config
+from resource_path import paths
 
 
 def _parse_simple_frontmatter(raw: str) -> tuple[dict[str, str], str]:
@@ -59,7 +60,7 @@ def resolve_skill_markdown_in_package(package_dir: Path) -> Path | None:
 
 def resolve_skill_memory_path(skill_md_path: Path) -> Path | None:
     """
-    获取 skill 主文档同目录下的 skill_memory.md 路径。
+    获取 PersonalData/Skills 下对应 skill 包目录中的 skill_memory.md 路径。
 
     参数：
         skill_md_path: skill 主文档路径
@@ -67,7 +68,12 @@ def resolve_skill_memory_path(skill_md_path: Path) -> Path | None:
     返回：
         如果存在 skill_memory.md 则返回其路径，否则返回 None
     """
-    memory_path = skill_md_path.parent / "skill_memory.md"
+    # 获取 PersonalData/Skills 作为基础目录
+    skills_base_dir = paths.get_skills_dir()
+    # 从 skill_md_path 中提取 skill 包目录名
+    skill_package_name = skill_md_path.parent.name
+    # 构建完整的 skill_memory.md 路径
+    memory_path = skills_base_dir / skill_package_name / "skill_memory.md"
     if memory_path.is_file():
         return memory_path
     return None
