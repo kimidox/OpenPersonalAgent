@@ -84,7 +84,6 @@ def _build_system_prompt(catalog: str) -> str:
 【刚性约束】
 - 未完成全部文件读取前，禁止回答用户问题
 - 必须显性调用工具，禁止脑补文件内容
-- 每完成一步，确认"已完成 Step X"
 - 任务完成后必须调用 finish 工具
 """
 
@@ -408,6 +407,7 @@ class SkillAgent:
         active_skill_text: list[str],
         active_skill_ids: list[str],
         messages: list[dict[str, Any]],
+        log_callback: Optional[Callable[[str, str], Any]] = None,
     ) -> None:
         assert self.memory is not None
         cid = self._conversation_id
@@ -438,6 +438,8 @@ class SkillAgent:
             )
             self.memory.append_message(cid, "user", extra_user,metadata={"type":"skill_content"})
             messages.append({"role": "user", "content": extra_user})
+            if log_callback:
+                log_callback(extra_user, "skill_content")
 
     def _summarize_session_skills(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
         if not self.memory:
@@ -679,7 +681,8 @@ class SkillAgent:
                     args_s = str(args)
                 pass
                 if fname == "finish":
-                    pass
+                    content_preview = "".join(content_parts)[:200] if content_parts else "(空)"
+                    log_callback(f"[DEBUG-finish] LLM 调用 finish，原始 args: {args_s} | content_parts 预览: {content_preview!r}", "tool")
                 elif fname != "select_skill":
                     log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
                 else:
@@ -868,6 +871,7 @@ class SkillAgent:
                         active_skill_text,
                         active_skill_ids,
                         messages,
+                        log_callback,
                     )
                 else:
                     messages.append({"role": "tool", "name": fname, "content": str(result)})
@@ -877,7 +881,7 @@ class SkillAgent:
                 return SKILL_AGENT_AWAITING_USER_REPLY
 
             if self.memory is not None:
-                self._persist_after_tool_turn(fname, args,str(result), active_skill_text, active_skill_ids, messages)
+                self._persist_after_tool_turn(fname, args,str(result), active_skill_text, active_skill_ids, messages, log_callback)
             else:
                 messages.append({"role": "tool", "name": fname, "content": str(result)})
                 if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):

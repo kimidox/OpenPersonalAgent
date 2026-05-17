@@ -379,8 +379,18 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
             else:
                 cmd = ["cmd.exe", "/c", command]
         
+        # 验证和处理 cwd 路径
+        valid_cwd = str(Path(ctx.work_dir).resolve())
+        try:
+            cwd_path = Path(cwd_str)
+            if cwd_path.exists() and cwd_path.is_dir():
+                valid_cwd = str(cwd_path.resolve())
+        except Exception:
+            # 如果路径验证失败，回退到默认工作目录
+            pass
+        
         popen_kw: dict = {
-            "cwd": cwd_str,
+            "cwd": valid_cwd,
             "capture_output": True,
             "text": False,
             "timeout": timeout_sec,

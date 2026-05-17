@@ -109,7 +109,10 @@ def execute_skill_control_tool(
 
     if name == "finish":
         msg = str(args.get("message", "")).strip()
-        return (msg or "（完成）", True, msg or "（完成）")
+        print(f"[DEBUG-finish] execution.py: message 原始值={args.get('message', '')!r}, strip 后={msg!r}")
+        if not msg:
+            return ("错误：finish 的 message 参数不能为空。你必须先通过正常文本输出完整回复内容，然后再调用 finish(message='你的完整回复') 结束任务。请重新输出回复。", False, None)
+        return (msg, True, msg)
 
     if name == "ask_user":
         q = str(args.get("question", "")).strip()
