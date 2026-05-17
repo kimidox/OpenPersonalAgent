@@ -173,6 +173,9 @@ class SkillAgentMainWindow(QMainWindow):
                 tab.add_message(msg_type, content)
             elif role == "tool" and show_tool:
                 tab.add_message("tool", content)
+        # 批量加载完成后，滚动到底部
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, tab.scroll_to_bottom)
 
     def _restore_await_user_panel(self, tab: ChatSessionTab, records: list) -> None:
         if not records or str(records[-1].get("role")) != "tool":
@@ -336,6 +339,18 @@ class SkillAgentMainWindow(QMainWindow):
                     if not has_stream_content:
                         session_tab.add_message("assistant", result)
         self._sync_input_placeholder()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # 窗口首次显示后，确保当前标签页滚动到底部
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, self._ensure_first_tab_layout_correct)
+
+    def _ensure_first_tab_layout_correct(self) -> None:
+        tab = self._active_session_tab()
+        if tab:
+            tab.message_list.update_all_cards_width()
+            tab.scroll_to_bottom()
 
     def closeEvent(self, event) -> None:
         if self.stream_renderer.is_active():

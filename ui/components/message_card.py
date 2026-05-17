@@ -30,49 +30,47 @@ class MessageCardWidget(QWidget):
     def set_available_width(self, available_width: int) -> None:
         """根据可用宽度设置气泡的最大宽度"""
         if self._msg_type == "user":
-            # 用户消息：最大600或可用宽度的70%
             max_width = min(600, int(available_width * 0.7))
             self._bubble_frame.setMaximumWidth(max_width)
             self._bubble_container.setMaximumWidth(max_width)
         else:
-            # 其他消息：最大可用宽度的80%，上限900
             max_width = min(int(available_width * 0.8), 900)
             self._bubble_frame.setMaximumWidth(max_width)
             self._bubble_container.setMaximumWidth(max_width)
-    
+
     def _setup_ui(self) -> None:
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        
+
         self._main_layout = QHBoxLayout(self)
         self._main_layout.setContentsMargins(8, 4, 8, 4)
         self._main_layout.setSpacing(0)
-        
+
         # 气泡整体容器（包含标题和内容）
         self._bubble_container = QWidget()
         self._bubble_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
         self._container_layout = QVBoxLayout(self._bubble_container)
         self._container_layout.setContentsMargins(0, 0, 0, 0)
         self._container_layout.setSpacing(2)
-        
+
         # 标题
         self._caption_label = QLabel()
         self._caption_label.setText(self._get_caption())
         self._caption_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self._apply_caption_style()
         self._container_layout.addWidget(self._caption_label)
-        
+
         # 气泡框架
         self._bubble_frame = QFrame()
         self._bubble_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        
+
         # 根据消息类型设置样式和布局
         self._apply_bubble_style()
-        
+
         # 气泡内部布局
         self._bubble_layout = QVBoxLayout(self._bubble_frame)
         self._bubble_layout.setContentsMargins(12, 10, 12, 10)
         self._bubble_layout.setSpacing(0)
-        
+
         # 内容
         self._content_label = QLabel()
         self._content_label.setWordWrap(True)
@@ -83,9 +81,9 @@ class MessageCardWidget(QWidget):
         )
         self._apply_content_style()
         self._bubble_layout.addWidget(self._content_label)
-        
+
         self._container_layout.addWidget(self._bubble_frame)
-        
+
         # 排列气泡 - 暂时设置一个默认值，后面会通过set_available_width调整
         if self._msg_type == "user":
             self._main_layout.addStretch()
@@ -210,7 +208,7 @@ class MessageCardWidget(QWidget):
         return self._is_finalized
 
     def sizeHint(self):
-        return QSize(self.size().width(), self.minimumSizeHint().height())
+        return super().sizeHint()
 
     def minimumSizeHint(self):
         return super().minimumSizeHint()
