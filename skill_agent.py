@@ -71,6 +71,7 @@ def _build_system_prompt(catalog: str) -> str:
 3. 使用 `finish` 结束对话（在 message 中给出完整答复），禁止未调用 finish 就结束对话。
 4. 使用 `ask_user` 询问关键信息或请求确认。
 5. 使用 `read_memory` 读取长期记忆（跨会话信息），使用 `write_memory` 保存重要信息。
+6. 使用 `load_skill_memory` 加载指定 Skill 的执行经验。当你认为 Skill 执行遇到困难、失败或异常时，可调用此工具获取历史经验帮助解决问题。
 
 【Skill 加载铁律】（不可跳过）
 1. 完整阅读主文档全部内容

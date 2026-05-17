@@ -15,3 +15,4 @@ class SkillDefinition:
     relative_path: Path | None = None
     extra_meta: dict[str, str] = field(default_factory=dict)
     memory_content: str | None = None
+    memory_loaded: bool = False

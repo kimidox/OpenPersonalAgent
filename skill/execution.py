@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .loader import load_skill_memory_lazy
 from .processing import format_skill_for_prompt, normalize_skill_id
 from .registry import SkillRegistry
 
@@ -52,6 +53,21 @@ SKILL_CONTROL_TOOL_DEFINITIONS: list[dict] = [
                 },
             },
             "required": ["question"],
+        },
+    },
+    {
+        "name": "load_skill_memory",
+        "description": (
+            "加载指定 Skill 的执行经验（skill_memory.md）。"
+            "当你认为当前 Skill 执行遇到困难、失败或异常时，可调用此工具获取历史经验帮助解决问题。"
+            "经验内容包含之前执行该 Skill 时遇到的问题及解决方案。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "skill_id": {"type": "string", "description": "Skill 唯一标识"},
+            },
+            "required": ["skill_id"],
         },
     },
 ]
@@ -119,5 +135,19 @@ def execute_skill_control_tool(
             ]
         )
         return ("\n".join(lines), False, None)
+
+    if name == "load_skill_memory":
+        sid = normalize_skill_id(str(args.get("skill_id", "")))
+        s = registry.get(sid)
+        if s is None:
+            return (f"错误: 未找到 skill_id={sid!r}。", False, None)
+        load_skill_memory_lazy(s, registry)
+        if s.memory_content and s.memory_content.strip():
+            return (
+                f"### Skill「{sid}」执行经验\n\n{s.memory_content.strip()}\n\n请参考以上经验，避免重复之前的错误。",
+                False,
+                None,
+            )
+        return (f"Skill「{sid}」暂无执行经验记录。", False, None)
 
     return (f"未知 Skill 控制工具: {name}", False, None)

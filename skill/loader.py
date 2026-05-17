@@ -98,6 +98,38 @@ def load_skill_memory(skill_md_path: Path) -> str | None:
         return None
 
 
+def load_skill_memory_lazy(skill: SkillDefinition, registry: "SkillRegistry") -> SkillDefinition:
+    """
+    延迟加载 skill 的经验内容。仅在 memory_loaded 为 False 时读取 skill_memory.md。
+
+    参数：
+        skill: SkillDefinition 对象
+        registry: SkillRegistry 实例，用于获取 skill 的主文档路径
+
+    返回：
+        更新后的 SkillDefinition 对象（原地修改并返回）
+    """
+    if skill.memory_loaded:
+        return skill
+
+    skill.memory_loaded = True
+
+    if skill.relative_path is None:
+        return skill
+
+    skills_base_dir = paths.get_skills_dir()
+    skill_package_name = skill.relative_path.parent.name if skill.relative_path.parent else skill.skill_id
+    memory_path = skills_base_dir / skill_package_name / "skill_memory.md"
+
+    if memory_path.is_file():
+        try:
+            skill.memory_content = memory_path.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            skill.memory_content = None
+
+    return skill
+
+
 def load_skill_from_path(path: Path) -> SkillDefinition:
     raw = path.read_text(encoding="utf-8", errors="replace")
     meta, body = _parse_simple_frontmatter(raw)
@@ -115,8 +147,6 @@ def load_skill_from_path(path: Path) -> SkillDefinition:
         except ValueError:
             relative_path = path.name
 
-    memory_content = load_skill_memory(path)
-
     return SkillDefinition(
         skill_id=skill_id,
         name=name,
@@ -124,7 +154,8 @@ def load_skill_from_path(path: Path) -> SkillDefinition:
         body=body.strip(),
         relative_path=relative_path,
         extra_meta=extra,
-        memory_content=memory_content,
+        memory_content=None,
+        memory_loaded=False,
     )
 
 
