@@ -168,20 +168,34 @@ class SkillAgentMainWindow(QMainWindow):
         for m in records:
             role, content, meta = str(m.get("role") or ""), str(m.get("content") or ""), m.get("metadata") or {}
             if role == "user":
-                tab.add_message("user", content)
+                msg_type = "user"
             elif role == "assistant":
                 msg_type = meta.get("type")
                 if msg_type == "think":
-                    tab.add_message("think", content)
+                    msg_type = "think"
                 elif msg_type == "tool_call":
-                    tab.add_message("tool_call", content)
+                    msg_type = "tool_call"
                 else:
-                    tab.add_message("assistant", content)
+                    msg_type = "assistant"
             elif role == "tool" and show_tool:
-                tab.add_message("tool", content)
-        # 批量加载完成后，滚动到底部
+                msg_type = "tool"
+            else:
+                continue
+                
+            # 先添加消息
+            card = tab.message_list.add_message(msg_type, content)
+            
+        # 批量加载完成后，先更新所有卡片的宽度，再逐个 finalize
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(100, tab.scroll_to_bottom)
+        
+        def finalize_all_cards():
+            tab.message_list.update_all_cards_width()
+            for card in tab.message_list._message_cards:
+                if not card.is_finalized():
+                    card.finalize_content()
+            tab.scroll_to_bottom()
+            
+        QTimer.singleShot(50, finalize_all_cards)
 
     def _restore_await_user_panel(self, tab: ChatSessionTab, records: list) -> None:
         if not records or str(records[-1].get("role")) != "tool":
