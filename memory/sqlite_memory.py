@@ -121,7 +121,15 @@ class SqliteMemory(Memory):
             rows = q.all()
         if limit is not None and limit > 0:
             rows = rows[-limit:]
-        return [Message.from_orm(r).to_llm_dict() for r in rows]
+        
+        # 过滤掉 type="tool_call" 的消息，不传给 LLM
+        filtered_rows = []
+        for r in rows:
+            ext = r.ext if r.ext else {}
+            if ext.get("type") != "tool_call":
+                filtered_rows.append(r)
+        
+        return [Message.from_orm(r).to_llm_dict() for r in filtered_rows]
 
     def get_message_records(
         self,

@@ -63,19 +63,31 @@ def summarize_skill_execution(
         SkillExecutionMemory 对象
     """
     import json
-
+    import traceback
+    
+    print(f"[SkillSummary] summarize_skill_execution 开始: skill_id={skill_id}, messages_count={len(conversation_messages)}")
+    
     conversation_text = _format_conversation(conversation_messages)
+    print(f"[SkillSummary] 格式化会话文本完成: length={len(conversation_text)}")
+    
     prompt = SUMMARIZE_PROMPT.format(
         skill_id=skill_id,
         conversation=conversation_text,
     )
+    print(f"[SkillSummary] 准备调用 LLM 进行总结 (skill_id={skill_id})")
 
     try:
         messages = [{"role": "user", "content": prompt}]
         response_msg = llm_model.complete(messages)
         response_text = getattr(response_msg, "content", "") or str(response_msg)
+        print(f"[SkillSummary] LLM 响应接收完成 (skill_id={skill_id}), length={len(response_text)}")
+        
         result = _parse_llm_response(response_text)
+        print(f"[SkillSummary] JSON 解析成功 (skill_id={skill_id}), success={result.get('success')}")
     except Exception as e:
+        print(f"[SkillSummary] ❌ LLM 分析异常 (skill_id={skill_id}): {type(e).__name__}: {e}")
+        print(f"[SkillSummary] 📋 异常堆栈:\n{traceback.format_exc()}")
+        
         result = {
             "success": False,
             "errors_and_fixes": [f"LLM 分析失败: {str(e)}"],
@@ -83,7 +95,7 @@ def summarize_skill_execution(
             "summary": "无法生成执行总结",
         }
 
-    return SkillExecutionMemory(
+    memory = SkillExecutionMemory(
         skill_id=skill_id,
         session_id=str(uuid.uuid4())[:8],
         timestamp=datetime.now().isoformat(),
@@ -92,6 +104,9 @@ def summarize_skill_execution(
         tips=result.get("tips", []),
         summary=result.get("summary", ""),
     )
+    
+    print(f"[SkillSummary] summarize_skill_execution 完成: skill_id={skill_id}, success={memory.success}")
+    return memory
 
 
 def _format_conversation(messages: list[dict]) -> str:

@@ -116,6 +116,7 @@ class SkillAgentMainWindow(QMainWindow):
         self.message_handler.tool_message.connect(self._on_tool_message)
         self.message_handler.await_user_message.connect(self._on_await_user_message)
         self.message_handler.skill_content_message.connect(self._on_skill_content_message)
+        self.message_handler.tool_call_message.connect(self._on_tool_call_message)
 
     def _populate_initial_tabs(self) -> None:
         sessions = [c for c in self.skill_agent.list_saved_conversations() if (c.conversation_id or "").strip()]
@@ -169,8 +170,13 @@ class SkillAgentMainWindow(QMainWindow):
             if role == "user":
                 tab.add_message("user", content)
             elif role == "assistant":
-                msg_type = "think" if meta.get("type") == "think" else "assistant"
-                tab.add_message(msg_type, content)
+                msg_type = meta.get("type")
+                if msg_type == "think":
+                    tab.add_message("think", content)
+                elif msg_type == "tool_call":
+                    tab.add_message("tool_call", content)
+                else:
+                    tab.add_message("assistant", content)
             elif role == "tool" and show_tool:
                 tab.add_message("tool", content)
         # 批量加载完成后，滚动到底部
@@ -304,6 +310,14 @@ class SkillAgentMainWindow(QMainWindow):
             if conv_id == session_tab.conversation_id:
                 self.stream_renderer.complete()
         session_tab.add_message("tool", message)
+
+    def _on_tool_call_message(self, message: str, session_tab: ChatSessionTab) -> None:
+        """处理工具调用消息"""
+        if self.stream_renderer.is_active():
+            conv_id = self.stream_renderer.get_conversation_id()
+            if conv_id == session_tab.conversation_id:
+                self.stream_renderer.complete()
+        session_tab.add_message("tool_call", message)
 
     def _on_skill_content_message(self, message: str, session_tab: ChatSessionTab) -> None:
         if self.stream_renderer.is_active():

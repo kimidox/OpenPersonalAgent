@@ -442,11 +442,16 @@ class SkillAgent:
                 log_callback(extra_user, "skill_content")
 
     def _summarize_session_skills(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
+        import threading
+        current_thread = threading.current_thread()
+        print(f"[SkillSummary] _summarize_session_skills 开始: thread={current_thread.name}, conversation_id={conversation_id}")
+        
         if not self.memory:
             print(f"[SkillSummary] 跳过总结: memory 为空 (conversation_id={conversation_id})")
             return
 
         if active_skill_ids is None:
+            print(f"[SkillSummary] 获取活跃 skill_ids (conversation_id={conversation_id})")
             active_skill_ids = self.memory.get_active_skills(conversation_id)
 
         print(f"[SkillSummary] 开始总结: conversation_id={conversation_id}, active_skill_ids={active_skill_ids}")
@@ -460,27 +465,49 @@ class SkillAgent:
             print(f"[SkillSummary] 跳过总结: 无会话消息 (conversation_id={conversation_id})")
             return
 
+        print(f"[SkillSummary] 加载会话消息完成: count={len(messages)}, conversation_id={conversation_id}")
+        
         model = get_chat_model()
+        print(f"[SkillSummary] 获取 LLM 模型完成, conversation_id={conversation_id}")
 
-        for skill_id in active_skill_ids:
+        success_count = 0
+        for idx, skill_id in enumerate(active_skill_ids):
             try:
-                print(f"[SkillSummary] 正在总结 skill: {skill_id}")
+                print(f"[SkillSummary] 正在总结 skill: {skill_id} ({idx+1}/{len(active_skill_ids)})")
                 memory = summarize_skill_execution(skill_id, messages, model)
                 if memory:
                     saved_path = save_skill_memory(skill_id, memory, self.registry)
                     print(f"[SkillSummary] skill {skill_id} 总结完成, 保存至: {saved_path}")
+                    success_count += 1
                 else:
                     print(f"[SkillSummary] skill {skill_id} 总结结果为空, 未保存")
             except Exception as e:
-                print(f"[SkillSummary] 总结 skill {skill_id} 执行经验失败: {e}")
+                import traceback
+                print(f"[SkillSummary] ❌ 总结 skill {skill_id} 执行经验失败: {e}")
+                print(f"[SkillSummary] 📋 异常堆栈:\n{traceback.format_exc()}")
+        
+        print(f"[SkillSummary] 总结会话完成: conversation_id={conversation_id}, "
+              f"total={len(active_skill_ids)}, success={success_count}")
+        print(f"[SkillSummary] 后台线程退出: thread={current_thread.name}")
 
     def _start_summary_in_background(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
+        import threading
+        print(f"[SkillSummary] 准备启动后台总结线程: conversation_id={conversation_id}, active_skill_ids={active_skill_ids}")
+        
         if not self.memory:
+            print(f"[SkillSummary] 跳过总结: memory 为空 (conversation_id={conversation_id})")
             return
+        
         if active_skill_ids is None:
+            print(f"[SkillSummary] 获取活跃 skill_ids (conversation_id={conversation_id})")
             active_skill_ids = self.memory.get_active_skills(conversation_id)
+        
         if not active_skill_ids:
+            print(f"[SkillSummary] 跳过总结: 无活跃 skill (conversation_id={conversation_id})")
             return
+        
+        print(f"[SkillSummary] 构建总结线程: conversation_id={conversation_id}, active_skill_ids={active_skill_ids}")
+        
         t = threading.Thread(
             target=self._summarize_session_skills,
             args=(conversation_id, active_skill_ids),
@@ -488,9 +515,16 @@ class SkillAgent:
             daemon=True,
         )
         t.start()
-        print(f"[SkillSummary] 后台线程已启动: {t.name}, active_skill_ids={active_skill_ids}")
+        
+        print(f"[SkillSummary] 后台线程已启动: name={t.name}, ident={t.ident}, active_skill_ids={active_skill_ids}")
+        print(f"[SkillSummary] 主线程继续执行 (总结线程独立运行)")
 
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
+        import traceback
+        print(f"[DEBUG-exec] ===== run() 开始执行 =====")
+        print(f"[DEBUG-exec] user_query 长度: {len(user_query)}, 前50字: {user_query[:50]}")
+        print(f"[DEBUG-exec] conversation_id: {self._conversation_id}")
+        
         self._recent_commands = []
         self._token_usage = TokenUsage.empty()
 
@@ -500,140 +534,196 @@ class SkillAgent:
                 token_usage_json = json.dumps(asdict(self._token_usage), ensure_ascii=False)
                 log_callback(token_usage_json, "token_usage")
 
-        model = get_chat_model()
-        disabled = self._disabled_skill_ids_frozen()
-        skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
-        catalog = build_skills_catalog_text(skills_visible)
-        system_prompt = _build_system_prompt(catalog)
-        tools = model.build_skill_agent_tools()
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_query.strip()},
-        ]
-        active_skill_text: list[str] = []
-        active_skill_ids: list[str] = []
+        try:
+            model = get_chat_model()
+            disabled = self._disabled_skill_ids_frozen()
+            skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
+            catalog = build_skills_catalog_text(skills_visible)
+            system_prompt = _build_system_prompt(catalog)
+            tools = model.build_skill_agent_tools()
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_query.strip()},
+            ]
+            active_skill_text: list[str] = []
+            active_skill_ids: list[str] = []
 
-        if self.memory is not None:
-            self._append_model_messages(messages, system_prompt=system_prompt, user_query=user_query)
-            prior_messages = self.memory.get_message_records(self._conversation_id)
-            if prior_messages and len(prior_messages) >= 2:
-                last_msg = prior_messages[-1]
-                prev_msg = prior_messages[-2]
-                if last_msg.get("role") == "user" and prev_msg.get("role") == "tool":
-                    prev_meta = prev_msg.get("metadata") or {}
-                    if prev_meta.get("name") == "ask_user":
-                        user_choice = user_query.strip()
-                        if user_choice == "确认执行":
-                            for record in reversed(prior_messages[:-2]):
-                                if record.get("role") == "assistant":
-                                    meta = record.get("metadata") or {}
-                                    if meta.get("type") == "tool_call":
-                                        fname = meta.get("name")
-                                        args_str = meta.get("args", "{}")
-                                        try:
-                                            args = json.loads(args_str)
-                                        except json.JSONDecodeError:
-                                            args = {}
-                                        if fname == "run_command":
-                                            command = str(args.get("command", "") or "").strip()
-                                            result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
-                                            self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
-                                            messages.append({"role": "tool", "name": fname, "content": str(result)})
-                                            if log_callback:
-                                                log_callback(f"执行命令: {command}", "base_tool")
-                                                log_callback(str(result), "base_tool")
-                                            break
-                        elif user_choice == "确认安装":
-                            for record in reversed(prior_messages[:-2]):
-                                if record.get("role") == "assistant":
-                                    meta = record.get("metadata") or {}
-                                    if meta.get("type") == "tool_call":
-                                        fname = meta.get("name")
-                                        args_str = meta.get("args", "{}")
-                                        try:
-                                            args = json.loads(args_str)
-                                        except json.JSONDecodeError:
-                                            args = {}
-                                        if fname == "run_command":
-                                            skill_id = args.get("skill_id", "")
-                                            command = str(args.get("command", "") or "").strip()
-                                            
-                                            if skill_id:
-                                                success, msg = install_skill_dependencies(str(skill_id), self.registry)
-                                                if not success:
-                                                    err_msg = f"依赖安装失败: {msg}"
-                                                    if log_callback:
-                                                        log_callback(err_msg, "assistant")
-                                                    self.memory.append_message(self._conversation_id, "assistant", err_msg)
-                                                    _emit_token_usage()
-                                                    return err_msg
+            if self.memory is not None:
+                self._append_model_messages(messages, system_prompt=system_prompt, user_query=user_query)
+                prior_messages = self.memory.get_message_records(self._conversation_id)
+                print(f"[DEBUG-exec] 加载历史消息: {len(prior_messages)} 条")
+                if prior_messages and len(prior_messages) >= 2:
+                    last_msg = prior_messages[-1]
+                    prev_msg = prior_messages[-2]
+                    if last_msg.get("role") == "user" and prev_msg.get("role") == "tool":
+                        prev_meta = prev_msg.get("metadata") or {}
+                        if prev_meta.get("name") == "ask_user":
+                            user_choice = user_query.strip()
+                            print(f"[DEBUG-exec] 检测到 ask_user 历史，用户选择: {user_choice}")
+                            if user_choice == "确认执行":
+                                for record in reversed(prior_messages[:-2]):
+                                    if record.get("role") == "assistant":
+                                        meta = record.get("metadata") or {}
+                                        if meta.get("type") == "tool_call":
+                                            fname = meta.get("name")
+                                            args_str = meta.get("args", "{}")
+                                            try:
+                                                args = json.loads(args_str)
+                                            except json.JSONDecodeError:
+                                                args = {}
+                                            if fname == "run_command":
+                                                command = str(args.get("command", "") or "").strip()
+                                                result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
+                                                self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
+                                                messages.append({"role": "tool", "name": fname, "content": str(result)})
                                                 if log_callback:
-                                                    log_callback(f"依赖安装成功: {msg}", "base_tool")
-                                                self.memory.append_message(self._conversation_id, "tool", f"依赖安装成功: {msg}", metadata={"name": "install_dependencies"})
-                                                messages.append({"role": "tool", "name": "install_dependencies", "content": f"依赖安装成功: {msg}"})
+                                                    log_callback(f"执行命令: {command}", "base_tool")
+                                                    log_callback(str(result), "base_tool")
+                                                break
+                            elif user_choice == "确认安装":
+                                for record in reversed(prior_messages[:-2]):
+                                    if record.get("role") == "assistant":
+                                        meta = record.get("metadata") or {}
+                                        if meta.get("type") == "tool_call":
+                                            fname = meta.get("name")
+                                            args_str = meta.get("args", "{}")
+                                            try:
+                                                args = json.loads(args_str)
+                                            except json.JSONDecodeError:
+                                                args = {}
+                                            if fname == "run_command":
+                                                skill_id = args.get("skill_id", "")
+                                                command = str(args.get("command", "") or "").strip()
                                                 
-                                                result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
-                                                self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
-                                                messages.append({"role": "tool", "name": fname, "content": str(result)})
-                                                if log_callback:
-                                                    log_callback(f"执行命令: {command}", "base_tool")
-                                                    log_callback(str(result), "base_tool")
-                                            else:
-                                                result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
-                                                self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
-                                                messages.append({"role": "tool", "name": fname, "content": str(result)})
-                                                if log_callback:
-                                                    log_callback(f"执行命令: {command}", "base_tool")
-                                                    log_callback(str(result), "base_tool")
-                                            _emit_token_usage()
-                                            return result
-                        elif user_choice == "取消":
-                            cancel_msg = "操作已取消"
-                            if log_callback:
-                                log_callback(cancel_msg, "assistant")
-                            if self.memory is not None:
-                                self.memory.append_message(self._conversation_id, "assistant", cancel_msg)
-                            _emit_token_usage()
-                            return cancel_msg
+                                                if skill_id:
+                                                    success, msg = install_skill_dependencies(str(skill_id), self.registry)
+                                                    if not success:
+                                                        err_msg = f"依赖安装失败: {msg}"
+                                                        if log_callback:
+                                                            log_callback(err_msg, "assistant")
+                                                        self.memory.append_message(self._conversation_id, "assistant", err_msg)
+                                                        _emit_token_usage()
+                                                        print(f"[DEBUG-exec] 📤 返回 (依赖安装失败): {err_msg}")
+                                                        return err_msg
+                                                    if log_callback:
+                                                        log_callback(f"依赖安装成功: {msg}", "base_tool")
+                                                    self.memory.append_message(self._conversation_id, "tool", f"依赖安装成功: {msg}", metadata={"name": "install_dependencies"})
+                                                    messages.append({"role": "tool", "name": "install_dependencies", "content": f"依赖安装成功: {msg}"})
+                                                    
+                                                    result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
+                                                    self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
+                                                    messages.append({"role": "tool", "name": fname, "content": str(result)})
+                                                    if log_callback:
+                                                        log_callback(f"执行命令: {command}", "base_tool")
+                                                        log_callback(str(result), "base_tool")
+                                                else:
+                                                    result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
+                                                    self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
+                                                    messages.append({"role": "tool", "name": fname, "content": str(result)})
+                                                    if log_callback:
+                                                        log_callback(f"执行命令: {command}", "base_tool")
+                                                        log_callback(str(result), "base_tool")
+                                                _emit_token_usage()
+                                                print(f"[DEBUG-exec] 📤 返回 (确认安装后执行结果): {str(result)[:100]}")
+                                                return result
+                            elif user_choice == "取消":
+                                cancel_msg = "操作已取消"
+                                if log_callback:
+                                    log_callback(cancel_msg, "assistant")
+                                if self.memory is not None:
+                                    self.memory.append_message(self._conversation_id, "assistant", cancel_msg)
+                                _emit_token_usage()
+                                print(f"[DEBUG-exec] 📤 返回 (操作已取消)")
+                                return cancel_msg
 
-        if self._should_compact(messages):
-            if log_callback:
-                log_callback("检测到上下文过长，正在自动压缩...", "info")
-            messages = self._perform_compaction(messages, log_callback)
-
-        for step in range(self.max_steps):
-            thinking_parts: list[str] = []
-            content_parts: list[str] = []
-
-            def _stream_callback(content: str, msg_type: str) -> None:
+            if self._should_compact(messages):
                 if log_callback:
-                    log_callback(content, msg_type)
-                if msg_type == "think":
-                    thinking_parts.append(content)
-                elif msg_type == "content":
-                    content_parts.append(content)
+                    log_callback("检测到上下文过长，正在自动压缩...", "info")
+                messages = self._perform_compaction(messages, log_callback)
 
-            function_call = model.stream_request_llm_with_tools(messages, tools, _stream_callback)
+            for step in range(self.max_steps):
+                print(f"[DEBUG-exec] ===== Step {step}/{self.max_steps} 开始 =====")
+                print(f"[DEBUG-exec] messages 数量: {len(messages)}")
+                thinking_parts: list[str] = []
+                content_parts: list[str] = []
 
-            if function_call is not None and function_call.get("token_usage") is not None:
-                self._token_usage = self._token_usage + function_call["token_usage"]
+                def _stream_callback(content: str, msg_type: str) -> None:
+                    if log_callback:
+                        log_callback(content, msg_type)
+                    if msg_type == "think":
+                        thinking_parts.append(content)
+                    elif msg_type == "content":
+                        content_parts.append(content)
 
-            full_thinking = "".join(thinking_parts).strip()
+                print(f"[DEBUG-exec] 准备调用 LLM, 当前消息数: {len(messages)}")
+                if len(messages) > 0:
+                    last_msg = messages[-1]
+                    print(f"[DEBUG-exec] 最后一条消息: role={last_msg.get('role')}, content 前50字={str(last_msg.get('content', ''))[:50]}")
 
-            is_text_only = (
-                function_call is not None and
-                function_call.get("name") is None and
-                function_call.get("content") is not None
-            )
+                function_call = model.stream_request_llm_with_tools(messages, tools, _stream_callback)
 
-            if is_text_only or (function_call is None):
-                final_text = ""
-                if is_text_only:
-                    final_text = function_call.get("content", "")
-                if not final_text:
-                    final_text = "".join(content_parts).strip()
-                if not full_thinking:
-                    full_thinking = "".join(thinking_parts).strip()
+                print(f"[DEBUG-exec] LLM 返回:")
+                if function_call is None:
+                    print(f"[DEBUG-exec]   - function_call is None")
+                else:
+                    print(f"[DEBUG-exec]   - name: {function_call.get('name')}")
+                    print(f"[DEBUG-exec]   - has content: {function_call.get('content') is not None}")
+                    if function_call.get('arguments'):
+                        args_preview = str(function_call.get('arguments', ''))[:100]
+                        print(f"[DEBUG-exec]   - arguments 前100字: {args_preview}")
+
+                if function_call is not None and function_call.get("token_usage") is not None:
+                    self._token_usage = self._token_usage + function_call["token_usage"]
+
+                full_thinking = "".join(thinking_parts).strip()
+
+                is_text_only = (
+                    function_call is not None and
+                    function_call.get("name") is None and
+                    function_call.get("content") is not None
+                )
+
+                if is_text_only or (function_call is None):
+                    final_text = ""
+                    if is_text_only:
+                        final_text = function_call.get("content", "")
+                    if not final_text:
+                        final_text = "".join(content_parts).strip()
+                    if not full_thinking:
+                        full_thinking = "".join(thinking_parts).strip()
+
+                    if full_thinking and self.memory is not None:
+                        self.memory.append_message(
+                            self._conversation_id,
+                            "assistant",
+                            full_thinking,
+                            metadata={"type": "think"},
+                        )
+
+                    if not final_text:
+                        err = "模型未返回内容，无法继续。"
+                        if log_callback:
+                            log_callback(err, "assistant")
+                        if self.memory is not None:
+                            self.memory.append_message(self._conversation_id, "assistant", err)
+                        self._start_summary_in_background(self._conversation_id, active_skill_ids)
+                        _emit_token_usage()
+                        return err
+
+                    if self.memory is not None:
+                        self.memory.append_message(self._conversation_id, "assistant", final_text)
+                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
+                    _emit_token_usage()
+                    print(f"[DEBUG-exec] 📤 返回文本内容 (长度: {len(final_text)})")
+                    return final_text
+
+                fname = function_call.get("name")
+                arg_str = function_call.get("arguments", "{}")
+                try:
+                    args = json.loads(arg_str)
+                except json.JSONDecodeError:
+                    args = {}
+                print(f"[DEBUG-exec] 解析工具调用: fname={fname}, args keys={list(args.keys()) if isinstance(args, dict) else type(args)}")
 
                 if full_thinking and self.memory is not None:
                     self.memory.append_message(
@@ -643,69 +733,86 @@ class SkillAgent:
                         metadata={"type": "think"},
                     )
 
-                if not final_text:
-                    err = "模型未返回内容，无法继续。"
-                    if log_callback:
-                        log_callback(err, "assistant")
-                    if self.memory is not None:
-                        self.memory.append_message(self._conversation_id, "assistant", err)
-                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
-                    _emit_token_usage()
-                    return err
-
+                if log_callback:
+                    try:
+                        args_s = json.dumps(args, ensure_ascii=False)
+                    except (TypeError, ValueError):
+                        args_s = str(args)
+                    pass
+                    if fname == "finish":
+                        content_preview = "".join(content_parts)[:200] if content_parts else "(空)"
+                        log_callback(f"[DEBUG-finish] LLM 调用 finish，原始 args: {args_s} | content_parts 预览: {content_preview!r}", "tool")
+                    elif fname != "select_skill":
+                        log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
+                    else:
+                        log_callback(f"选择 Skill: {args.get('skill_id', '')}", "tool")
                 if self.memory is not None:
-                    self.memory.append_message(self._conversation_id, "assistant", final_text)
-                self._start_summary_in_background(self._conversation_id, active_skill_ids)
-                _emit_token_usage()
-                return final_text
-
-            fname = function_call.get("name")
-            arg_str = function_call.get("arguments", "{}")
-            try:
-                args = json.loads(arg_str)
-            except json.JSONDecodeError:
-                args = {}
-
-            if full_thinking and self.memory is not None:
-                self.memory.append_message(
-                    self._conversation_id,
-                    "assistant",
-                    full_thinking,
-                    metadata={"type": "think"},
-                )
-
-            if log_callback:
-                try:
-                    args_s = json.dumps(args, ensure_ascii=False)
-                except (TypeError, ValueError):
-                    args_s = str(args)
-                pass
-                if fname == "finish":
-                    content_preview = "".join(content_parts)[:200] if content_parts else "(空)"
-                    log_callback(f"[DEBUG-finish] LLM 调用 finish，原始 args: {args_s} | content_parts 预览: {content_preview!r}", "tool")
-                elif fname != "select_skill":
-                    log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
-                else:
-                    log_callback(f"选择 Skill: {args.get('skill_id', '')}", "tool")
-            if self.memory is not None:
-                self.memory.append_message(self._conversation_id, "assistant", f"调用工具: {fname}", metadata={"type": "tool_call", "name": fname, "args": arg_str,"reasoning_content":full_thinking})
-            
-            if fname == "run_command":
-                command = str(args.get("command", "") or "").strip()
-                skill_id = args.get("skill_id", "")
-                
-                if skill_id:
-                    need_install, packages_to_install, err_msg = check_skill_dependencies(
-                        str(skill_id), self.registry
+                    try:
+                        args_display = json.dumps(args, ensure_ascii=False)
+                    except (TypeError, ValueError):
+                        args_display = arg_str
+                    self.memory.append_message(
+                        self._conversation_id,
+                        "assistant",
+                        f"调用工具 `{fname}` · {args_display}",
+                        metadata={
+                            "type": "tool_call",
+                            "name": fname,
+                            "args": arg_str,
+                            "reasoning_content": full_thinking
+                        }
                     )
-                    if err_msg:
-                        _emit_token_usage()
-                        return f"错误: {err_msg}"
+            
+                if fname == "run_command":
+                    command = str(args.get("command", "") or "").strip()
+                    skill_id = args.get("skill_id", "")
                     
-                    if need_install and packages_to_install:
-                        packages_str = ", ".join(packages_to_install)
+                    if skill_id:
+                        need_install, packages_to_install, err_msg = check_skill_dependencies(
+                            str(skill_id), self.registry
+                        )
+                        if err_msg:
+                            _emit_token_usage()
+                            return f"错误: {err_msg}"
+                        
+                        if need_install and packages_to_install:
+                            packages_str = ", ".join(packages_to_install)
+                            ask_args = {
+                                "question": f"Skill「{skill_id}」需要安装以下依赖包：\n\n{packages_str}\n\n是否确认安装？",
+                                "choices": ["确认安装", "取消"]
+                            }
+                            result, terminate, final = execute_skill_control_tool(
+                                "ask_user",
+                                ask_args,
+                                registry=self.registry,
+                                active_skill_text=active_skill_text,
+                                active_skill_ids=active_skill_ids,
+                                disabled_skill_ids=self._disabled_skill_ids_frozen(),
+                            )
+                            if str(result).startswith("错误"):
+                                _emit_token_usage()
+                                return result
+                            if self.memory is not None:
+                                self._persist_after_tool_turn(
+                                    "ask_user",
+                                    ask_args,
+                                    str(result),
+                                    active_skill_text,
+                                    active_skill_ids,
+                                    messages,
+                                )
+                            else:
+                                messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
+                            if log_callback:
+                                log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+                            _emit_token_usage()
+                            return SKILL_AGENT_AWAITING_USER_REPLY
+                    
+                    is_pkg_install, packages = self._is_package_install_command(command)
+                    if is_pkg_install:
+                        packages_str = ", ".join(packages) if packages else "（未解析到包名）"
                         ask_args = {
-                            "question": f"Skill「{skill_id}」需要安装以下依赖包：\n\n{packages_str}\n\n是否确认安装？",
+                            "question": f"即将安装以下包：\n\n{packages_str}\n\n命令：{command}\n\n是否确认执行？",
                             "choices": ["确认安装", "取消"]
                         }
                         result, terminate, final = execute_skill_control_tool(
@@ -734,177 +841,180 @@ class SkillAgent:
                             log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
                         _emit_token_usage()
                         return SKILL_AGENT_AWAITING_USER_REPLY
-                
-                is_pkg_install, packages = self._is_package_install_command(command)
-                if is_pkg_install:
-                    packages_str = ", ".join(packages) if packages else "（未解析到包名）"
-                    ask_args = {
-                        "question": f"即将安装以下包：\n\n{packages_str}\n\n命令：{command}\n\n是否确认执行？",
-                        "choices": ["确认安装", "取消"]
-                    }
-                    result, terminate, final = execute_skill_control_tool(
-                        "ask_user",
-                        ask_args,
-                        registry=self.registry,
-                        active_skill_text=active_skill_text,
-                        active_skill_ids=active_skill_ids,
-                        disabled_skill_ids=self._disabled_skill_ids_frozen(),
-                    )
-                    if str(result).startswith("错误"):
-                        _emit_token_usage()
-                        return result
-                    if self.memory is not None:
-                        self._persist_after_tool_turn(
+                    
+                    if self._is_dangerous_command(command):
+                        ask_args = {
+                            "question": f"即将执行以下命令，可能会修改或删除文件：\n\n{command}\n\n是否确认执行？",
+                            "choices": ["确认执行", "取消"]
+                        }
+                        result, terminate, final = execute_skill_control_tool(
                             "ask_user",
                             ask_args,
-                            str(result),
-                            active_skill_text,
-                            active_skill_ids,
-                            messages,
+                            registry=self.registry,
+                            active_skill_text=active_skill_text,
+                            active_skill_ids=active_skill_ids,
+                            disabled_skill_ids=self._disabled_skill_ids_frozen(),
                         )
-                    else:
-                        messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
-                    if log_callback:
-                        log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
-                    _emit_token_usage()
-                    return SKILL_AGENT_AWAITING_USER_REPLY
-                
-                if self._is_dangerous_command(command):
-                    ask_args = {
-                        "question": f"即将执行以下命令，可能会修改或删除文件：\n\n{command}\n\n是否确认执行？",
-                        "choices": ["确认执行", "取消"]
-                    }
-                    result, terminate, final = execute_skill_control_tool(
-                        "ask_user",
-                        ask_args,
-                        registry=self.registry,
-                        active_skill_text=active_skill_text,
-                        active_skill_ids=active_skill_ids,
-                        disabled_skill_ids=self._disabled_skill_ids_frozen(),
-                    )
-                    if str(result).startswith("错误"):
+                        if str(result).startswith("错误"):
+                            _emit_token_usage()
+                            return result
+                        if self.memory is not None:
+                            self._persist_after_tool_turn(
+                                "ask_user",
+                                ask_args,
+                                str(result),
+                                active_skill_text,
+                                active_skill_ids,
+                                messages,
+                            )
+                        else:
+                            messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
+                        if log_callback:
+                            log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
                         _emit_token_usage()
-                        return result
-                    if self.memory is not None:
-                        self._persist_after_tool_turn(
-                            "ask_user",
-                            ask_args,
-                            str(result),
-                            active_skill_text,
-                            active_skill_ids,
-                            messages,
-                        )
-                    else:
-                        messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
-                    if log_callback:
-                        log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
-                    _emit_token_usage()
-                    return SKILL_AGENT_AWAITING_USER_REPLY
-            
-            result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
-
-            if log_callback and fname == "select_skill":
-                if str(result).startswith("错误"):
-                    log_callback(f"选择 Skill 失败：{result}", "tool")
-                else:
-                    ids_join = "、".join(active_skill_ids)
-                    n = len(active_skill_ids)
-                    log_callback(
-                        f"命中 Skill「{args.get('skill_id', '')}」｜本轮已累计 id：{ids_join}（共 {n} 个）",
-                        "tool",
-                    )
-                    prefix = (
-                        f"［第 {n} 次加载｜本轮已累计 {n} 份｜id 顺序：{ids_join}］\n\n"
-                    )
-                    log_callback(prefix + str(result), "doc")
-
-            if log_callback and fname not in ("finish", "select_skill", "ask_user"):
-                r = str(result)
-                if len(r) > 12000:
-                    r = r[:12000] + "\n\n…（内容已截断）"
+                        return SKILL_AGENT_AWAITING_USER_REPLY
+                
+                print(f"[DEBUG-exec] 准备执行工具: {fname}")
                 if fname == "run_command":
-                    command = str(args.get("command", "") or "").strip()
-                    log_callback(f"执行命令: {command}", "base_tool")
-                    
-                    if "exit_code: 0" in r:
-                        stdout_match = r.split("--- stdout ---")
-                        stdout = ""
-                        if len(stdout_match) >= 2:
-                            stdout = stdout_match[1].split("--- stderr ---")[0].strip()
+                    cmd = str(args.get("command", ""))[:80]
+                    print(f"[DEBUG-exec]   命令: {cmd}...")
+
+                result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
+
+                print(f"[DEBUG-exec] 工具执行完成:")
+                print(f"[DEBUG-exec]   - result 长度: {len(str(result))}")
+                print(f"[DEBUG-exec]   - result 前100字: {str(result)[:100]}")
+                print(f"[DEBUG-exec]   - terminate: {terminate}")
+                print(f"[DEBUG-exec]   - final: {final is not None}")
+
+                if log_callback and fname == "select_skill":
+                    if str(result).startswith("错误"):
+                        log_callback(f"选择 Skill 失败：{result}", "tool")
+                    else:
+                        ids_join = "、".join(active_skill_ids)
+                        n = len(active_skill_ids)
+                        log_callback(
+                            f"命中 Skill「{args.get('skill_id', '')}」｜本轮已累计 id：{ids_join}（共 {n} 个）",
+                            "tool",
+                        )
+                        prefix = (
+                            f"［第 {n} 次加载｜本轮已累计 {n} 份｜id 顺序：{ids_join}］\n\n"
+                        )
+                        log_callback(prefix + str(result), "doc")
+
+                if log_callback and fname not in ("finish", "select_skill", "ask_user"):
+                    r = str(result)
+                    if len(r) > 12000:
+                        r = r[:12000] + "\n\n…（内容已截断）"
+                    if fname == "run_command":
+                        command = str(args.get("command", "") or "").strip()
+                        log_callback(f"执行命令: {command}", "base_tool")
                         
-                        if not stdout and self._is_write_operation(command):
-                            file_path = self._extract_file_path(command)
-                            if file_path:
-                                check_result = self._verify_file_exists(file_path, args.get("cwd", "."))
-                                if log_callback:
-                                    log_callback(f"检查结果: {check_result}", "base_tool")
-                                if self.memory is not None:
-                                    self.memory.append_message(self._conversation_id, "tool", check_result, metadata={"name": "verify"})
-                                messages.append({"role": "tool", "name": "verify", "content": check_result})
-                    
-                    auto_end_msg = self._check_repeated_write_success(command, str(result))
-                    if auto_end_msg:
-                        log_callback(auto_end_msg, "assistant")
-                        self.memory.append_message(self._conversation_id, "assistant", auto_end_msg)
-                        self._start_summary_in_background(self._conversation_id, active_skill_ids)
-                        _emit_token_usage()
-                        return auto_end_msg
-                log_callback(r, "base_tool")
+                        if "exit_code: 0" in r:
+                            stdout_match = r.split("--- stdout ---")
+                            stdout = ""
+                            if len(stdout_match) >= 2:
+                                stdout = stdout_match[1].split("--- stderr ---")[0].strip()
+                            
+                            if not stdout and self._is_write_operation(command):
+                                file_path = self._extract_file_path(command)
+                                if file_path:
+                                    check_result = self._verify_file_exists(file_path, args.get("cwd", "."))
+                                    if log_callback:
+                                        log_callback(f"检查结果: {check_result}", "base_tool")
+                                    if self.memory is not None:
+                                        self.memory.append_message(self._conversation_id, "tool", check_result, metadata={"name": "verify"})
+                                    messages.append({"role": "tool", "name": "verify", "content": check_result})
+                        
+                        auto_end_msg = self._check_repeated_write_success(command, str(result))
+                        if auto_end_msg:
+                            log_callback(auto_end_msg, "assistant")
+                            self.memory.append_message(self._conversation_id, "assistant", auto_end_msg)
+                            self._start_summary_in_background(self._conversation_id, active_skill_ids)
+                            _emit_token_usage()
+                            return auto_end_msg
+                    log_callback(r, "base_tool")
 
-            if terminate and final is not None:
-                if self.memory is not None:
-                    cid = self._conversation_id
-                    self.memory.append_message(cid, "tool", str(result), metadata={"name": fname})
-                    self.memory.append_message(cid, "assistant", str(final))
-                self._start_summary_in_background(self._conversation_id, active_skill_ids)
-                if log_callback:
-                    log_callback(str(final), "assistant")
-                _emit_token_usage()
-                return final
+                if terminate and final is not None:
+                    if self.memory is not None:
+                        cid = self._conversation_id
+                        self.memory.append_message(cid, "tool", str(result), metadata={"name": fname})
+                        self.memory.append_message(cid, "assistant", str(final))
+                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
+                    if log_callback:
+                        log_callback(str(final), "assistant")
+                    _emit_token_usage()
+                    print(f"[DEBUG-exec] 📤 工具要求终止 (terminate=True), 返回 final (长度: {len(str(final))})")
+                    return final
 
-            if fname == "ask_user" and not str(result).startswith("错误"):
+                if fname == "ask_user" and not str(result).startswith("错误"):
+                    if self.memory is not None:
+                        self._persist_after_tool_turn(
+                            fname,
+                            args,
+                            str(result),
+                            active_skill_text,
+                            active_skill_ids,
+                            messages,
+                            log_callback,
+                        )
+                    else:
+                        messages.append({"role": "tool", "name": fname, "content": str(result)})
+                    if log_callback:
+                        log_callback(_ask_user_ui_log_payload(args), "await_user")
+                    _emit_token_usage()
+                    print(f"[DEBUG-exec] 📤 等待用户回复 (ask_user)")
+                    return SKILL_AGENT_AWAITING_USER_REPLY
+
                 if self.memory is not None:
-                    self._persist_after_tool_turn(
-                        fname,
-                        args,
-                        str(result),
-                        active_skill_text,
-                        active_skill_ids,
-                        messages,
-                        log_callback,
-                    )
+                    self._persist_after_tool_turn(fname, args,str(result), active_skill_text, active_skill_ids, messages, log_callback)
                 else:
                     messages.append({"role": "tool", "name": fname, "content": str(result)})
-                if log_callback:
-                    log_callback(_ask_user_ui_log_payload(args), "await_user")
-                _emit_token_usage()
-                return SKILL_AGENT_AWAITING_USER_REPLY
+                    if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
+                        parts = [
+                            f"### 已加载 Skill #{i + 1}\n\n{t.strip()}"
+                            for i, t in enumerate(active_skill_text)
+                        ]
+                        merged = "\n\n---\n\n".join(parts)
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "当前会话中已加载的 Skill 文档如下（按加载顺序，须同时遵守；"
+                                    "若有冲突以更具体的条款或后加载的文档为准）：\n\n" + merged
+                                ),
+                            }
+                        )
 
+            print(f"[DEBUG-exec] ⚠️  达到最大步数限制 ({self.max_steps})，退出循环")
+            tail = f"已达到最大执行步数限制（{self.max_steps}），已停止。"
+            if log_callback:
+                log_callback(tail, "assistant")
             if self.memory is not None:
-                self._persist_after_tool_turn(fname, args,str(result), active_skill_text, active_skill_ids, messages, log_callback)
-            else:
-                messages.append({"role": "tool", "name": fname, "content": str(result)})
-                if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
-                    parts = [
-                        f"### 已加载 Skill #{i + 1}\n\n{t.strip()}"
-                        for i, t in enumerate(active_skill_text)
-                    ]
-                    merged = "\n\n---\n\n".join(parts)
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "当前会话中已加载的 Skill 文档如下（按加载顺序，须同时遵守；"
-                                "若有冲突以更具体的条款或后加载的文档为准）：\n\n" + merged
-                            ),
-                        }
-                    )
-
-        tail = f"已达到最大执行步数限制（{self.max_steps}），已停止。"
-        if log_callback:
-            log_callback(tail, "assistant")
-        if self.memory is not None:
-            self.memory.append_message(self._conversation_id, "assistant", tail)
-        self._start_summary_in_background(self._conversation_id, active_skill_ids)
-        _emit_token_usage()
-        return tail
+                self.memory.append_message(self._conversation_id, "assistant", tail)
+            self._start_summary_in_background(self._conversation_id, active_skill_ids)
+            _emit_token_usage()
+            print(f"[DEBUG-exec] 📤 正常退出循环，返回 tail 消息")
+            return tail
+        
+        except Exception as e:
+            print(f"[DEBUG-exec] ❌ 发生未捕获异常: {type(e).__name__}: {e}")
+            print(f"[DEBUG-exec] 📋 堆栈跟踪:\n{traceback.format_exc()}")
+            
+            err_msg = f"执行出错: {type(e).__name__}: {e}"
+            if log_callback:
+                log_callback(err_msg, "assistant")
+                log_callback(f"详细错误日志已记录，如需排查请查看终端输出。", "info")
+            if self.memory is not None:
+                self.memory.append_message(self._conversation_id, "assistant", err_msg)
+            
+            try:
+                self._start_summary_in_background(self._conversation_id, active_skill_ids)
+            except Exception as summary_err:
+                print(f"[DEBUG-exec] ⚠️  尝试启动总结线程时出错: {summary_err}")
+            
+            _emit_token_usage()
+            print(f"[DEBUG-exec] 📤 异常退出，返回 err_msg")
+            return err_msg
+        finally:
+            print(f"[DEBUG-exec] ===== run() 结束执行 =====")
