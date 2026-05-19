@@ -22,12 +22,12 @@ from ui.views.main_window import SkillAgentMainWindow
 from ui.views.worker_thread import SkillAgentWorkerThread
 from ui.styles import initialize_styles
 
-warnings.warn(
-    "ui_skill_agent 模块已废弃，请使用 ui.main 模块。"
-    "新入口: from ui.main import main; main()",
-    DeprecationWarning,
-    stacklevel=2,
-)
+# warnings.warn(
+#     "ui_skill_agent 模块已废弃，请使用 ui.main 模块。"
+#     "新入口: from ui.main import main; main()",
+#     DeprecationWarning,
+#     stacklevel=2,
+# )
 
 
 def main() -> None:

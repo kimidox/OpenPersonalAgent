@@ -148,12 +148,13 @@ def _get_installed_packages() -> set[str]:
         result = subprocess.run(
             [venv_python, "-m", "pip", "list", "--format=freeze"],
             capture_output=True,
-            text=True,
+            text=False,
             timeout=30,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
         )
+        stdout = _decode_output(result.stdout or b"")
         packages = set()
-        for line in result.stdout.strip().splitlines():
+        for line in stdout.strip().splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
                 pkg_name = line.split("==")[0].lower().replace("-", "_")
@@ -234,7 +235,7 @@ def _install_skill_dependencies(skill_dir: Path) -> tuple[bool, str]:
         result = subprocess.run(
             [pip_exe, "install", "-r", str(requirements_file)],
             capture_output=True,
-            text=True,
+            text=False,
             timeout=120,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
         )
@@ -242,7 +243,8 @@ def _install_skill_dependencies(skill_dir: Path) -> tuple[bool, str]:
             installed_names = ", ".join(sorted(to_install))
             return True, f"已安装依赖: {installed_names}"
         else:
-            return False, f"安装依赖失败: {result.stderr}"
+            stderr = _decode_output(result.stderr or b"")
+            return False, f"安装依赖失败: {stderr}"
     except subprocess.TimeoutExpired:
         return False, "安装依赖超时"
     except Exception as e:
@@ -298,9 +300,6 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         command = str(args.get("command", "") or "").strip()
         if not command:
             return "错误: 缺少 command 参数"
-        
-        if sys.platform == "win32":
-            command = command.replace("/", "\\")
         
         raw_cwd = args.get("cwd", "")
         skill_id = args.get("skill_id", "")
