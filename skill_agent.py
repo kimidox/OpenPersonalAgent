@@ -32,6 +32,7 @@ from skill import (
     build_skills_catalog_text,
     execute_skill_control_tool,
     skills_auto_matched_for_query,
+    format_skill_for_prompt,
 )
 from skill.memory_summarizer import summarize_skill_execution, save_skill_memory
 
@@ -452,7 +453,6 @@ class SkillAgent:
     ) -> None:
         assert self.memory is not None
         cid = self._conversation_id
-        self.memory.set_active_skills(cid, [])
         prior = _history_without_system(self.memory.get_messages(cid))
         messages.clear()
         messages.append({"role": "system", "content": system_prompt})
@@ -603,6 +603,22 @@ class SkillAgent:
             ]
             active_skill_text: list[str] = []
             active_skill_ids: list[str] = []
+
+            # 从数据库恢复已保存的 active skills
+            if self.memory is not None:
+                saved_skill_ids = self.memory.get_active_skills(self._conversation_id)
+                if saved_skill_ids:
+                    for sid in saved_skill_ids:
+                        skill = self.registry.get(sid)
+                        if skill:
+                            formatted_skill = format_skill_for_prompt(skill)
+                            active_skill_text.append(formatted_skill)
+                            active_skill_ids.append(sid)
+                    # 更新动态提示词
+                    if active_skill_text and active_skill_ids:
+                        active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
+                        self._dynamic_prompt.update_active_skills(active_skills_section)
+                        print(f"[DEBUG-exec] 恢复 active skills: {active_skill_ids}")
 
             if self.memory is not None:
                 self._append_model_messages(messages, system_prompt=system_prompt, user_query=user_query)
