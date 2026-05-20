@@ -103,3 +103,25 @@ class Memory(ABC):
             summary: 压缩后的摘要内容。
             compacted_message_ids: 已被压缩的消息 ID 列表。
         """
+
+    @abstractmethod
+    def get_compaction_summary(self, conversation_id: str) -> str | None:
+        """获取指定会话的压缩摘要。
+
+        Args:
+            conversation_id: 会话 ID。
+
+        Returns:
+            压缩摘要内容，若无则返回 None。
+        """
+
+    @abstractmethod
+    def get_recent_conversations_summary(self, limit: int = 5) -> str:
+        """获取近期会话摘要，用于填充 {RECENT_MEMORY_SUMMARY} 占位符。
+
+        Args:
+            limit: 最多获取的会话数量。
+
+        Returns:
+            近期会话摘要文本。
+        """

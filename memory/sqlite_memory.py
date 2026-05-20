@@ -255,3 +255,29 @@ class SqliteMemory(Memory):
                         msg.ext = {}
                     msg.ext["compacted"] = True
             db.commit()
+
+    def get_compaction_summary(self, conversation_id: str) -> str | None:
+        with get_session() as db:
+            msg = (
+                db.query(Messages)
+                .filter(Messages.conversation_id == conversation_id)
+                .filter(Messages.role == "system")
+                .filter(Messages.ext["type"].as_string() == "compaction_summary")
+                .order_by(Messages.id.desc())
+                .first()
+            )
+            if not msg:
+                return None
+            return msg.content
+
+    def get_recent_conversations_summary(self, limit: int = 5) -> str:
+        conversations = self.list_user_conversations()[:limit]
+        if not conversations:
+            return ""
+        summaries = []
+        for conv in conversations:
+            summary = self.get_compaction_summary(conv.conversation_id)
+            if summary:
+                title = conv.title or conv.conversation_id[:8]
+                summaries.append(f"### {title}\n{summary}")
+        return "\n\n---\n\n".join(summaries) if summaries else ""

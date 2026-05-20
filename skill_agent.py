@@ -20,6 +20,13 @@ from llm.token_usage import TokenUsage
 from memory import Memory
 from memory.compactor import ContextCompactor, estimate_messages_tokens
 from memory.conversation import Conversation
+from prompt import DynamicSystemPrompt
+from prompt.template import (
+    SKILL_CATALOG_SECTION_TEMPLATE,
+    ACTIVE_SKILLS_SECTION_TEMPLATE,
+    USER_MEMORY_SECTION_TEMPLATE,
+    RECENT_MEMORY_SUMMARY_SECTION_TEMPLATE,
+)
 from skill import (
     SkillRegistry,
     build_skills_catalog_text,
@@ -60,32 +67,12 @@ def _history_without_system(messages: list[dict[str, Any]]) -> list[dict[str, An
     return [m for m in messages if m.get("role") != "system"]
 
 
-def _build_system_prompt(catalog: str) -> str:
-    return f"""你是 SkillAgent：根据用户的业务提问，从下列 Skill 中选择并执行合适流程。
-
-{catalog}
-
-## 工具使用约定
-1. 使用 `select_skill` 加载 Skill 全文（可加载多个）。若有冲突，以更具体或后加载的说明为准。
-2. 使用 `run_command` 执行 Windows 命令完成文件操作、脚本执行等。
-3. 使用 `finish` 结束对话（在 message 中给出完整答复），禁止未调用 finish 就结束对话。
-4. 使用 `ask_user` 询问关键信息或请求确认。
-5. 使用 `read_memory` 读取长期记忆（跨会话信息），使用 `write_memory` 保存重要信息。
-6. 使用 `load_skill_memory` 加载指定 Skill 的执行经验。当你认为 Skill 执行遇到困难、失败或异常时，可调用此工具获取历史经验帮助解决问题。
-
-【Skill 加载铁律】（不可跳过）
-1. 完整阅读主文档全部内容
-2. 逐行扫描文档，提取所有反引号包裹的文件路径
-3. 对每个文件路径，**必须**调用 run_command 读取内容（必须指定 skill_id）
-4. 若文档要求运行 scripts/ 下的 .py 脚本，**必须**执行
-5. 将所有内容完整合并为最终上下文
-6. 若发现新的 Skill 引用，递归加载直到无新文件
-
-【刚性约束】
-- 未完成全部文件读取前，禁止回答用户问题
-- 必须显性调用工具，禁止脑补文件内容
-- 任务完成后必须调用 finish 工具
-"""
+def _build_system_prompt(catalog: str, constraints: str = "") -> str:
+    dp = DynamicSystemPrompt()
+    dp.update_skill_catalog(catalog)
+    if constraints.strip():
+        dp.update_conversation_constraints(constraints.strip())
+    return dp.build()
 
 
 class SkillAgent:
@@ -116,6 +103,8 @@ class SkillAgent:
         self._recent_commands: list[tuple[str, str]] = []
         self._compactor: ContextCompactor | None = None
         self._token_usage = TokenUsage.empty()
+        self._dynamic_prompt = DynamicSystemPrompt()
+        self._conversation_constraints: str = ""
 
     @property
     def _get_compactor(self) -> ContextCompactor | None:
@@ -145,6 +134,69 @@ class SkillAgent:
     def _disabled_skill_ids_frozen(self) -> frozenset[str]:
         return frozenset(load_disabled_skill_ids())
 
+    def _update_system_message(self, messages: list[dict]) -> None:
+        """更新消息列表中的系统消息"""
+        new_system_prompt = self._dynamic_prompt.build()
+        print(f"[DEBUG-exec] 更新系统提示词：{new_system_prompt}")
+        if messages and messages[0].get("role") == "system":
+            messages[0]["content"] = new_system_prompt
+        else:
+            messages.insert(0, {"role": "system", "content": new_system_prompt})
+
+    def _build_active_skills_text(self, active_skill_text: list[str], active_skill_ids: list[str]) -> str:
+        if not active_skill_text:
+            return ""
+        parts = [
+            f"### 已加载 Skill #{i + 1}: {active_skill_ids[i]}\n\n{t.strip()}"
+            for i, t in enumerate(active_skill_text)
+        ]
+        merged = "\n\n---\n\n".join(parts)
+        return ACTIVE_SKILLS_SECTION_TEMPLATE.format(skills=merged)
+
+    def _fill_user_memory(self) -> str:
+        if self.memory is None:
+            return ""
+        try:
+            memory_content = self.memory.get_long_term_memory()
+            if not memory_content or not memory_content.strip():
+                return ""
+            return USER_MEMORY_SECTION_TEMPLATE.format(memory=memory_content.strip())
+        except Exception:
+            return ""
+
+    def _fill_recent_memory_summary(self) -> str:
+        if self.memory is None:
+            return ""
+        try:
+            recent_summary = self.memory.get_recent_conversations_summary(limit=5)
+            if not recent_summary or not recent_summary.strip():
+                return ""
+            return RECENT_MEMORY_SUMMARY_SECTION_TEMPLATE.format(summary=recent_summary.strip())
+        except Exception:
+            return ""
+
+    def _build_dynamic_system_prompt(
+        self,
+        catalog: str,
+        active_skill_text: list[str] | None = None,
+        active_skill_ids: list[str] | None = None,
+    ) -> str:
+        self._dynamic_prompt.clear_all_placeholders()
+        self._dynamic_prompt.update_skill_catalog(catalog)
+        if active_skill_text and active_skill_ids:
+            active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
+            if active_skills_section:
+                self._dynamic_prompt.update_active_skills(active_skills_section)
+        user_memory_section = self._fill_user_memory()
+        if user_memory_section:
+            self._dynamic_prompt.update_user_memory(user_memory_section)
+        recent_summary_section = self._fill_recent_memory_summary()
+        if recent_summary_section:
+            self._dynamic_prompt.update_recent_memory_summary(recent_summary_section)
+        if self._conversation_constraints:
+            self._dynamic_prompt.update_conversation_constraints(self._conversation_constraints)
+        return self._dynamic_prompt.build()
+
     @property
     def conversation_id(self) -> str:
         return self._conversation_id
@@ -162,6 +214,15 @@ class SkillAgent:
 
     def set_conversation_id(self, conversation_id: str) -> None:
         self._conversation_id = (conversation_id or "").strip()
+
+    def set_conversation_constraints(self, constraints: str) -> None:
+        self._conversation_constraints = (constraints or "").strip()
+
+    def clear_conversation_constraints(self) -> None:
+        self._conversation_constraints = ""
+
+    def get_conversation_constraints(self) -> str:
+        return self._conversation_constraints
 
     def list_saved_conversations(self) -> list[Conversation]:
         if self.memory is None:
@@ -427,19 +488,13 @@ class SkillAgent:
         messages.append({"role": "tool", "name": fname, "content": str(result)})
         if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
             self.memory.set_active_skills(cid, list(active_skill_ids))
-            parts = [
-                f"### 已加载 Skill #{i + 1}\n\n{t.strip()}"
-                for i, t in enumerate(active_skill_text)
-            ]
-            merged = "\n\n---\n\n".join(parts)
-            extra_user = (
-                "当前会话中已加载的 Skill 文档如下（按加载顺序，须同时遵守；"
-                "若有冲突以更具体的条款或后加载的文档为准）：\n\n" + merged
-            )
-            self.memory.append_message(cid, "user", extra_user,metadata={"type":"skill_content"})
-            messages.append({"role": "user", "content": extra_user})
-            if log_callback:
-                log_callback(extra_user, "skill_content")
+            active_skills_text = self._build_active_skills_text(active_skill_text, active_skill_ids)
+            self._dynamic_prompt.update_active_skills(active_skills_text)
+            for i, msg in enumerate(messages):
+                if msg.get("role") == "system":
+                    messages[i] = {"role": "system", "content": self._dynamic_prompt.build()}
+                    print(f"[DEBUG-exec] 更新系统提示词_dynamic_prompt：{self._dynamic_prompt.build()}")
+                    break
 
     def _summarize_session_skills(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
         import threading
@@ -539,7 +594,8 @@ class SkillAgent:
             disabled = self._disabled_skill_ids_frozen()
             skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
             catalog = build_skills_catalog_text(skills_visible)
-            system_prompt = _build_system_prompt(catalog)
+            system_prompt = self._build_dynamic_system_prompt(catalog)
+            print(f"[DEBUG-exec] 初始系统提示词：{system_prompt}")
             tools = model.build_skill_agent_tools()
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -659,6 +715,9 @@ class SkillAgent:
                 if len(messages) > 0:
                     last_msg = messages[-1]
                     print(f"[DEBUG-exec] 最后一条消息: role={last_msg.get('role')}, content 前50字={str(last_msg.get('content', ''))[:50]}")
+
+                self._update_system_message(messages)
+
 
                 function_call = model.stream_request_llm_with_tools(messages, tools, _stream_callback)
 
@@ -971,20 +1030,13 @@ class SkillAgent:
                 else:
                     messages.append({"role": "tool", "name": fname, "content": str(result)})
                     if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
-                        parts = [
-                            f"### 已加载 Skill #{i + 1}\n\n{t.strip()}"
-                            for i, t in enumerate(active_skill_text)
-                        ]
-                        merged = "\n\n---\n\n".join(parts)
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "当前会话中已加载的 Skill 文档如下（按加载顺序，须同时遵守；"
-                                    "若有冲突以更具体的条款或后加载的文档为准）：\n\n" + merged
-                                ),
-                            }
-                        )
+                        active_skills_text = self._build_active_skills_text(active_skill_text, active_skill_ids)
+                        self._dynamic_prompt.update_active_skills(active_skills_text)
+                        for i, msg in enumerate(messages):
+                            if msg.get("role") == "system":
+                                messages[i] = {"role": "system", "content": self._dynamic_prompt.build()}
+                                print(f"[DEBUG-exec] 更新系统提示词_dynamic_prompt：{self._dynamic_prompt.build()}")
+                                break
 
             print(f"[DEBUG-exec] ⚠️  达到最大步数限制 ({self.max_steps})，退出循环")
             tail = f"已达到最大执行步数限制（{self.max_steps}），已停止。"
