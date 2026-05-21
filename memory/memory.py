@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from .conversation import Conversation
+from .searcher import MemorySegmentData
 
 
 class Memory(ABC):
@@ -74,6 +75,10 @@ class Memory(ABC):
         """更新（覆盖）长期记忆内容。"""
 
     @abstractmethod
+    def search_long_term_memory(self, query: str, limit: int = 5) -> list[MemorySegmentData]:
+        """检索与查询相关的长期记忆片段。"""
+
+    @abstractmethod
     def get_messages_for_compaction(
         self,
         conversation_id: str,
@@ -125,3 +130,11 @@ class Memory(ABC):
         Returns:
             近期会话摘要文本。
         """
+
+    @abstractmethod
+    def search_skill_memory(self, skill_id: str, query: str, limit: int = 5) -> list[MemorySegmentData]:
+        """检索与查询相关的 Skill 执行记忆片段。"""
+
+    @abstractmethod
+    def append_skill_memory(self, skill_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
+        """追加 Skill 执行记忆。"""

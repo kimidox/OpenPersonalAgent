@@ -30,7 +30,7 @@ def build_skills_catalog_text(skills: list[SkillDefinition]) -> str:
         )
     lines = [summarize_skill(s) for s in skills]
     lines_str= f"""<Skills>{"".join(lines)}</Skills>"""
-    return "可用 Skill 列表（请先调用 select_skill 加载完整文档后再执行步骤）：\n" + "\n"+lines_str
+    return "可用 Skill 列表（如果当前用户行为满足触发条件，请先调用 select_skill 加载完整文档后再执行步骤）：\n" + "\n"+lines_str
 
 
 def _trigger_segments_from_description_and_name(description: str, name: str) -> set[str]:

@@ -154,11 +154,22 @@ class SkillAgent:
         merged = "\n\n---\n\n".join(parts)
         return ACTIVE_SKILLS_SECTION_TEMPLATE.format(skills=merged)
 
-    def _fill_user_memory(self) -> str:
+    def _fill_user_memory(self, query: str | None = None, limit: int = 5) -> str:
         if self.memory is None:
             return ""
         try:
-            memory_content = self.memory.get_long_term_memory()
+            if query:
+                segments = self.memory.search_long_term_memory(query, limit)
+                if not segments:
+                    return ""
+                memory_parts = []
+                for seg in segments:
+                    timestamp = seg.created_at.strftime("%Y-%m-%d %H:%M:%S") if seg.created_at else ""
+                    memory_parts.append(f"## [{timestamp}]\n{seg.content}")
+                memory_content = "\n".join(memory_parts)
+            else:
+                memory_content = self.memory.get_long_term_memory()
+            
             if not memory_content or not memory_content.strip():
                 return ""
             return USER_MEMORY_SECTION_TEMPLATE.format(memory=memory_content.strip())
@@ -181,6 +192,7 @@ class SkillAgent:
         catalog: str,
         active_skill_text: list[str] | None = None,
         active_skill_ids: list[str] | None = None,
+        user_query: str | None = None,
     ) -> str:
         self._dynamic_prompt.clear_all_placeholders()
         self._dynamic_prompt.update_skill_catalog(catalog)
@@ -188,7 +200,7 @@ class SkillAgent:
             active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
             if active_skills_section:
                 self._dynamic_prompt.update_active_skills(active_skills_section)
-        user_memory_section = self._fill_user_memory()
+        user_memory_section = self._fill_user_memory(query=user_query)
         if user_memory_section:
             self._dynamic_prompt.update_user_memory(user_memory_section)
         recent_summary_section = self._fill_recent_memory_summary()
@@ -594,7 +606,7 @@ class SkillAgent:
             disabled = self._disabled_skill_ids_frozen()
             skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
             catalog = build_skills_catalog_text(skills_visible)
-            system_prompt = self._build_dynamic_system_prompt(catalog)
+            system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query)
             print(f"[DEBUG-exec] 初始系统提示词：{system_prompt}")
             tools = model.build_skill_agent_tools()
             messages: list[dict[str, Any]] = [

@@ -5,6 +5,7 @@ from pathlib import Path
 from .types import SkillDefinition
 import config
 from resource_path import paths
+from memory.searcher import MemorySearcher
 
 
 def _parse_simple_frontmatter(raw: str) -> tuple[dict[str, str], str]:
@@ -68,11 +69,8 @@ def resolve_skill_memory_path(skill_md_path: Path) -> Path | None:
     返回：
         如果存在 skill_memory.md 则返回其路径，否则返回 None
     """
-    # 获取 PersonalData/Skills 作为基础目录
     skills_base_dir = paths.get_skills_dir()
-    # 从 skill_md_path 中提取 skill 包目录名
     skill_package_name = skill_md_path.parent.name
-    # 构建完整的 skill_memory.md 路径
     memory_path = skills_base_dir / skill_package_name / "skill_memory.md"
     if memory_path.is_file():
         return memory_path
@@ -81,7 +79,7 @@ def resolve_skill_memory_path(skill_md_path: Path) -> Path | None:
 
 def load_skill_memory(skill_md_path: Path) -> str | None:
     """
-    读取 skill_memory.md 文件内容。
+    读取 skill_memory.md 文件内容（向后兼容）。
 
     参数：
         skill_md_path: skill 主文档路径
@@ -98,13 +96,22 @@ def load_skill_memory(skill_md_path: Path) -> str | None:
         return None
 
 
-def load_skill_memory_lazy(skill: SkillDefinition, registry: "SkillRegistry") -> SkillDefinition:
+def load_skill_memory_lazy(
+    skill: SkillDefinition,
+    registry: "SkillRegistry",
+    searcher: MemorySearcher | None = None,
+    query: str | None = None,
+    limit: int = 5,
+) -> SkillDefinition:
     """
-    延迟加载 skill 的经验内容。仅在 memory_loaded 为 False 时读取 skill_memory.md。
+    延迟加载 skill 的经验内容。从数据库检索相关记忆。
 
     参数：
         skill: SkillDefinition 对象
         registry: SkillRegistry 实例，用于获取 skill 的主文档路径
+        searcher: MemorySearcher 实例（可选）
+        query: 检索查询（可选，如果不提供则返回最近的记忆）
+        limit: 返回数量限制
 
     返回：
         更新后的 SkillDefinition 对象（原地修改并返回）
@@ -114,18 +121,29 @@ def load_skill_memory_lazy(skill: SkillDefinition, registry: "SkillRegistry") ->
 
     skill.memory_loaded = True
 
-    if skill.relative_path is None:
-        return skill
+    _searcher = searcher or MemorySearcher()
 
-    skills_base_dir = paths.get_skills_dir()
-    skill_package_name = skill.relative_path.parent.name if skill.relative_path.parent else skill.skill_id
-    memory_path = skills_base_dir / skill_package_name / "skill_memory.md"
+    if query:
+        segments = _searcher.search(
+            query=query,
+            memory_type=MemorySearcher.SKILL,
+            related_id=skill.skill_id,
+            limit=limit,
+        )
+    else:
+        segments = _searcher.get_all(
+            memory_type=MemorySearcher.SKILL,
+            related_id=skill.skill_id,
+            limit=limit,
+        )
 
-    if memory_path.is_file():
-        try:
-            skill.memory_content = memory_path.read_text(encoding="utf-8", errors="replace").strip()
-        except Exception:
-            skill.memory_content = None
+    if segments:
+        memory_parts = []
+        for seg in segments:
+            memory_parts.append(seg.content)
+        skill.memory_content = "\n\n---\n\n".join(memory_parts)
+    else:
+        skill.memory_content = None
 
     return skill
 

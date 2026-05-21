@@ -13,7 +13,7 @@ from memory.conversation import Conversation
 from memory.long_term_memory import LongTermMemory
 from memory.memory import Memory
 from memory.message import Message
-
+from memory.searcher import MemorySearcher, MemorySegmentData
 
 
 
@@ -35,7 +35,11 @@ class SqliteMemory(Memory):
     def __init__(self, *, username) -> None:
         self._username = username
         memory_file_path = f"{WORKER_DIR}/MEMORY.md"
-        self._long_term_memory = LongTermMemory(memory_file_path)
+        self._long_term_memory = LongTermMemory(
+            memory_file_path=memory_file_path,
+            user_id=username,
+        )
+        self._searcher = MemorySearcher()
 
     @property
     def username(self) -> str:
@@ -122,7 +126,6 @@ class SqliteMemory(Memory):
         if limit is not None and limit > 0:
             rows = rows[-limit:]
         
-        # 过滤掉 type="tool_call" 的消息，不传给 LLM
         filtered_rows = []
         for r in rows:
             ext = r.ext if r.ext else {}
@@ -191,11 +194,30 @@ class SqliteMemory(Memory):
     def get_long_term_memory(self) -> str:
         return self._long_term_memory.read()
 
+    def search_long_term_memory(self, query: str, limit: int = 5) -> list[MemorySegmentData]:
+        return self._long_term_memory.search(query, limit)
+
     def append_long_term_memory(self, content: str) -> None:
         self._long_term_memory.append(content)
 
     def update_long_term_memory(self, content: str) -> None:
         self._long_term_memory.update(content)
+
+    def search_skill_memory(self, skill_id: str, query: str, limit: int = 5) -> list[MemorySegmentData]:
+        return self._searcher.search(
+            query=query,
+            memory_type=MemorySearcher.SKILL,
+            related_id=skill_id,
+            limit=limit,
+        )
+
+    def append_skill_memory(self, skill_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
+        self._searcher.add_segment(
+            memory_type=MemorySearcher.SKILL,
+            content=content,
+            related_id=skill_id,
+            metadata=metadata,
+        )
 
     def get_messages_for_compaction(
         self,
@@ -281,3 +303,11 @@ class SqliteMemory(Memory):
                 title = conv.title or conv.conversation_id[:8]
                 summaries.append(f"### {title}\n{summary}")
         return "\n\n---\n\n".join(summaries) if summaries else ""
+
+    def migrate_from_files(self) -> dict[str, int]:
+        result = {
+            "long_term_memory": 0,
+            "skill_memory": 0,
+        }
+        result["long_term_memory"] = self._long_term_memory.migrate_from_file()
+        return result

@@ -4,9 +4,11 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import config
 from resource_path import paths
+from memory.searcher import MemorySearcher
 from .registry import SkillRegistry
 
 
@@ -195,49 +197,49 @@ def save_skill_memory(
     skill_id: str,
     memory: SkillExecutionMemory,
     registry: SkillRegistry,
-) -> Path | None:
+    searcher: MemorySearcher | None = None,
+) -> str | None:
     """
-    在 PersonalData/Skills 下对应 Skill 包目录创建或追加 skill_memory.md 文件。
+    保存 Skill 执行记忆到数据库。
 
     Args:
         skill_id: Skill 标识符
         memory: SkillExecutionMemory 对象
         registry: Skill 注册表
+        searcher: MemorySearcher 实例（可选）
 
     Returns:
-        skill_memory.md 文件路径，如果保存失败则返回 None
+        segment_id，如果保存失败则返回 None
     """
-    skill_def = registry.get(skill_id)
-    if not skill_def or not skill_def.relative_path:
-        print(f"[SkillSummary] save_skill_memory: 未找到 skill {skill_id} 或缺少 relative_path")
-        return None
-
-    # 获取 PersonalData/Skills 作为基础目录
-    skills_base_dir = paths.get_skills_dir()
-    # 从 relative_path 中提取 skill 包目录名
-    skill_package_name = skill_def.relative_path.parent.name
-    # 构建完整的 skill 包目录路径
-    skill_package_dir = skills_base_dir / skill_package_name
+    _searcher = searcher or MemorySearcher()
     
-    if not skill_package_dir.exists():
-        skill_package_dir.mkdir(parents=True, exist_ok=True)
-
-    memory_path = skill_package_dir / "skill_memory.md"
     memory_content = format_memory_for_file(memory)
-
-    if memory_path.exists():
-        append_skill_memory(memory_path, memory_content)
-        print(f"[SkillSummary] save_skill_memory: 追加到已有文件 {memory_path}")
-    else:
-        memory_path.write_text(memory_content, encoding="utf-8")
-        print(f"[SkillSummary] save_skill_memory: 创建新文件 {memory_path}")
-
-    return memory_path
+    metadata = {
+        "session_id": memory.session_id,
+        "timestamp": memory.timestamp,
+        "success": memory.success,
+        "errors_and_fixes": memory.errors_and_fixes,
+        "tips": memory.tips,
+        "summary": memory.summary,
+    }
+    
+    try:
+        segment_id = _searcher.add_segment(
+            memory_type=MemorySearcher.SKILL,
+            content=memory_content,
+            related_id=skill_id,
+            metadata=metadata,
+        )
+        print(f"[SkillSummary] save_skill_memory: 已保存到数据库 skill_id={skill_id}, segment_id={segment_id}")
+        return segment_id
+    except Exception as e:
+        print(f"[SkillSummary] save_skill_memory: 保存到数据库失败 skill_id={skill_id}, error={e}")
+        return None
 
 
 def append_skill_memory(skill_memory_path: Path, new_content: str) -> None:
     """
-    追加新内容到现有 skill_memory.md 文件。
+    追加新内容到现有 skill_memory.md 文件（用于向后兼容）。
 
     Args:
         skill_memory_path: skill_memory.md 文件路径
@@ -266,3 +268,116 @@ def format_memory_for_file(memory: SkillExecutionMemory) -> str:
         parts.append(f"- 总结: {memory.summary}")
 
     return "\n".join(parts)
+
+
+def get_skill_memory(
+    skill_id: str,
+    query: str | None = None,
+    limit: int = 5,
+    searcher: MemorySearcher | None = None,
+) -> list[dict[str, Any]]:
+    """
+    获取 Skill 执行记忆。
+
+    Args:
+        skill_id: Skill 标识符
+        query: 检索查询（可选，如果不提供则返回所有记忆）
+        limit: 返回数量限制
+        searcher: MemorySearcher 实例（可选）
+
+    Returns:
+        记忆片段列表
+    """
+    _searcher = searcher or MemorySearcher()
+    
+    if query:
+        segments = _searcher.search(
+            query=query,
+            memory_type=MemorySearcher.SKILL,
+            related_id=skill_id,
+            limit=limit,
+        )
+    else:
+        segments = _searcher.get_all(
+            memory_type=MemorySearcher.SKILL,
+            related_id=skill_id,
+            limit=limit,
+        )
+    
+    return [
+        {
+            "content": seg.content,
+            "metadata": seg.metadata,
+            "created_at": seg.created_at.isoformat() if seg.created_at else None,
+            "score": seg.score,
+        }
+        for seg in segments
+    ]
+
+
+def migrate_skill_memory_from_file(
+    skill_id: str,
+    skill_memory_path: Path,
+    searcher: MemorySearcher | None = None,
+) -> int:
+    """
+    从文件迁移 Skill 记忆到数据库。
+
+    Args:
+        skill_id: Skill 标识符
+        skill_memory_path: skill_memory.md 文件路径
+        searcher: MemorySearcher 实例（可选）
+
+    Returns:
+        迁移的片段数量
+    """
+    if not skill_memory_path.exists():
+        return 0
+    
+    _searcher = searcher or MemorySearcher()
+    content = skill_memory_path.read_text(encoding="utf-8")
+    
+    if not content.strip():
+        return 0
+    
+    segments = _parse_skill_memory_file(content)
+    migrated = 0
+    
+    for seg_content, metadata in segments:
+        _searcher.add_segment(
+            memory_type=MemorySearcher.SKILL,
+            content=seg_content,
+            related_id=skill_id,
+            metadata=metadata,
+        )
+        migrated += 1
+    
+    if migrated > 0:
+        backup_path = skill_memory_path.with_suffix(".md.bak")
+        skill_memory_path.rename(backup_path)
+    
+    return migrated
+
+
+def _parse_skill_memory_file(content: str) -> list[tuple[str, dict]]:
+    """解析 skill_memory.md 文件格式，返回 (内容, 元数据) 列表。"""
+    import re
+    
+    segments = []
+    pattern = r"###\s*(成功|失败)\s*\|\s*([^\n]+)\n(.*?)(?=###\s*(?:成功|失败)|$)"
+    matches = re.findall(pattern, content, re.DOTALL)
+    
+    for status, date_str, seg_content in matches:
+        seg_content = seg_content.strip()
+        if seg_content:
+            metadata = {
+                "success": status == "成功",
+                "original_date": date_str.strip(),
+                "migrated_from_file": True,
+            }
+            segments.append((seg_content, metadata))
+    
+    if not matches and content.strip():
+        segments.append((content.strip(), {"migrated_from_file": True}))
+    
+    return segments

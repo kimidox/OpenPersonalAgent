@@ -47,3 +47,18 @@ class Messages(Base):
 
     def to_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class MemorySegment(Base):
+    __tablename__ = 'memory_segments'
+    id = Column(Integer, primary_key=True, index=True)
+    segment_id = Column(String, unique=True, index=True)
+    memory_type = Column(String, index=True)
+    related_id = Column(String, index=True, nullable=True)
+    content = Column(Text, nullable=False)
+    meta_data = Column(JSON, nullable=True)
+    created_at = Column(TIMESTAMP, default=get_local_time())
+    updated_at = Column(TIMESTAMP, default=get_local_time())
+
+    def to_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}

@@ -108,3 +108,22 @@ TOKEN_USAGE_ENABLED = _env_bool(_tue, True)
 
 _tusiu = get_config("TOKEN_USAGE_SHOW_IN_UI")
 TOKEN_USAGE_SHOW_IN_UI = _env_bool(_tusiu, True)
+
+_msl = get_config("MEMORY_SEARCH_LIMIT")
+try:
+    MEMORY_SEARCH_LIMIT = int(_msl) if _msl not in (None, "") else 5
+except (TypeError, ValueError):
+    MEMORY_SEARCH_LIMIT = 5
+if MEMORY_SEARCH_LIMIT < 1:
+    MEMORY_SEARCH_LIMIT = 5
+
+_mms = get_config("MEMORY_MIN_SCORE")
+try:
+    MEMORY_MIN_SCORE = float(_mms) if _mms not in (None, "") else 0.0
+except (TypeError, ValueError):
+    MEMORY_MIN_SCORE = 0.0
+if MEMORY_MIN_SCORE < 0:
+    MEMORY_MIN_SCORE = 0.0
+
+_msr = get_config("MEMORY_SEARCH_ENABLED")
+MEMORY_SEARCH_ENABLED = _env_bool(_msr, True)
