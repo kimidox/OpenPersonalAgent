@@ -106,23 +106,33 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
     {
         "name": "read_memory",
         "description": (
-            "读取长期记忆。从 MEMORY.md 文件中读取已保存的信息。\n"
+            "读取长期记忆。从数据库中读取已保存的信息。\n"
             "使用场景：\n"
             "- 用户提及之前的偏好、设置或重要信息时\n"
             "- 询问'你还记得...'或'上次我们...'相关问题\n"
             "- 需要延续之前会话中的上下文或决策时\n"
-            "返回记忆文件的完整内容（空文件返回空字符串）。"
+            "提供关键词时会进行语义检索，返回最相关的记忆片段。\n"
+            "不提供关键词时返回所有记忆（向后兼容）。"
         ),
         "parameters": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "检索关键词，用于匹配相关的记忆内容，为空时返回所有记忆",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最大返回记忆数量，默认 10",
+                },
+            },
             "required": [],
         },
     },
     {
         "name": "write_memory",
         "description": (
-            "写入长期记忆。将内容保存到 MEMORY.md 文件中。\n"
+            "写入长期记忆。将内容保存到数据库中。\n"
             "使用场景：\n"
             "- 用户明确要求记住某件事（如'记住这个...'、'以后都这样...'）\n"
             "- 保存用户的长期偏好或习惯\n"

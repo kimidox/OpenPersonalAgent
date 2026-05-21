@@ -8,3 +8,4 @@ dotenv
 sqlalchemy>=2.0.0
 pydantic>=2.0.0
 pandas~=3.0.1
+jieba>=0.42.1

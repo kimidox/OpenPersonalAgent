@@ -1,10 +1,25 @@
 import sys
+from pathlib import Path
 
 from logger import setup_logger, install_exception_hook, get_logger
-from database import init_db
+from database import init_db, engine
+from sqlalchemy import text
 from memory.migration import run_migration, is_migration_completed
+from memory.reindex_fts import reindex_all_memory_segments
 from ui import main as main_desktop_agent
 from ui_skill_agent import main as main_skill_agent
+
+
+FTS_REINDEX_FLAG = Path("PersonalData/.fts_reindexed")
+
+
+def is_fts_reindexed() -> bool:
+    return FTS_REINDEX_FLAG.exists()
+
+
+def mark_fts_reindexed() -> None:
+    FTS_REINDEX_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    FTS_REINDEX_FLAG.touch()
 
 
 def main() -> None:
@@ -29,6 +44,16 @@ def main() -> None:
             logger.info(f"记忆数据迁移完成: {result}")
         except Exception as e:
             logger.exception(f"记忆数据迁移失败: {e}")
+    
+    # 检查并执行 FTS 重新索引
+    if not is_fts_reindexed():
+        try:
+            logger.info("开始 FTS 索引重建（jieba分词）...")
+            reindex_all_memory_segments()
+            mark_fts_reindexed()
+            logger.info("FTS 索引重建完成")
+        except Exception as e:
+            logger.exception(f"FTS 索引重建失败: {e}")
     
     try:
         main_skill_agent()

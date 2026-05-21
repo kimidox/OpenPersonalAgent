@@ -421,7 +421,31 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
     if name == "read_memory":
         if ctx.memory is None:
             return "错误: memory 对象不可用"
-        return ctx.memory.get_long_term_memory()
+        
+        query = args.get("query", "")
+        limit = args.get("limit", 10)
+        
+        if query and query.strip():
+            # 使用关键词检索
+            segments = ctx.memory.search_long_term_memory(query, limit=limit)
+            if not segments:
+                return f"未找到与关键词「{query}」相关的记忆"
+            
+            memory_parts = []
+            for seg in segments:
+                if seg.created_at and hasattr(seg.created_at, 'strftime'):
+                    timestamp = seg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                elif seg.created_at:
+                    timestamp = str(seg.created_at)
+                else:
+                    timestamp = ""
+                score_info = f" (相关度: {seg.score:.2f})" if seg.score else ""
+                memory_parts.append(f"## [{timestamp}]{score_info}\n{seg.content}")
+            memory_content = "\n".join(memory_parts)
+            return memory_content
+        else:
+            # 不提供查询时返回所有记忆（向后兼容）
+            return ctx.memory.get_long_term_memory()
 
     if name == "write_memory":
         content = args.get("content", "")

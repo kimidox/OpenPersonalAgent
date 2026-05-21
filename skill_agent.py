@@ -106,6 +106,7 @@ class SkillAgent:
         self._token_usage = TokenUsage.empty()
         self._dynamic_prompt = DynamicSystemPrompt()
         self._conversation_constraints: str = ""
+        self._last_user_query: str | None = None
 
     @property
     def _get_compactor(self) -> ContextCompactor | None:
@@ -137,7 +138,31 @@ class SkillAgent:
 
     def _update_system_message(self, messages: list[dict]) -> None:
         """更新消息列表中的系统消息"""
-        new_system_prompt = self._dynamic_prompt.build()
+        # 使用最近保存的用户查询来重新构建系统提示词
+        disabled = self._disabled_skill_ids_frozen()
+        skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
+        catalog = build_skills_catalog_text(skills_visible)
+        
+        # 获取当前的 active skills
+        active_skill_text: list[str] = []
+        active_skill_ids: list[str] = []
+        if self.memory is not None:
+            saved_skill_ids = self.memory.get_active_skills(self._conversation_id)
+            if saved_skill_ids:
+                for sid in saved_skill_ids:
+                    skill = self.registry.get(sid)
+                    if skill:
+                        formatted_skill = format_skill_for_prompt(skill)
+                        active_skill_text.append(formatted_skill)
+                        active_skill_ids.append(sid)
+        
+        new_system_prompt = self._build_dynamic_system_prompt(
+            catalog, 
+            active_skill_text=active_skill_text if active_skill_text else None,
+            active_skill_ids=active_skill_ids if active_skill_ids else None,
+            user_query=self._last_user_query
+        )
+        
         print(f"[DEBUG-exec] 更新系统提示词：{new_system_prompt}")
         if messages and messages[0].get("role") == "system":
             messages[0]["content"] = new_system_prompt
@@ -602,6 +627,9 @@ class SkillAgent:
                 log_callback(token_usage_json, "token_usage")
 
         try:
+            # 保存当前用户查询，用于后续更新系统提示词时的语义检索
+            self._last_user_query = user_query
+            
             model = get_chat_model()
             disabled = self._disabled_skill_ids_frozen()
             skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
