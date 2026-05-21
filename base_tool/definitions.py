@@ -65,6 +65,20 @@ CONTROL_TOOL_DEFINITIONS: list[dict] = [
             "required": ["message"]
         },
     },
+    {
+        "name": "load_skill_memory",
+        "description": (
+            "加载指定 Skill 的执行经验（skill_memory.md）。"
+            "经验内容包含之前执行该 Skill 时遇到的问题及解决方案。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "skill_id": {"type": "string", "description": "Skill 唯一标识"},
+            },
+            "required": ["skill_id"],
+        },
+    },
 ]
 
 ATOMIC_TOOL_DEFINITIONS: list[dict] = [

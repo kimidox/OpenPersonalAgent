@@ -59,7 +59,7 @@ SKILL_CONTROL_TOOL_DEFINITIONS: list[dict] = [
         "name": "load_skill_memory",
         "description": (
             "加载指定 Skill 的执行经验（skill_memory.md）。"
-            "当你认为当前 Skill 执行遇到困难、失败或异常时，可调用此工具获取历史经验帮助解决问题。"
+            "当你执行 Skill 遇到任何问题、困难、失败、工具报错或异常时，都必须调用此工具获取历史经验帮助解决问题。"
             "经验内容包含之前执行该 Skill 时遇到的问题及解决方案。"
         ),
         "parameters": {
