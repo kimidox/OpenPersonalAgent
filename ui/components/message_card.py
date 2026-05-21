@@ -39,7 +39,7 @@ class MessageCardWidget(QWidget):
             self._bubble_container.setMaximumWidth(max_width)
 
     def _setup_ui(self) -> None:
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
         self._main_layout = QHBoxLayout(self)
         self._main_layout.setContentsMargins(8, 4, 8, 4)
@@ -49,9 +49,9 @@ class MessageCardWidget(QWidget):
         self._bubble_container = QWidget()
         # 用户消息用 Maximum 保持紧凑，其他消息用 Expanding 充分利用空间
         if self._msg_type == "user":
-            self._bubble_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
+            self._bubble_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         else:
-            self._bubble_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+            self._bubble_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self._container_layout = QVBoxLayout(self._bubble_container)
         self._container_layout.setContentsMargins(0, 0, 0, 0)
         self._container_layout.setSpacing(2)
@@ -65,7 +65,7 @@ class MessageCardWidget(QWidget):
 
         # 气泡框架
         self._bubble_frame = QFrame()
-        self._bubble_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self._bubble_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
         # 根据消息类型设置样式和布局
         self._apply_bubble_style()
@@ -80,6 +80,7 @@ class MessageCardWidget(QWidget):
         self._content_label.setWordWrap(True)
         self._content_label.setTextFormat(Qt.RichText)
         self._content_label.setOpenExternalLinks(True)
+        self._content_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self._content_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse
         )

@@ -4,7 +4,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtWidgets import (
-    QScrollArea, QWidget, QVBoxLayout, QScrollBar
+    QScrollArea, QWidget, QVBoxLayout, QScrollBar, QSizePolicy
 )
 
 from ui.components.message_card import MessageCardWidget, MessageType
@@ -46,11 +46,11 @@ class MessageListWidget(QScrollArea):
         
         # 创建内部容器
         self._container = QWidget()
+        self._container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._container.setStyleSheet("background-color: #ffffff;")
         self._layout = QVBoxLayout(self._container)
         self._layout.setContentsMargins(0, 8, 0, 8)
         self._layout.setSpacing(8)
-        self._layout.addStretch()
         
         self.setWidget(self._container)
 
@@ -74,7 +74,7 @@ class MessageListWidget(QScrollArea):
         card.set_available_width(list_width)
         
         # 添加到布局
-        self._layout.insertWidget(self._layout.count() - 1, card)
+        self._layout.addWidget(card)
         self._message_cards.append(card)
         
         # 滚动到底部
@@ -129,8 +129,8 @@ class MessageListWidget(QScrollArea):
             card.setParent(None)
         self._message_cards.clear()
         
-        # 保留 stretch
-        while self._layout.count() > 1:
+        # 清空布局
+        while self._layout.count() > 0:
             item = self._layout.takeAt(0)
             if item.widget():
                 item.widget().setParent(None)
