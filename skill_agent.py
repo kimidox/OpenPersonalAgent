@@ -470,7 +470,7 @@ class SkillAgent:
         active_skill_text: list[str],
         active_skill_ids: list[str],
     ) -> tuple[str, bool, Optional[str]]:
-        if name in ("select_skill", "finish", "ask_user"):
+        if name in ("select_skill", "finish", "ask_user", "load_skill_memory"):
             return execute_skill_control_tool(
                 name,
                 args,
