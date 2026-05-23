@@ -44,11 +44,33 @@ The project supports multiple LLM backends:
 | **Gemma Series** | gemma-2, gemma-7b | Google open-source models |
 | **Other Compatible** | gpt-4, claude, etc. | OpenAI API compatible |
 
+### 4. Intelligent Memory System
+
+- ✅ **Skill Execution Memory**: Records execution experiences (failures, fixes, best practices) to avoid repeating mistakes
+- ✅ **Lazy Loading**: Memory loaded on-demand when Skill encounters difficulties
+- ✅ **FTS5 Semantic Search**: SQLite FTS5 full-text indexing for relevant memory retrieval
+- ✅ **Async Summarization**: Background thread summarization without blocking main workflow
+- ✅ **Long-term Memory**: Cross-session user memory with semantic search support
+
+### 5. Dynamic System Prompt
+
+- ✅ **Placeholder Mechanism**: `{SKILL_CATALOG}`, `{ACTIVE_SKILLS}`, `{USER_MEMORY}`, etc.
+- ✅ **Dynamic Construction**: System prompt rebuilt before each LLM call
+- ✅ **Skill Switching**: Efficiently replace Skill content without appending messages
+- ✅ **Memory Integration**: User memory and recent conversation summary auto-injected
+
+### 6. Modular Frontend Architecture
+
+- ✅ **Component-based Design**: Reusable UI components (ChatBubble, MessageCard, etc.)
+- ✅ **State Management**: Centralized session state, stream state, UI state
+- ✅ **Style Management**: Type-safe style constants and theme support
+- ✅ **Decoupled Logic**: Message handling and stream rendering as independent modules
+
 ---
 
 ## 📁 Built-in Skill Examples
 
-The project provides 6 ready-to-use Skill examples demonstrating different scenarios:
+The project provides 8 ready-to-use Skill examples demonstrating different scenarios:
 
 ### 1️⃣ Novel Generation (`id: 1`)
 - **Function**: Automatically generate novel content based on chapter outlines
@@ -73,7 +95,18 @@ The project provides 6 ready-to-use Skill examples demonstrating different scena
 - **Features**: Supports text search, news search, image search
 - **Output**: Automatically fetches detailed content from search results
 
-### 6️⃣ Image Matching Test (`id: 7`)
+### 6️⃣ Baidu Search (`id: 9`)
+- **Function**: Web search using Baidu search engine
+- **Features**: Supports text search, news search, image search
+- **Output**: Automatically fetches detailed content from search results
+- **Scenarios**: Chinese content search
+
+### 7️⃣ Fund Query (`id: 88`)
+- **Function**: Query fund information using akshare
+- **Features**: Fund basic info, net value, historical data, fund list with filters
+- **Output**: JSON formatted fund data
+
+### 8️⃣ Image Matching Test (`id: 7`)
 - **Function**: Screen capture, template matching, automated clicking
 - **Features**: Hotkey simulation, coordinate clicking, OpenCV template matching
 - **Scenarios**: Desktop automation testing
@@ -97,7 +130,9 @@ PersonalWindowGLM/
 │   ├── loader.py               # File scanning and parsing
 │   ├── registry.py             # Skill registry
 │   ├── execution.py            # Control tool execution
-│   └── processing.py           # Skill processing utilities
+│   ├── processing.py           # Skill processing utilities
+│   ├── memory_summarizer.py    # Skill memory summarization
+│   └── types.py                # Skill type definitions
 ├── llm/                        # LLM interface
 │   ├── BaseChatModel.py        # Model base class
 │   ├── glm_chat_model.py       # GLM model implementation
@@ -107,11 +142,33 @@ PersonalWindowGLM/
 ├── memory/                     # Session persistence
 │   ├── memory.py               # Memory management interface
 │   ├── sqlite_memory.py        # SQLite storage implementation
+│   ├── long_term_memory.py     # Long-term memory management
+│   ├── searcher.py             # FTS5 semantic search
 │   └── conversation.py         # Conversation management
+├── prompt/                     # Dynamic prompt management
+│   ├── dynamic_prompt.py       # Dynamic system prompt builder
+│   └── template.py             # Prompt template definitions
+├── ui/                         # Modular frontend
+│   ├── components/             # Reusable UI components
+│   │   ├── chat_bubble.py      # Chat bubble component
+│   │   ├── message_card.py     # Message card component
+│   │   └── settings_dialog.py  # Settings dialog
+│   ├── views/                  # Page views
+│   │   └── main_window.py      # Main window
+│   ├── state/                  # State management
+│   │   ├── session_state.py    # Session state
+│   │   └── stream_state.py     # Stream state
+│   ├── styles/                 # Style management
+│   │   └── style_manager.py    # Style manager
+│   └── utils/                  # UI utilities
+│       ├── message_handler.py  # Message handling
+│       └── stream_renderer.py  # Stream rendering
 ├── database/                   # Database layer
 └── PersonalData/               # User data directory
     ├── Skills/                 # Skill document directory
     │   ├── DuckDuckGoSearch/
+    │   ├── baiduSearch/
+    │   ├── 基金查询/
     │   ├── excel操作/
     │   ├── 小说生成/
     │   ├── 时间格式转换/
@@ -428,7 +485,19 @@ Issues and Pull Requests are welcome!
 
 ## Changelog
 
-### v2.0.0 (Current Version)
+### v2.1.0 (Current Version)
+- ✨ Added Baidu Search Skill for Chinese content search
+- ✨ Added Fund Query Skill with akshare integration
+- ✨ Added Skill Execution Memory system to record experiences and avoid repeating mistakes
+- ✨ Added FTS5 semantic search for memory retrieval
+- ✨ Added Dynamic System Prompt with placeholder mechanism
+- ✨ Added lazy loading for Skill memory
+- ✨ Added async Skill summarization in background threads
+- ✨ Refactored frontend architecture with modular design
+- 🔧 Optimized memory system with SQLite FTS5 indexing
+- 🔧 Improved long-term memory with semantic search support
+
+### v2.0.0
 - ✨ Refactored to Skill-First architecture
 - ✨ Added multi-Skill composition execution
 - ✨ Added dangerous command detection and confirmation mechanism

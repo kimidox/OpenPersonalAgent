@@ -44,11 +44,33 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 | **Gemma系列** | gemma-2, gemma-7b | Google开源模型 |
 | **其他兼容模型** | gpt-4, claude等 | 兼容OpenAI API格式 |
 
+### 4. 智能记忆系统
+
+- ✅ **Skill执行记忆**：记录执行过程中的经验教训（失败原因、修复方法、最佳实践），避免重复犯错
+- ✅ **延迟加载**：Skill遇到困难时按需加载记忆内容
+- ✅ **FTS5语义检索**：基于SQLite FTS5全文索引，支持相关性检索
+- ✅ **异步总结**：后台线程执行经验总结，不阻塞主流程
+- ✅ **长期记忆**：跨会话用户记忆，支持语义检索
+
+### 5. 动态系统提示词
+
+- ✅ **占位符机制**：`{SKILL_CATALOG}`、`{ACTIVE_SKILLS}`、`{USER_MEMORY}` 等
+- ✅ **动态构建**：每次LLM调用前重新构建系统提示词
+- ✅ **Skill切换**：高效替换Skill内容，无需追加消息
+- ✅ **记忆集成**：用户记忆和近期会话摘要自动注入
+
+### 6. 模块化前端架构
+
+- ✅ **组件化设计**：可复用UI组件（ChatBubble、MessageCard等）
+- ✅ **状态管理**：集中管理会话状态、流式状态、UI状态
+- ✅ **样式管理**：类型安全的样式常量，支持主题扩展
+- ✅ **逻辑解耦**：消息处理和流式渲染独立模块
+
 ---
 
 ## 📁 内置Skill示例
 
-项目提供6个开箱即用的Skill示例，展示不同场景的应用：
+项目提供8个开箱即用的Skill示例，展示不同场景的应用：
 
 ### 1️⃣ 小说生成 (`id: 1`)
 - **功能**：根据章节大纲自动生成小说内容
@@ -73,7 +95,18 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 - **特性**：支持普通搜索、新闻搜索、图片搜索
 - **输出**：自动获取搜索结果的详细网页内容
 
-### 6️⃣ 图片匹配测试 (`id: 7`)
+### 6️⃣ 百度搜索 (`id: 9`)
+- **功能**：使用百度搜索引擎进行网页搜索
+- **特性**：支持普通搜索、新闻搜索、图片搜索
+- **输出**：自动获取搜索结果的详细网页内容
+- **场景**：中文内容搜索
+
+### 7️⃣ 基金查询 (`id: 88`)
+- **功能**：使用akshare查询基金信息
+- **特性**：基金基本信息、单位净值、历史数据、基金列表筛选
+- **输出**：JSON格式的基金数据
+
+### 8️⃣ 图片匹配测试 (`id: 7`)
 - **功能**：屏幕截图、模板匹配、自动化点击
 - **特性**：快捷键模拟、坐标点击、OpenCV模板匹配
 - **场景**：桌面自动化测试
@@ -97,7 +130,9 @@ PersonalWindowGLM/
 │   ├── loader.py               # 文件扫描与解析
 │   ├── registry.py             # Skill注册表
 │   ├── execution.py            # 控制工具执行
-│   └── processing.py           # Skill处理工具
+│   ├── processing.py           # Skill处理工具
+│   ├── memory_summarizer.py    # Skill记忆总结
+│   └── types.py                # Skill类型定义
 ├── llm/                        # 大语言模型接口
 │   ├── BaseChatModel.py        # 模型基类
 │   ├── glm_chat_model.py       # GLM模型实现
@@ -107,11 +142,33 @@ PersonalWindowGLM/
 ├── memory/                     # 会话持久化
 │   ├── memory.py               # 内存管理接口
 │   ├── sqlite_memory.py        # SQLite存储实现
+│   ├── long_term_memory.py     # 长期记忆管理
+│   ├── searcher.py             # FTS5语义检索
 │   └── conversation.py         # 会话管理
+├── prompt/                     # 动态提示词管理
+│   ├── dynamic_prompt.py       # 动态系统提示词构建
+│   └── template.py             # 提示词模板定义
+├── ui/                         # 模块化前端
+│   ├── components/             # 可复用UI组件
+│   │   ├── chat_bubble.py      # 聊天气泡组件
+│   │   ├── message_card.py     # 消息卡片组件
+│   │   └── settings_dialog.py  # 设置对话框
+│   ├── views/                  # 页面视图
+│   │   └── main_window.py      # 主窗口
+│   ├── state/                  # 状态管理
+│   │   ├── session_state.py    # 会话状态
+│   │   └── stream_state.py     # 流式状态
+│   ├── styles/                 # 样式管理
+│   │   └── style_manager.py    # 样式管理器
+│   └── utils/                  # UI工具函数
+│       ├── message_handler.py  # 消息处理
+│       └── stream_renderer.py  # 流式渲染
 ├── database/                   # 数据库层
 └── PersonalData/               # 用户数据目录
     ├── Skills/                 # Skill文档目录
     │   ├── DuckDuckGoSearch/
+    │   ├── baiduSearch/
+    │   ├── 基金查询/
     │   ├── excel操作/
     │   ├── 小说生成/
     │   ├── 时间格式转换/
@@ -428,7 +485,19 @@ MIT License
 
 ## 更新日志
 
-### v2.0.0 (当前版本)
+### v2.1.0 (当前版本)
+- ✨ 新增百度搜索Skill，支持中文内容搜索
+- ✨ 新增基金查询Skill，集成akshare基金数据查询
+- ✨ 新增Skill执行记忆系统，记录经验教训避免重复犯错
+- ✨ 新增FTS5语义检索，支持记忆内容相关性搜索
+- ✨ 新增动态系统提示词，支持占位符机制
+- ✨ 新增Skill记忆延迟加载，按需获取经验内容
+- ✨ 新增异步Skill总结，后台线程执行不阻塞主流程
+- ✨ 重构前端架构，采用模块化设计
+- 🔧 优化记忆系统，采用SQLite FTS5索引存储
+- 🔧 改进长期记忆，支持语义检索
+
+### v2.0.0
 - ✨ 重构为Skill-First架构
 - ✨ 新增多Skill组合执行
 - ✨ 新增危险命令检测与确认机制
