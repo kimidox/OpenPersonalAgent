@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QTextEdit, QToolButton, QVBoxLayout, QWidget
 
 from ui.styles.style_manager import StyleManager
 from ui.utils.markdown_utils import markdown_to_html_fragment, normalize_newlines
@@ -37,6 +37,8 @@ class MessageCardWidget(QWidget):
             max_width = min(int(available_width * 0.92), 1200)
             self._bubble_frame.setMaximumWidth(max_width)
             self._bubble_container.setMaximumWidth(max_width)
+        # 确保布局更新
+        self.updateGeometry()
 
     def _setup_ui(self) -> None:
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -54,11 +56,8 @@ class MessageCardWidget(QWidget):
 
         # 气泡整体容器（包含标题和内容）
         self._bubble_container = QWidget()
-        # 用户消息用 Maximum 保持紧凑，其他消息用 Expanding 充分利用空间
-        if self._msg_type == "user":
-            self._bubble_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
-        else:
-            self._bubble_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        # 所有消息都用 Expanding 来确保内容充分利用可用宽度
+        self._bubble_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self._container_layout = QVBoxLayout(self._bubble_container)
         self._container_layout.setContentsMargins(0, 0, 0, 0)
         self._container_layout.setSpacing(2)
@@ -82,7 +81,7 @@ class MessageCardWidget(QWidget):
         self._bubble_layout.setContentsMargins(12, 10, 12, 10)
         self._bubble_layout.setSpacing(0)
 
-        # 内容
+        # 内容 - 使用 QLabel 但确保正确的换行行为
         self._content_label = QLabel()
         self._content_label.setWordWrap(True)
         self._content_label.setTextFormat(Qt.RichText)
@@ -122,12 +121,12 @@ class MessageCardWidget(QWidget):
         if self._msg_type == "user":
             # 对齐容器：左边是弹性空间，右边是气泡
             self._align_layout.addStretch()
-            self._align_layout.addWidget(self._bubble_container)
+            self._align_layout.addWidget(self._bubble_container, 0, Qt.AlignmentFlag.AlignRight)
             self._bubble_frame.setMaximumWidth(700)
             self._bubble_container.setMaximumWidth(700)
         else:
             # 对齐容器：左边是气泡，右边是弹性空间
-            self._align_layout.addWidget(self._bubble_container)
+            self._align_layout.addWidget(self._bubble_container, 0, Qt.AlignmentFlag.AlignLeft)
             self._align_layout.addStretch()
             self._bubble_frame.setMaximumWidth(1200)
             self._bubble_container.setMaximumWidth(1200)
@@ -207,13 +206,15 @@ class MessageCardWidget(QWidget):
         self._content_label.setStyleSheet(style_map.get(self._msg_type, style_map["assistant"]))
 
     def update_content(self, text: str) -> None:
-        self._raw_content = text
+        # 去除文本前后的空白行和空格
+        trimmed_text = text.strip() if text else ""
+        self._raw_content = trimmed_text
         if self._is_finalized:
-            html = markdown_to_html_fragment(text)
+            html = markdown_to_html_fragment(trimmed_text)
             self._content_label.setText(html)
         else:
             from html import escape
-            escaped = escape(text)
+            escaped = escape(trimmed_text)
             escaped = escaped.replace("\n", "<br>")
             self._content_label.setText(escaped)
 
