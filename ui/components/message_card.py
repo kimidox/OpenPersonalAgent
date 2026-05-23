@@ -30,11 +30,12 @@ class MessageCardWidget(QWidget):
     def set_available_width(self, available_width: int) -> None:
         """根据可用宽度设置气泡的最大宽度"""
         if self._msg_type == "user":
-            max_width = min(700, int(available_width * 0.5))
+            max_width = min(700, int(available_width * 0.6))
             self._bubble_frame.setMaximumWidth(max_width)
             self._bubble_container.setMaximumWidth(max_width)
         else:
-            max_width = min(int(available_width * 0.92), 1200)
+            # max_width = min(int(available_width * 0.80), 1200)
+            max_width=int(available_width)
             self._bubble_frame.setMaximumWidth(max_width)
             self._bubble_container.setMaximumWidth(max_width)
         # 确保布局更新
@@ -83,7 +84,10 @@ class MessageCardWidget(QWidget):
 
         # 内容 - 使用 QLabel 但确保正确的换行行为
         self._content_label = QLabel()
-        self._content_label.setWordWrap(False)
+        if self._msg_type == "user":
+            self._content_label.setWordWrap(False)
+        else:
+            self._content_label.setWordWrap(True)
         self._content_label.setTextFormat(Qt.RichText)
         self._content_label.setOpenExternalLinks(True)
         self._content_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
