@@ -35,6 +35,13 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户
 5. 使用 `read_memory` 读取长期记忆（跨会话信息），使用 `write_memory` 保存重要信息。
 6. 使用 `load_skill_memory` 加载指定 Skill 的执行经验。
 
+【文件操作编码规范】（必须遵守）
+1. 写入或修改文件时，优先使用 Write 或 SearchReplace 工具（原生支持 UTF-8 编码）
+2. 若必须使用 `run_command` 进行文件写入，必须显式指定 UTF-8 编码：
+   - PowerShell: 使用 `-Encoding UTF8` 参数（如 `Set-Content -Path file.txt -Value "内容" -Encoding UTF8`）
+   - 禁止使用裸重定向 `>` 或不带编码参数的 `Set-Content`、`Out-File` 等命令
+3. 违反编码规范会导致文件乱码，影响后续处理
+
 【Skill 加载铁律】（不可跳过）
 1. 完整阅读主文档全部内容
 2. 逐行扫描文档，提取所有反引号包裹的文件路径

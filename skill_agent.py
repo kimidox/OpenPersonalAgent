@@ -1059,17 +1059,22 @@ class SkillAgent:
                                 stdout = stdout_match[1].split("--- stderr ---")[0].strip()
                             
                             if not stdout and self._is_write_operation(command):
+                                print(f"[DEBUG-write] 检测到写入操作: {command[:80]}...")
                                 file_path = self._extract_file_path(command)
                                 if file_path:
+                                    print(f"[DEBUG-write] 提取到文件路径: {file_path}")
                                     check_result = self._verify_file_exists(file_path, args.get("cwd", "."))
                                     if log_callback:
                                         log_callback(f"检查结果: {check_result}", "base_tool")
-                                    if self.memory is not None:
-                                        self.memory.append_message(self._conversation_id, "tool", check_result, metadata={"name": "verify"})
-                                    messages.append({"role": "tool", "name": "verify", "content": check_result})
+                                    r = r + "\n\n" + check_result
+                                    result = r
+                                    print(f"[DEBUG-write] 验证结果已合并到工具结果")
+                                else:
+                                    print(f"[DEBUG-write] 无法提取文件路径，跳过验证")
                         
                         auto_end_msg = self._check_repeated_write_success(command, str(result))
                         if auto_end_msg:
+                            print(f"[DEBUG-write] 检测到重复写入，自动结束: {auto_end_msg}")
                             log_callback(auto_end_msg, "assistant")
                             self.memory.append_message(self._conversation_id, "assistant", auto_end_msg)
                             self._start_summary_in_background(self._conversation_id, active_skill_ids)
