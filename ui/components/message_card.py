@@ -45,6 +45,13 @@ class MessageCardWidget(QWidget):
         self._main_layout.setContentsMargins(8, 4, 8, 4)
         self._main_layout.setSpacing(0)
 
+        # 对齐容器 - 专门用于控制消息气泡的对齐
+        self._align_container = QWidget()
+        self._align_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self._align_layout = QHBoxLayout(self._align_container)
+        self._align_layout.setContentsMargins(0, 0, 0, 0)
+        self._align_layout.setSpacing(0)
+
         # 气泡整体容器（包含标题和内容）
         self._bubble_container = QWidget()
         # 用户消息用 Maximum 保持紧凑，其他消息用 Expanding 充分利用空间
@@ -107,21 +114,26 @@ class MessageCardWidget(QWidget):
             self._bubble_layout.addLayout(self._button_layout)
 
         self._container_layout.addWidget(self._bubble_frame)
-        
+
         if self._copy_button:
             self.setMouseTracking(True)
 
-        # 排列气泡 - 暂时设置一个默认值，后面会通过set_available_width调整
+        # 排列气泡 - 使用专门的对齐容器来确保正确的布局
         if self._msg_type == "user":
-            self._main_layout.addStretch()
-            self._main_layout.addWidget(self._bubble_container)
+            # 对齐容器：左边是弹性空间，右边是气泡
+            self._align_layout.addStretch()
+            self._align_layout.addWidget(self._bubble_container)
             self._bubble_frame.setMaximumWidth(700)
             self._bubble_container.setMaximumWidth(700)
         else:
-            self._main_layout.addWidget(self._bubble_container)
-            self._main_layout.addStretch()
+            # 对齐容器：左边是气泡，右边是弹性空间
+            self._align_layout.addWidget(self._bubble_container)
+            self._align_layout.addStretch()
             self._bubble_frame.setMaximumWidth(1200)
             self._bubble_container.setMaximumWidth(1200)
+
+        # 将对齐容器添加到主布局
+        self._main_layout.addWidget(self._align_container)
 
     def _get_caption(self) -> str:
         captions = {
