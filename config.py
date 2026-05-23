@@ -5,7 +5,7 @@ import dotenv
 from resource_path import paths
 
 
-env_file='.env.dev'
+env_file='.env'
 
 def get_config(key: str):
     import shutil

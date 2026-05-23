@@ -36,6 +36,9 @@ def get_chat_model(
 
     extra_body = {"enable_thinking": et}
 
+    if not model:
+        return QwenChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
+
     if model == "glm-5" or model.startswith("glm"):
         return GLMChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
     if model.startswith("qwen3.5") or model.startswith("qwen"):

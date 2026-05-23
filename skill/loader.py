@@ -163,7 +163,7 @@ def load_skill_from_path(path: Path) -> SkillDefinition:
             relative = path.relative_to(Path.cwd())
             relative_path = Path(*relative.parts[1:]) if len(relative.parts) > 1 else relative
         except ValueError:
-            relative_path = path.name
+            relative_path = Path(path.name)
 
     return SkillDefinition(
         skill_id=skill_id,

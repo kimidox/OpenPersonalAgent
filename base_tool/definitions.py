@@ -103,7 +103,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "工作目录路径。若指定 skill_id，则为相对于该 skill 包目录的路径（如 \"scripts\"）；否则为相对于 work_dir 的路径",
+                    "description": "工作目录路径,默认为\".\"。若指定 skill_id，则为相对于该 skill 包目录的路径（如 \"scripts\"）；否则为相对于 work_dir 的路径",
                 },
                 "skill_id": {
                     "type": "string",
@@ -114,7 +114,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                     "description": "超时秒数，默认 60，最大 180",
                 },
             },
-            "required": ["command"],
+            "required": ["command","cwd"],
         },
     },
     {

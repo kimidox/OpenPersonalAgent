@@ -2,13 +2,13 @@
 统一路径管理器 - 集中管理所有路径逻辑
 
 数据存储策略:
-┌─────────────────┬─────────────────────┬──────────────────────────┐
-│     数据类型     │     开发环境         │        打包环境           │
-├─────────────────┼─────────────────────┼──────────────────────────┤
-│ 只读资源        │ 项目根目录           │ sys._MEIPASS (打包内部)   │
-│ 用户数据        │ PersonalData/       │ %APPDATA%/App/           │
-│ 工作目录        │ PersonalData/       │ %APPDATA%/App/           │
-└─────────────────┴─────────────────────┴──────────────────────────┘
+┌─────────────────┬─────────────────────┬──────────────────────────────────┐
+│     数据类型     │     开发环境         │            打包环境               │
+├─────────────────┼─────────────────────┼──────────────────────────────────┤
+│ 只读资源        │ 项目根目录           │ sys._MEIPASS (打包内部)           │
+│ 用户数据        │ PersonalData/       │ %APPDATA%/App/PersonalData/      │
+│ 工作目录        │ PersonalData/       │ %APPDATA%/App/PersonalData/      │
+└─────────────────┴─────────────────────┴──────────────────────────────────┘
 """
 import sys
 import os
@@ -58,9 +58,10 @@ class PathManager:
     @property
     def user_data_dir(self) -> Path:
         """
-        用户数据目录 - 存储需要持久化的用户数据
+        用户数据根目录
         开发: 项目根目录/PersonalData/
         打包: %APPDATA%/OpenPersonalAgent/
+        注意: 打包后实际数据在 personal_data_dir (PersonalData子目录) 下
         """
         if self._is_frozen:
             app_data = Path(os.environ.get('APPDATA', os.path.expanduser('~')))
@@ -74,11 +75,12 @@ class PathManager:
         """
         PersonalData目录 - 统一存放用户工作数据
         开发: 项目根目录/PersonalData/
-        打包: %APPDATA%/OpenPersonalAgent/
+        打包: %APPDATA%/OpenPersonalAgent/PersonalData/
         """
         if self._is_frozen:
-            return self.user_data_dir
-        data_dir = self.project_root / self._personal_data_dir
+            data_dir = self.user_data_dir / self._personal_data_dir
+        else:
+            data_dir = self.project_root / self._personal_data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir
     
@@ -90,10 +92,8 @@ class PathManager:
         """
         获取用户配置文件路径
         开发: PersonalData/config/{filename}
-        打包: %APPDATA%/OpenPersonalAgent/{filename}
+        打包: %APPDATA%/OpenPersonalAgent/PersonalData/config/{filename}
         """
-        if self._is_frozen:
-            return self.user_data_dir / filename
         config_dir = self.personal_data_dir / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
         return config_dir / filename
@@ -102,12 +102,9 @@ class PathManager:
         """
         获取数据库文件路径
         开发: PersonalData/data/{filename}
-        打包: %APPDATA%/OpenPersonalAgent/data/{filename}
+        打包: %APPDATA%/OpenPersonalAgent/PersonalData/data/{filename}
         """
-        if self._is_frozen:
-            data_dir = self.user_data_dir / "data"
-        else:
-            data_dir = self.personal_data_dir / "data"
+        data_dir = self.personal_data_dir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir / filename
     
@@ -115,12 +112,9 @@ class PathManager:
         """
         获取Skills目录
         开发: PersonalData/Skills/
-        打包: %APPDATA%/OpenPersonalAgent/Skills/
+        打包: %APPDATA%/OpenPersonalAgent/PersonalData/Skills/
         """
-        if self._is_frozen:
-            skills_dir = self.user_data_dir / "Skills"
-        else:
-            skills_dir = self.personal_data_dir / "Skills"
+        skills_dir = self.personal_data_dir / "Skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
         return skills_dir
     
@@ -128,24 +122,17 @@ class PathManager:
         """
         获取虚拟环境目录
         开发: PersonalData/venv/
-        打包: %APPDATA%/OpenPersonalAgent/venv/
+        打包: %APPDATA%/OpenPersonalAgent/PersonalData/venv/
         """
-        if self._is_frozen:
-            venv_dir = self.user_data_dir / "venv"
-        else:
-            venv_dir = self.personal_data_dir / "venv"
-        return venv_dir
+        return self.personal_data_dir / "venv"
     
     def get_cache_dir(self) -> Path:
         """
         获取缓存目录
         开发: PersonalData/cache/
-        打包: %APPDATA%/OpenPersonalAgent/cache/
+        打包: %APPDATA%/OpenPersonalAgent/PersonalData/cache/
         """
-        if self._is_frozen:
-            cache_dir = self.user_data_dir / "cache"
-        else:
-            cache_dir = self.personal_data_dir / "cache"
+        cache_dir = self.personal_data_dir / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         return cache_dir
     
@@ -153,12 +140,9 @@ class PathManager:
         """
         获取日志目录
         开发: PersonalData/logs/
-        打包: %APPDATA%/OpenPersonalAgent/logs/
+        打包: %APPDATA%/OpenPersonalAgent/PersonalData/logs/
         """
-        if self._is_frozen:
-            log_dir = self.user_data_dir / "logs"
-        else:
-            log_dir = self.personal_data_dir / "logs"
+        log_dir = self.personal_data_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
     
