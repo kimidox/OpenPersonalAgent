@@ -164,6 +164,18 @@ QWidget#skillAgentCentral QTabBar QToolButton#skillAgentTabCloseButton:pressed {
   color: #374151;
   background-color: transparent;
 }
+#skillAgentSettingsDialog QLineEdit {
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 6px 12px;
+  selection-background-color: #2563eb;
+  selection-color: #ffffff;
+}
+#skillAgentSettingsDialog QLineEdit:focus {
+  border: 1px solid #93c5fd;
+}
 #skillAgentSettingsDialog QTextEdit {
   background-color: #ffffff;
   color: #374151;
@@ -173,10 +185,38 @@ QWidget#skillAgentCentral QTabBar QToolButton#skillAgentTabCloseButton:pressed {
   selection-background-color: #2563eb;
   selection-color: #ffffff;
 }
+#skillAgentSettingsDialog QTextEdit QScrollBar:vertical {
+  width: 8px;
+  background: transparent;
+}
+#skillAgentSettingsDialog QTextEdit QScrollBar::handle:vertical {
+  background: #c1c1c1;
+  border-radius: 4px;
+  min-height: 20px;
+}
+#skillAgentSettingsDialog QTextEdit QScrollBar::handle:vertical:hover {
+  background: #a8a8a8;
+}
 #skillAgentSettingsDialog QScrollArea {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background-color: #ffffff;
+}
+#skillAgentSettingsDialog QScrollBar:vertical {
+  width: 8px;
+  background: transparent;
+}
+#skillAgentSettingsDialog QScrollBar::handle:vertical {
+  background: #c1c1c1;
+  border-radius: 4px;
+  min-height: 20px;
+}
+#skillAgentSettingsDialog QScrollBar::handle:vertical:hover {
+  background: #a8a8a8;
+}
+#skillAgentSettingsDialog QScrollBar::add-line:vertical, 
+#skillAgentSettingsDialog QScrollBar::sub-line:vertical {
+  height: 0px;
 }
 #skillAgentSettingsDialog QWidget#skillAgentSettingsSkillsInner {
   background-color: #ffffff;
@@ -184,6 +224,35 @@ QWidget#skillAgentCentral QTabBar QToolButton#skillAgentTabCloseButton:pressed {
 #skillAgentSettingsDialog QCheckBox {
   color: #374151;
   spacing: 8px;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsApplyButton {
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 22px;
+  font-weight: 600;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsApplyButton:hover {
+  background-color: #1d4ed8;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsApplyButton:pressed {
+  background-color: #1e40af;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsResetButton {
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 22px;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsResetButton:hover {
+  background-color: #f9fafb;
+  border-color: #d1d5db;
+  color: #2563eb;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsResetButton:pressed {
+  background-color: #f3f4f6;
 }
 #skillAgentSettingsDialog QDialogButtonBox QPushButton {
   background-color: #2563eb;
