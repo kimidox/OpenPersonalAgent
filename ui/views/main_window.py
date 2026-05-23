@@ -17,6 +17,7 @@ from skill_agent import SkillAgent, SKILL_AGENT_AWAITING_USER_REPLY
 from resource_path import paths
 
 from ui.components import ChatSessionTab, SettingsDialog
+from ui.components.tab_bar import setup_tab_close_button, refresh_all_tab_close_buttons
 from ui.state import SessionState, StreamState, UIState
 from ui.styles import StyleManager
 from ui.utils import MessageHandler
@@ -72,6 +73,7 @@ class SkillAgentMainWindow(QMainWindow):
         self._init_ui()
         self._connect_signals()
         self._populate_initial_tabs()
+        refresh_all_tab_close_buttons(self.chat_tabs)
 
     def _init_ui(self) -> None:
         self.setWindowTitle("SkillAgent")
@@ -175,6 +177,7 @@ class SkillAgentMainWindow(QMainWindow):
         idx = self.chat_tabs.addTab(tab, display_title)
         self.chat_tabs.setTabToolTip(idx, conversation_id)
         self.session_state.add_conversation(conversation_id, title=display_title, pending_db_history=pending_db_history)
+        setup_tab_close_button(self.chat_tabs.tabBar(), idx)
         return idx
 
     def _create_new_conversation_tab(self) -> str:

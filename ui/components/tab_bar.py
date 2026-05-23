@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QTabBar, QTabWidget, QToolButton
 from ui.styles.color_scheme import TAB_CLOSE_X
 
 
-_TAB_CLOSE_BTN_OBJECT_NAME = "tabCloseButton"
+_TAB_CLOSE_BTN_OBJECT_NAME = "skillAgentTabCloseButton"
 _TAB_CLOSE_ICON: QIcon | None = None
 
 
@@ -73,6 +73,7 @@ def setup_tab_close_button(tab_bar: QTabBar, index: int) -> TabCloseButton | Non
         return existing
     btn = TabCloseButton(tab_bar)
     tab_bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, btn)
+    btn.clicked_signal.connect(lambda idx=index: tab_bar.tabCloseRequested.emit(idx))
     return btn
 
 
