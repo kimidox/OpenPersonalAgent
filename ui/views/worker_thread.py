@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QThread, Signal
@@ -28,10 +29,19 @@ class SkillAgentWorkerThread(QThread):
         self.query = query
         self.conversation_id = conversation_id
         self.session_tab = session_tab
+        self._stop_event = threading.Event()
+
+    def request_stop(self) -> None:
+        self._stop_event.set()
+        self.agent.request_stop()
+
+    def is_stop_requested(self) -> bool:
+        return self._stop_event.is_set()
 
     def run(self) -> None:
+        self._stop_event.clear()
         self.agent.set_conversation_id(self.conversation_id)
-        result = self.agent.run(self.query, self._log_callback)
+        result = self.agent.run(self.query, self._log_callback, stop_check_callback=self.is_stop_requested)
         self.finished_signal.emit(result, self.session_tab)
 
     def _log_callback(self, message: str, msg_type: str = "info") -> None:

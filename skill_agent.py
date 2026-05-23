@@ -107,6 +107,7 @@ class SkillAgent:
         self._dynamic_prompt = DynamicSystemPrompt()
         self._conversation_constraints: str = ""
         self._last_user_query: str | None = None
+        self._stop_event = threading.Event()
 
     @property
     def _get_compactor(self) -> ContextCompactor | None:
@@ -252,6 +253,12 @@ class SkillAgent:
 
     def set_conversation_id(self, conversation_id: str) -> None:
         self._conversation_id = (conversation_id or "").strip()
+
+    def request_stop(self) -> None:
+        self._stop_event.set()
+
+    def is_stop_requested(self) -> bool:
+        return self._stop_event.is_set()
 
     def set_conversation_constraints(self, constraints: str) -> None:
         self._conversation_constraints = (constraints or "").strip()
@@ -611,14 +618,22 @@ class SkillAgent:
         print(f"[SkillSummary] 后台线程已启动: name={t.name}, ident={t.ident}, active_skill_ids={active_skill_ids}")
         print(f"[SkillSummary] 主线程继续执行 (总结线程独立运行)")
 
-    def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
+    def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None, stop_check_callback: Optional[Callable[[], bool]] = None) -> str:
         import traceback
         print(f"[DEBUG-exec] ===== run() 开始执行 =====")
         print(f"[DEBUG-exec] user_query 长度: {len(user_query)}, 前50字: {user_query[:50]}")
         print(f"[DEBUG-exec] conversation_id: {self._conversation_id}")
         
+        self._stop_event.clear()
         self._recent_commands = []
         self._token_usage = TokenUsage.empty()
+
+        def _check_stop() -> bool:
+            if self._stop_event.is_set():
+                return True
+            if stop_check_callback is not None and stop_check_callback():
+                return True
+            return False
 
         def _emit_token_usage():
             if log_callback and getattr(config, "TOKEN_USAGE_ENABLED", False):
@@ -756,6 +771,18 @@ class SkillAgent:
             for step in range(self.max_steps):
                 print(f"[DEBUG-exec] ===== Step {step}/{self.max_steps} 开始 =====")
                 print(f"[DEBUG-exec] messages 数量: {len(messages)}")
+                
+                if _check_stop():
+                    stop_msg = "用户已停止推理"
+                    if log_callback:
+                        log_callback(stop_msg, "assistant")
+                    if self.memory is not None:
+                        self.memory.append_message(self._conversation_id, "assistant", stop_msg)
+                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
+                    _emit_token_usage()
+                    print(f"[DEBUG-exec] 📤 用户停止推理，退出循环")
+                    return stop_msg
+                
                 thinking_parts: list[str] = []
                 content_parts: list[str] = []
 

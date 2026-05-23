@@ -17,10 +17,12 @@ import warnings
 import sys
 
 from PySide6.QtWidgets import QApplication, QStyleFactory
+from PySide6.QtGui import QIcon
 
 from ui.views.main_window import SkillAgentMainWindow
 from ui.views.worker_thread import SkillAgentWorkerThread
 from ui.styles import initialize_styles
+from resource_path import paths
 
 # warnings.warn(
 #     "ui_skill_agent 模块已废弃，请使用 ui.main 模块。"
@@ -35,6 +37,11 @@ def main() -> None:
     fusion = QStyleFactory.create("Fusion")
     if fusion is not None:
         app.setStyle(fusion)
+    
+    icon_path = paths.get_bundled_resource("application.ico")
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+    
     initialize_styles()
     window = SkillAgentMainWindow()
     window.show()

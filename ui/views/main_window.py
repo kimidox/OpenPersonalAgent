@@ -4,7 +4,7 @@ import json
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QKeyEvent
+from PySide6.QtGui import QFont, QKeyEvent, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout, QPlainTextEdit, QMainWindow, QMessageBox,
     QPushButton, QTabWidget, QVBoxLayout, QWidget,
@@ -14,6 +14,7 @@ import config
 from executor import Executor
 from memory import SqliteMemory
 from skill_agent import SkillAgent, SKILL_AGENT_AWAITING_USER_REPLY
+from resource_path import paths
 
 from ui.components import ChatSessionTab, SettingsDialog
 from ui.state import SessionState, StreamState, UIState
@@ -75,6 +76,7 @@ class SkillAgentMainWindow(QMainWindow):
     def _init_ui(self) -> None:
         self.setWindowTitle("SkillAgent")
         self.setGeometry(120, 120, 780, 620)
+        self._set_window_icon()
         central = QWidget()
         central.setObjectName("skillAgentCentral")
         self.setCentralWidget(central)
@@ -87,6 +89,11 @@ class SkillAgentMainWindow(QMainWindow):
         style = StyleManager.get_style("main_window_stylesheet")
         if style:
             self.setStyleSheet(style)
+    
+    def _set_window_icon(self) -> None:
+        icon_path = paths.get_bundled_resource("application.ico")
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
     def _setup_header(self, layout: QVBoxLayout) -> None:
         header = QHBoxLayout()
@@ -137,6 +144,7 @@ class SkillAgentMainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         self.ui_state.send_button_changed.connect(self.send_btn.setEnabled)
+        self.ui_state.stop_button_changed.connect(self._on_stop_button_changed)
         self.ui_state.input_placeholder_changed.connect(self.input_edit.setPlaceholderText)
         self.message_handler.assistant_message.connect(self._on_assistant_message)
         self.message_handler.think_message.connect(self._on_think_message)
@@ -295,6 +303,33 @@ class SkillAgentMainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请输入内容")
             return
         self._send_user_message(text)
+
+    def _on_stop_button_changed(self, show_stop: bool) -> None:
+        if show_stop:
+            try:
+                self.send_btn.clicked.disconnect(self._on_send)
+            except RuntimeError:
+                pass
+            self.send_btn.setObjectName("skillAgentStopButton")
+            self.send_btn.setText("停止")
+            self.send_btn.clicked.connect(self._on_stop)
+            self.send_btn.setEnabled(True)
+        else:
+            try:
+                self.send_btn.clicked.disconnect(self._on_stop)
+            except RuntimeError:
+                pass
+            self.send_btn.setObjectName("skillAgentSendButton")
+            self.send_btn.setText("发送")
+            self.send_btn.clicked.connect(self._on_send)
+
+    def _on_stop(self) -> None:
+        if self.worker_thread and self.worker_thread.isRunning():
+            self.worker_thread.request_stop()
+        if self.stream_renderer.is_active():
+            self.stream_renderer.complete()
+        self.send_btn.setEnabled(False)
+        self.send_btn.setText("停止中…")
 
     def _send_user_message(self, text: str, *, session_tab: ChatSessionTab | None = None) -> None:
         text = (text or "").strip()

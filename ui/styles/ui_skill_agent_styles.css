@@ -19,7 +19,7 @@
 /* -------------------------------------------------------------------------
  * 组件：SkillAgentMainWindow — 主窗口与子控件（QSS，作用于 setStyleSheet(self)）
  * 依赖：central 控件 objectName = skillAgentCentral；
- *       发送按钮 skillAgentSendButton；工具栏按钮 skillAgentToolbarButton。
+ *       发送按钮 skillAgentSendButton；停止按钮 skillAgentStopButton；工具栏按钮 skillAgentToolbarButton。
  * ------------------------------------------------------------------------- */
 /* === section:main_window_stylesheet === */
 QMainWindow {
@@ -57,6 +57,24 @@ QPushButton#skillAgentSendButton:pressed {
 QPushButton#skillAgentSendButton:disabled {
   background-color: #93c5fd;
   color: #e5e7eb;
+}
+QPushButton#skillAgentStopButton {
+  background-color: #ef4444;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 0 18px;
+  font-weight: 600;
+}
+QPushButton#skillAgentStopButton:hover {
+  background-color: #dc2626;
+}
+QPushButton#skillAgentStopButton:pressed {
+  background-color: #b91c1c;
+}
+QPushButton#skillAgentStopButton:disabled {
+  background-color: #fca5a5;
+  color: #fecaca;
 }
 QPushButton#skillAgentToolbarButton {
   background-color: #ffffff;
