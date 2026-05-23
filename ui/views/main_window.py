@@ -368,6 +368,12 @@ class SkillAgentMainWindow(QMainWindow):
                         session_tab.add_message("assistant", result)
         self._sync_input_placeholder()
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        tab = self._active_session_tab()
+        if tab:
+            tab.message_list.update_all_cards_width()
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
         # 窗口首次显示后，确保当前标签页滚动到底部

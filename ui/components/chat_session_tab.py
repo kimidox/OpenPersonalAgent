@@ -47,3 +47,7 @@ class ChatSessionTab(QWidget):
 
     def clear_messages(self) -> None:
         self.message_list.clear_all()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.message_list.update_all_cards_width()
