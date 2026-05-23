@@ -77,6 +77,23 @@ def _build_system_prompt(catalog: str, constraints: str = "") -> str:
 
 
 class SkillAgent:
+    """
+    Skill Agent：根据用户业务提问选择并执行合适的Skill流程。
+
+    **重复检测机制**（双层防护）：
+    1. **通用重复检测**（_check_repeated_tool_call）：
+       - 适用范围：所有原子工具（run_command、read_file等）
+       - 检测方式：基于 tool_name + args 的 MD5 哈希值匹配
+       - 响应策略：第1-2次返回警告，≥3次自动终止
+
+    2. **写入操作特例检测**（_check_repeated_write_success）：
+       - 适用范围：仅限 run_command 中的文件写入操作
+       - 检测方式：基于命令文本匹配 + 文件存在性验证
+       - 响应策略：连续2次相同写入命令即自动终止
+       - 额外功能：验证文件是否成功创建
+
+    两者协同工作，提供全面的重复调用保护。
+    """
     def __init__(
         self,
         work_dir: str,
@@ -108,6 +125,8 @@ class SkillAgent:
         self._conversation_constraints: str = ""
         self._last_user_query: str | None = None
         self._stop_event = threading.Event()
+        self._recent_tool_calls: list[dict] = []
+        self._consecutive_repeat_count: int = 0
 
     @property
     def _get_compactor(self) -> ContextCompactor | None:
@@ -408,33 +427,136 @@ class SkillAgent:
         return False, []
 
     def _check_repeated_write_success(self, command: str, result: str) -> Optional[str]:
+        """检查是否为重复的写入操作（特例优化：包含文件验证）"""
+        print(f"[DEBUG-write] _check_repeated_write_success 被调用")
+        print(f"[DEBUG-write]   注意：这是写入操作的专用检测，与通用重复检测(_check_repeated_tool_call)协同工作")
+        print(f"[DEBUG-write]   command: {command[:80]}...")
+
         if "exit_code: 0" not in result:
             return None
-        
+
         stdout_match = result.split("--- stdout ---")
         if len(stdout_match) < 2:
             return None
         stdout = stdout_match[1].split("--- stderr ---")[0].strip()
-        
+
         if stdout:
             return None
-        
+
         if not self._is_write_operation(command):
             return None
-        
+
         self._recent_commands.append(command)
         if len(self._recent_commands) > 10:
             self._recent_commands.pop(0)
-        
+
         write_count = sum(1 for cmd in self._recent_commands if self._is_write_operation(cmd))
         if write_count >= 2:
             seen = set()
             for cmd in self._recent_commands:
                 if cmd in seen:
-                    return "检测到重复的文件写入操作且已成功完成，任务自动结束。"
+                    msg = "检测到重复的文件写入操作且已成功完成，任务自动结束。"
+                    print(f"[DEBUG-write] ✅ 触发写入重复检测: {msg}")
+                    return msg
                 seen.add(cmd)
-        
+
         return None
+
+    def _check_repeated_tool_call(self, tool_name: str, args: dict) -> tuple[bool, Optional[str], Optional[str]]:
+        """
+        检查是否为重复的工具调用
+
+        返回: (is_repeated, cached_result_or_warning, last_result)
+        - is_repeated: 是否检测到重复
+        - cached_result_or_warning: 如果重复，返回警告信息+上次结果；否则返回None
+        - last_result: 上次执行的结果（用于自动终止时使用）
+        """
+        import hashlib
+        import json
+
+        max_repeats = config.MAX_CONSECUTIVE_REPEATS
+        print(f"[DEBUG-repeat] 配置信息: 去重启用={config.TOOL_CALL_DEDUPLICATION_ENABLED}, 最大重复次数={max_repeats}, 历史窗口大小={config.REPEAT_DETECTION_WINDOW_SIZE}")
+
+        args_hash = hashlib.md5(json.dumps({"name": tool_name, **args}, sort_keys=True).encode()).hexdigest()
+
+        print(f"[DEBUG-repeat] 检查工具调用重复: {tool_name}, args_hash={args_hash[:8]}...")
+        print(f"[DEBUG-repeat] 历史记录数: {len(self._recent_tool_calls)}")
+
+        for record in self._recent_tool_calls:
+            if record["name"] == tool_name and record["args_hash"] == args_hash:
+                self._consecutive_repeat_count += 1
+                last_result = record.get("result", "")
+
+                warning_msg = (
+                    f"⚠️ 检测到重复的工具调用 [{tool_name}]。"
+                    f"该工具已在之前成功执行并返回结果，请直接使用已有结果完成任务，或调用 finish 工具结束对话。\n\n"
+                    f"上次执行结果：\n{last_result}"
+                )
+
+                print(f"[DEBUG-repeat] ✓ 发现重复调用: {tool_name}")
+                print(f"[DEBUG-repeat]   连续重复次数: {self._consecutive_repeat_count}")
+                print(f"[DEBUG-repeat]   上次结果长度: {len(last_result)}")
+
+                return (True, warning_msg, last_result)
+
+        self._consecutive_repeat_count = 0
+        print(f"[DEBUG-repeat] ✗ 未发现重复调用: {tool_name}")
+        return (False, None, None)
+
+    def _record_tool_call(self, tool_name: str, args: dict, result: str) -> None:
+        """记录一次工具调用到历史中"""
+        import hashlib
+        import json
+        import time
+
+        args_hash = hashlib.md5(json.dumps({"name": tool_name, **args}, sort_keys=True).encode()).hexdigest()
+
+        self._recent_tool_calls.append({
+            "name": tool_name,
+            "args_hash": args_hash,
+            "result": result[:500],
+            "timestamp": time.time()
+        })
+
+        window_size = config.REPEAT_DETECTION_WINDOW_SIZE
+        if len(self._recent_tool_calls) > window_size:
+            self._recent_tool_calls.pop(0)
+
+        print(f"[DEBUG-repeat] 记录工具调用: {tool_name}, args_hash={args_hash[:8]}, result长度={min(len(result), 500)}, 当前历史数={len(self._recent_tool_calls)}")
+
+    @staticmethod
+    def _format_tool_result(success: bool, content: str, error_msg: str = "", suggestion: str = "") -> str:
+        """
+        标准化工具返回结果格式
+
+        Args:
+            success: 是否成功
+            content: 主要内容（如文件内容、命令输出等）
+            error_msg: 错误信息（仅失败时使用）
+            suggestion: 建议的修复方案或下一步操作（可选）
+
+        Returns:
+            格式化的结果字符串
+        """
+        if success:
+            if len(content) > 2000:
+                content = content[:2000] + "\n\n…（内容已截断）"
+            return f"""✅ 操作成功
+
+{content}
+
+---
+💡 如果任务已完成，请调用 finish 工具结束对话。"""
+        else:
+            result = f"""❌ 操作失败
+
+错误原因：{error_msg}"""
+
+            if suggestion:
+                result += f"\n\n建议方案：{suggestion}"
+
+            result += "\n\n---\n💡 请修正后重试，或调用 finish 结束当前任务。"
+            return result
 
     def _extract_file_path(self, command: str) -> Optional[str]:
         import re
@@ -626,6 +748,8 @@ class SkillAgent:
         
         self._stop_event.clear()
         self._recent_commands = []
+        self._recent_tool_calls = []
+        self._consecutive_repeat_count = 0
         self._token_usage = TokenUsage.empty()
 
         def _check_stop() -> bool:
@@ -1021,7 +1145,70 @@ class SkillAgent:
                     cmd = str(args.get("command", ""))[:80]
                     print(f"[DEBUG-exec]   命令: {cmd}...")
 
-                result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
+                # 检测重复工具调用（可通过配置禁用）
+                _control_tools = ("select_skill", "finish", "ask_user", "load_skill_memory")
+                is_repeated = False
+                repeat_warning = None
+                last_result = None
+
+                if config.TOOL_CALL_DEDUPLICATION_ENABLED and fname not in _control_tools:
+                    is_repeated, repeat_warning, last_result = self._check_repeated_tool_call(fname, args)
+                    if is_repeated:
+                        print(f"[DEBUG-repeat] ⚠️ 检测到重复工具调用: {fname}")
+                        print(f"[DEBUG-repeat]   连续重复次数: {self._consecutive_repeat_count}")
+
+                        result = repeat_warning or f"检测到重复的 {fname} 调用"
+                        terminate = False
+                        final = None
+
+                        max_repeats = config.MAX_CONSECUTIVE_REPEATS
+                        if self._consecutive_repeat_count >= max_repeats:
+                            auto_finish_msg = (
+                                f"检测到连续 {self._consecutive_repeat_count} 次重复执行工具 [{fname}]，已自动结束任务。\n\n"
+                                f"最后一次执行结果摘要：\n{(last_result or '')[:200]}"
+                            )
+                            print(f"[DEBUG-repeat] 🚨 触发自动终止: {auto_finish_msg}")
+
+                            if log_callback:
+                                log_callback(auto_finish_msg, "assistant")
+                            if self.memory is not None:
+                                self.memory.append_message(self._conversation_id, "assistant", auto_finish_msg)
+                            self._start_summary_in_background(self._conversation_id, active_skill_ids)
+                            _emit_token_usage()
+                            return auto_finish_msg
+                else:
+                    is_repeated = False
+
+                # 工具执行流程：
+                # 1. 通用重复检测（适用于所有工具）→ 已在前面实现
+                # 2. 执行工具 → self._dispatch()
+                # 3. 结果格式化 → 已实现
+                # 4. 写入操作特例检测（仅限 run_command + 写入操作）→ 原有逻辑
+
+                if not is_repeated:
+                    result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
+
+                    if fname not in _control_tools:
+                        self._record_tool_call(fname, args, str(result))
+
+                # 标准化工具返回结果格式（排除控制类工具和已经是标准格式的结果）
+                if fname not in ("select_skill", "finish", "ask_user", "load_skill_memory"):
+                    result_str = str(result)
+                    if not result_str.startswith(("✅", "❌", "⚠️")):
+                        # 判断是否为成功结果（简单启发式规则）
+                        is_success = (
+                            "exit_code: 0" in result_str or  # 命令执行成功
+                            (len(result_str) > 10 and "error" not in result_str.lower()[:100])  # 有实质内容且无明显错误
+                        )
+                        original_len = len(result_str)
+                        if is_success and len(result_str.strip()) > 0:
+                            result = self._format_tool_result(True, result_str)
+                            print(f"[DEBUG-format] 格式化工具结果: {fname}, 成功=True, 原始长度={original_len}, 格式化后长度={len(str(result))}")
+                        elif not is_success:
+                            # 保持原始错误信息，但添加前缀
+                            if not result_str.startswith("错误"):
+                                result = f"❌ 操作失败\n\n{result}"
+                                print(f"[DEBUG-format] 格式化工具结果: {fname}, 成功=False, 原始长度={original_len}, 添加失败前缀")
 
                 print(f"[DEBUG-exec] 工具执行完成:")
                 print(f"[DEBUG-exec]   - result 长度: {len(str(result))}")
@@ -1072,6 +1259,8 @@ class SkillAgent:
                                 else:
                                     print(f"[DEBUG-write] 无法提取文件路径，跳过验证")
                         
+                        # 写入操作特例检测（保留原有逻辑）
+                        # 此检测与通用重复检测协同工作，专门针对写入操作提供更严格的保护
                         auto_end_msg = self._check_repeated_write_success(command, str(result))
                         if auto_end_msg:
                             print(f"[DEBUG-write] 检测到重复写入，自动结束: {auto_end_msg}")

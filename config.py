@@ -106,6 +106,27 @@ COMPACTION_ENABLED = _env_bool(_ce, True)
 _tue = get_config("TOKEN_USAGE_ENABLED")
 TOKEN_USAGE_ENABLED = _env_bool(_tue, True)
 
+# ===== 重复工具调用检测配置 =====
+
+_tde = get_config("TOOL_CALL_DEDUPLICATION_ENABLED")
+TOOL_CALL_DEDUPLICATION_ENABLED = _env_bool(_tde, True)
+
+_mcr = get_config("MAX_CONSECUTIVE_REPEATS")
+try:
+    MAX_CONSECUTIVE_REPEATS = int(_mcr) if _mcr not in (None, "") else 3
+except (TypeError, ValueError):
+    MAX_CONSECUTIVE_REPEATS = 3
+if MAX_CONSECUTIVE_REPEATS < 1:
+    MAX_CONSECUTIVE_REPEATS = 3
+
+_rdsw = get_config("REPEAT_DETECTION_WINDOW_SIZE")
+try:
+    REPEAT_DETECTION_WINDOW_SIZE = int(_rdsw) if _rdsw not in (None, "") else 10
+except (TypeError, ValueError):
+    REPEAT_DETECTION_WINDOW_SIZE = 10
+if REPEAT_DETECTION_WINDOW_SIZE < 1:
+    REPEAT_DETECTION_WINDOW_SIZE = 10
+
 _tusiu = get_config("TOKEN_USAGE_SHOW_IN_UI")
 TOKEN_USAGE_SHOW_IN_UI = _env_bool(_tusiu, True)
 

@@ -296,6 +296,116 @@ def _truncate_run_output(text: str, limit: int = _RUN_COMMAND_MAX_TOTAL_OUT) -> 
 
 
 def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> str:
+    if name == "file_operation":
+        action = args.get("action", "")
+        raw_path = args.get("path", "")
+        skill_id = args.get("skill_id", "")
+        
+        if skill_id and registry:
+            try:
+                skill_relative_path = _splice_skill_path(raw_path or ".", str(skill_id), registry)
+                target_path = _resolve_safe(ctx, skill_relative_path)
+            except ValueError as e:
+                return f"错误: {e}"
+        else:
+            try:
+                target_path = _resolve_safe(ctx, raw_path)
+            except ValueError as e:
+                return f"错误: {e}"
+        
+        if action == "read":
+            if not target_path.exists():
+                return f"错误: 文件不存在: {target_path}"
+            if not target_path.is_file():
+                return f"错误: 不是文件: {target_path}"
+            try:
+                content = target_path.read_text(encoding="utf-8")
+                return content + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            except Exception as e:
+                return f"错误: 读取文件失败: {e}"
+        
+        elif action == "write":
+            content = args.get("content", "")
+            try:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(content, encoding="utf-8")
+                return f"文件写入成功: {target_path}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            except Exception as e:
+                return f"错误: 写入文件失败: {e}"
+        
+        elif action == "delete":
+            if not target_path.exists():
+                return f"错误: 文件不存在: {target_path}"
+            if not target_path.is_file():
+                return f"错误: 不是文件: {target_path}"
+            try:
+                target_path.unlink()
+                return f"文件删除成功: {target_path}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            except Exception as e:
+                return f"错误: 删除文件失败: {e}"
+        
+        elif action == "list":
+            if not target_path.exists():
+                return f"错误: 目录不存在: {target_path}"
+            if not target_path.is_dir():
+                return f"错误: 不是目录: {target_path}"
+            try:
+                items = list(target_path.iterdir())
+                result_lines = []
+                for item in sorted(items):
+                    if item.is_dir():
+                        result_lines.append(f"[DIR]  {item.name}/")
+                    else:
+                        result_lines.append(f"[FILE] {item.name}")
+                return "\n".join(result_lines) if result_lines else "(空目录)"
+            except Exception as e:
+                return f"错误: 列出目录失败: {e}"
+        
+        else:
+            return f"错误: 未知的 action: {action}，支持 read/write/delete/list"
+
+    if name == "edit":
+        raw_path = args.get("path", "")
+        old_str = args.get("old_str", "")
+        new_str = args.get("new_str", "")
+        skill_id = args.get("skill_id", "")
+        
+        if not old_str:
+            return "错误: 缺少 old_str 参数"
+        
+        if skill_id and registry:
+            try:
+                skill_relative_path = _splice_skill_path(raw_path or ".", str(skill_id), registry)
+                target_path = _resolve_safe(ctx, skill_relative_path)
+            except ValueError as e:
+                return f"错误: {e}"
+        else:
+            try:
+                target_path = _resolve_safe(ctx, raw_path)
+            except ValueError as e:
+                return f"错误: {e}"
+        
+        if not target_path.exists():
+            return f"错误: 文件不存在: {target_path}"
+        if not target_path.is_file():
+            return f"错误: 不是文件: {target_path}"
+        
+        try:
+            content = target_path.read_text(encoding="utf-8")
+        except Exception as e:
+            return f"错误: 读取文件失败: {e}"
+        
+        if old_str not in content:
+            return f"错误: 未找到要替换的内容"
+        
+        new_content = content.replace(old_str, new_str, 1)
+        
+        try:
+            target_path.write_text(new_content, encoding="utf-8")
+            return f"文件编辑成功: {target_path}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+        except Exception as e:
+            return f"错误: 写入文件失败: {e}"
+
     if name == "run_command":
         command = str(args.get("command", "") or "").strip()
         if not command:
@@ -416,7 +526,10 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
             f"--- stdout ---\n{stdout}\n"
             f"--- stderr ---\n{stderr}"
         )
-        return _truncate_run_output(merged)
+        result = _truncate_run_output(merged)
+        if proc.returncode == 0:
+            result = result + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+        return result
 
     if name == "read_memory":
         if ctx.memory is None:
@@ -456,10 +569,10 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
 
         if mode == "append":
             ctx.memory.append_long_term_memory(content)
-            return "已追加到长期记忆"
+            return "已追加到长期记忆\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
         elif mode == "overwrite":
             ctx.memory.update_long_term_memory(content)
-            return "已更新长期记忆"
+            return "已更新长期记忆\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
         else:
             return f"错误: 未知的 mode 参数: {mode}，支持 'append' 或 'overwrite'"
 

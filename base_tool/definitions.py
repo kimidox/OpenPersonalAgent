@@ -85,14 +85,13 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
     {
         "name": "run_command",
         "description": (
-            "执行 Windows CMD 命令完成文件操作、脚本执行等。\n"
-            "常用示例：\n"
-            "- 列出目录: dir\n"
-            "- 读取文件: type filename\n"
-            "- 写入文件: echo content > filename\n"
-            "- 创建目录: mkdir foldername\n"
-            "- 运行脚本: python script.py\n"
-            "参数：command(必需)、cwd(可选)、skill_id(可选，用于读取Skill包内文件)、timeout_sec(可选，默认60秒)。"
+            "执行命令行程序或脚本。\n"
+            "常用场景：\n"
+            "- 运行 Python 脚本: python script.py\n"
+            "- 安装依赖: pip install package\n"
+            "- 运行测试: pytest\n"
+            "- Git 操作: git status\n"
+            "参数：command(必需)、cwd(可选)、skill_id(可选)、timeout_sec(可选，默认60秒)。"
         ),
         "parameters": {
             "type": "object",
@@ -115,6 +114,70 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 },
             },
             "required": ["command","cwd"],
+        },
+    },
+    {
+        "name": "file_operation",
+        "description": (
+            "文件操作工具。支持四种操作：\n"
+            "- read: 读取文件内容，参数 path\n"
+            "- write: 写入文件，参数 path、content\n"
+            "- delete: 删除文件，参数 path\n"
+            "- list: 列出目录内容，参数 path\n"
+            "参数：action(必需，read/write/delete/list)、path(必需)、content(可选，仅write)、skill_id(可选，访问skill包内文件)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["read", "write", "delete", "list"],
+                    "description": "操作类型：read读取、write写入、delete删除、list列出目录"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "文件或目录路径"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "写入内容（仅 action=write 时使用，注意write会全量覆盖。）"
+                },
+                "skill_id": {
+                    "type": "string",
+                    "description": "Skill ID，指定后 path 相对于 skill 包目录"
+                }
+            },
+            "required": ["action", "path"]
+        },
+    },
+    {
+        "name": "edit",
+        "description": (
+            "精确编辑文件。在文件中搜索指定内容并替换。\n"
+            "特点：只替换第一个匹配项，未找到则报错。\n"
+            "参数：path(必需)、old_str(必需，要搜索的内容)、new_str(必需，替换后的内容)、skill_id(可选)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "要编辑的文件路径"
+                },
+                "old_str": {
+                    "type": "string",
+                    "description": "要搜索的内容（必须精确匹配）"
+                },
+                "new_str": {
+                    "type": "string",
+                    "description": "替换后的内容"
+                },
+                "skill_id": {
+                    "type": "string",
+                    "description": "Skill ID，指定后 path 相对于 skill 包目录"
+                }
+            },
+            "required": ["path", "old_str", "new_str"]
         },
     },
     {
