@@ -45,6 +45,7 @@ class TabCloseButton(QToolButton):
 
     def __init__(self, parent: QTabBar | None = None) -> None:
         super().__init__(parent)
+        self._tab_bar: QTabBar | None = parent if isinstance(parent, QTabBar) else None
         self.setObjectName(_TAB_CLOSE_BTN_OBJECT_NAME)
         self.setAutoRaise(True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -56,8 +57,24 @@ class TabCloseButton(QToolButton):
         self.setToolTip("关闭")
         self.clicked.connect(self._on_clicked)
 
+    def set_tab_bar(self, tab_bar: QTabBar) -> None:
+        self._tab_bar = tab_bar
+
     def _on_clicked(self) -> None:
+        if self._tab_bar is not None:
+            index = self._find_tab_index()
+            if index >= 0:
+                self._tab_bar.tabCloseRequested.emit(index)
         self.clicked_signal.emit()
+
+    def _find_tab_index(self) -> int:
+        if self._tab_bar is None:
+            return -1
+        for i in range(self._tab_bar.count()):
+            btn = self._tab_bar.tabButton(i, QTabBar.ButtonPosition.RightSide)
+            if btn is self:
+                return i
+        return -1
 
     def refresh_icon(self) -> None:
         self.setIcon(create_close_icon())
@@ -73,7 +90,6 @@ def setup_tab_close_button(tab_bar: QTabBar, index: int) -> TabCloseButton | Non
         return existing
     btn = TabCloseButton(tab_bar)
     tab_bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, btn)
-    btn.clicked_signal.connect(lambda idx=index: tab_bar.tabCloseRequested.emit(idx))
     return btn
 
 
