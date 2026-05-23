@@ -352,13 +352,10 @@ python main.py
 
 ## 🎨 Interface Preview
 
-![SkillAgent Main Interface](doc/img.png)
+![SkillAgent Main Interface](doc/img_1.png)
 
-![Skill Conversation Example](doc/img_1.png)
 
-![Tool Call Logs](doc/img_2.png)
-
-![Settings Dialog](doc/img_3.png)
+![Settings Dialog](doc/img_2.png)
 
 ---
 

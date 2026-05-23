@@ -352,13 +352,9 @@ python main.py
 
 ## 🎨 界面预览
 
-![SkillAgent 主界面](doc/img.png)
+![SkillAgent 主界面](doc/img_1.png)
 
-![Skill 对话示例](doc/img_1.png)
-
-![工具调用日志](doc/img_2.png)
-
-![设置界面](doc/img_3.png)
+![设置界面](doc/img_2.png)
 
 ---
 
