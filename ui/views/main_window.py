@@ -4,9 +4,9 @@ import json
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QKeyEvent
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLineEdit, QMainWindow, QMessageBox,
+    QHBoxLayout, QPlainTextEdit, QMainWindow, QMessageBox,
     QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -24,6 +24,32 @@ from ui.views.worker_thread import SkillAgentWorkerThread
 
 if TYPE_CHECKING:
     pass
+
+
+class MultiLineInputEdit(QPlainTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._send_callback = None
+
+    def set_send_callback(self, callback):
+        self._send_callback = callback
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        key = event.key()
+        modifiers = event.modifiers()
+
+        if key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)
+            else:
+                if self._send_callback:
+                    self._send_callback()
+                return
+        else:
+            super().keyPressEvent(event)
+
+    def insertFromMimeData(self, source):
+        super().insertFromMimeData(source)
 
 
 class SkillAgentMainWindow(QMainWindow):
@@ -93,11 +119,12 @@ class SkillAgentMainWindow(QMainWindow):
 
     def _setup_input_area(self, layout: QVBoxLayout) -> None:
         row = QHBoxLayout()
-        self.input_edit = QLineEdit()
+        self.input_edit = MultiLineInputEdit()
         self.input_edit.setPlaceholderText(UIState.PLACEHOLDER_DEFAULT)
         self.input_edit.setFont(QFont("Microsoft YaHei", 10))
         self.input_edit.setMinimumHeight(36)
-        self.input_edit.returnPressed.connect(self._on_send)
+        self.input_edit.setMaximumHeight(120)
+        self.input_edit.set_send_callback(self._on_send)
         self.send_btn = QPushButton("发送")
         self.send_btn.setObjectName("skillAgentSendButton")
         self.send_btn.setFont(QFont("Microsoft YaHei", 10))
@@ -263,7 +290,7 @@ class SkillAgentMainWindow(QMainWindow):
         SettingsDialog(self, self.skill_agent).exec()
 
     def _on_send(self) -> None:
-        text = self.input_edit.text().strip()
+        text = self.input_edit.toPlainText().strip()
         if not text:
             QMessageBox.warning(self, "提示", "请输入内容")
             return
