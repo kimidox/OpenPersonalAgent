@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from ui.styles.style_manager import StyleManager
 from ui.utils.markdown_utils import markdown_to_html_fragment, normalize_newlines
@@ -87,7 +87,29 @@ class MessageCardWidget(QWidget):
         self._apply_content_style()
         self._bubble_layout.addWidget(self._content_label)
 
+        import config
+        self._copy_button = None
+        if self._msg_type in config.COPY_BUTTON_ENABLED_TYPES:
+            self._copy_button = QToolButton()
+            self._copy_button.setText("复制")
+            self._copy_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            self._copy_button.setCursor(Qt.PointingHandCursor)
+            self._copy_button.setFixedSize(50, 24)
+            self._apply_copy_button_style()
+            self._copy_button.clicked.connect(self._on_copy_clicked)
+            self._copy_button.hide()
+
+            self._button_layout = QHBoxLayout()
+            self._button_layout.setContentsMargins(0, 6, 0, 0)
+            self._button_layout.setSpacing(0)
+            self._button_layout.addStretch()
+            self._button_layout.addWidget(self._copy_button)
+            self._bubble_layout.addLayout(self._button_layout)
+
         self._container_layout.addWidget(self._bubble_frame)
+        
+        if self._copy_button:
+            self.setMouseTracking(True)
 
         # 排列气泡 - 暂时设置一个默认值，后面会通过set_available_width调整
         if self._msg_type == "user":
@@ -217,3 +239,40 @@ class MessageCardWidget(QWidget):
 
     def minimumSizeHint(self):
         return super().minimumSizeHint()
+
+    def _apply_copy_button_style(self) -> None:
+        self._copy_button.setStyleSheet("""
+            QToolButton {
+                background-color: transparent;
+                color: #6b7280;
+                border: 1px solid #e5e7eb;
+                border-radius: 6px;
+                font-size: 11px;
+                padding: 2px 8px;
+            }
+            QToolButton:hover {
+                background-color: #f3f4f6;
+                color: #374151;
+                border-color: #d1d5db;
+            }
+            QToolButton:pressed {
+                background-color: #e5e7eb;
+            }
+        """)
+
+    def _on_copy_clicked(self) -> None:
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self._raw_content)
+        self._copy_button.setText("已复制")
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(1500, lambda: self._copy_button.setText("复制"))
+
+    def enterEvent(self, event) -> None:
+        if self._copy_button:
+            self._copy_button.show()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if self._copy_button:
+            self._copy_button.hide()
+        super().leaveEvent(event)

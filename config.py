@@ -127,3 +127,10 @@ if MEMORY_MIN_SCORE < 0:
 
 _msr = get_config("MEMORY_SEARCH_ENABLED")
 MEMORY_SEARCH_ENABLED = _env_bool(_msr, True)
+
+_cbet = get_config("COPY_BUTTON_ENABLED_TYPES")
+if _cbet is None or str(_cbet).strip() == "":
+    # COPY_BUTTON_ENABLED_TYPES = {"user", "assistant", "tool", "think", "tool_call"}
+    COPY_BUTTON_ENABLED_TYPES = {"user", "assistant"}
+else:
+    COPY_BUTTON_ENABLED_TYPES = set(t.strip().lower() for t in str(_cbet).split(",") if t.strip())
