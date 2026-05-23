@@ -70,12 +70,12 @@ class MessageHandler(QObject):
             self._handle_skill_content_message(message, session_tab)
 
     def _handle_tool_message(self, message: str, session_tab: 'ChatSessionTab') -> None:
-        safe = escape_html(normalize_newlines(message))
-        self.tool_message.emit(safe, session_tab)
+        normalized = normalize_newlines(message)
+        self.tool_message.emit(normalized, session_tab)
 
     def _handle_tool_call_message(self, message: str, session_tab: 'ChatSessionTab') -> None:
-        safe = escape_html(normalize_newlines(message))
-        self.tool_call_message.emit(safe, session_tab)
+        normalized = normalize_newlines(message)
+        self.tool_call_message.emit(normalized, session_tab)
 
     def _handle_doc_message(self, message: str, session_tab: 'ChatSessionTab') -> None:
         self.doc_message.emit(message, session_tab)
