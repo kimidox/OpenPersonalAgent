@@ -8,6 +8,7 @@ from pathlib import Path
 import config
 from resource_path import paths
 from skill import SkillRegistry
+from skill.loader import load_skill_memory_lazy
 from .context import ToolContext
 
 _RUN_COMMAND_DEFAULT_TIMEOUT = 60
@@ -575,6 +576,28 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
             return "已更新长期记忆\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
         else:
             return f"错误: 未知的 mode 参数: {mode}，支持 'append' 或 'overwrite'"
+
+    if name == "load_skill_memory":
+        skill_id = args.get("skill_id", "")
+        query = args.get("query", None)
+        limit = args.get("limit", 5)
+
+        if not skill_id:
+            return "错误: 缺少 skill_id 参数"
+
+        if registry is None:
+            return "错误: SkillRegistry 不可用"
+
+        skill = registry.get(str(skill_id))
+        if skill is None:
+            return f"错误: 未找到 Skill: {skill_id}"
+
+        # 加载技能记忆
+        load_skill_memory_lazy(skill, registry, query=query, limit=limit)
+
+        if skill.memory_content and skill.memory_content.strip():
+            return f"### Skill「{skill_id}」执行经验\n\n{skill.memory_content.strip()}\n\n请参考以上经验，避免重复之前的错误。"
+        return f"Skill「{skill_id}」暂无执行经验记录。"
 
     return f"未知原子工具: {name}"
 

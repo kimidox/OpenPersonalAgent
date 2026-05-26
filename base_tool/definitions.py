@@ -70,13 +70,16 @@ CONTROL_TOOL_DEFINITIONS: list[dict] = [
         "description": (
             "加载指定 Skill 的执行经验（skill_memory.md）。"
             "经验内容包含之前执行该 Skill 时遇到的问题及解决方案。"
+            "可通过 query 参数进行语义检索，精准获取与当前问题相关的经验。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "skill_id": {"type": "string", "description": "Skill 唯一标识"},
+                "query": {"type": "string", "description": "检索关键词，用于语义搜索相关经验。不提供则返回最近的记录。"},
+                "limit": {"type": "integer", "description": "返回经验记录的最大数量，默认 5。"},
             },
-            "required": ["skill_id"],
+            "required": ["skill_id","query","limit"],
         },
     },
 ]
@@ -203,7 +206,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                     "description": "最大返回记忆数量，默认 10",
                 },
             },
-            "required": [],
+            "required": ['query','limit'],
         },
     },
     {
