@@ -272,6 +272,98 @@ QWidget#skillAgentCentral QTabBar QToolButton#skillAgentTabCloseButton:pressed {
 #skillAgentSettingsDialog QDialogButtonBox QPushButton:focus {
   outline: none;
 }
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsAddConfigButton {
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 20px;
+  font-weight: 600;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsAddConfigButton:hover {
+  background-color: #1d4ed8;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsAddConfigButton:pressed {
+  background-color: #1e40af;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsAddConfigButton:disabled {
+  background-color: #93c5fd;
+  color: #e5e7eb;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsDeleteConfigButton {
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 20px;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsDeleteConfigButton:hover {
+  background-color: #fef2f2;
+  border-color: #fca5a5;
+  color: #ef4444;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsDeleteConfigButton:pressed {
+  background-color: #fee2e2;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsDeleteConfigButton:disabled {
+  background-color: #f9fafb;
+  color: #9ca3af;
+  border-color: #e5e7eb;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsMoveUpButton {
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 24px;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsMoveUpButton:hover {
+  background-color: #f9fafb;
+  border-color: #d1d5db;
+  color: #2563eb;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsMoveUpButton:pressed {
+  background-color: #f3f4f6;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsMoveUpButton:disabled {
+  background-color: #f9fafb;
+  color: #9ca3af;
+  border-color: #e5e7eb;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsMoveDownButton {
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 24px;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsMoveDownButton:hover {
+  background-color: #f9fafb;
+  border-color: #d1d5db;
+  color: #2563eb;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsMoveDownButton:pressed {
+  background-color: #f3f4f6;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsMoveDownButton:disabled {
+  background-color: #f9fafb;
+  color: #9ca3af;
+  border-color: #e5e7eb;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsSaveConfigButton {
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 22px;
+  font-weight: 600;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsSaveConfigButton:hover {
+  background-color: #1d4ed8;
+}
+#skillAgentSettingsDialog QPushButton#skillAgentSettingsSaveConfigButton:pressed {
+  background-color: #1e40af;
+}
 
 /* -------------------------------------------------------------------------
  * 组件：ChatSessionTab / 会话聊天区 — QTextEdit 控件级样式（Qt Style Sheet）

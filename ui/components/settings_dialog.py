@@ -256,7 +256,7 @@ class ConfigEditPanel(QWidget):
         layout.addLayout(form_layout)
 
         save_btn = QPushButton("保存参数")
-        save_btn.setObjectName("saveConfigButton")
+        save_btn.setObjectName("skillAgentSettingsSaveConfigButton")
         save_btn.clicked.connect(self._on_save)
         layout.addWidget(save_btn)
 
@@ -466,20 +466,24 @@ class SettingsDialog(QDialog):
 
         row1 = QHBoxLayout()
         self._add_btn = QPushButton("添加配置组")
+        self._add_btn.setObjectName("skillAgentSettingsAddConfigButton")
         self._add_btn.clicked.connect(self._on_add_config)
         row1.addWidget(self._add_btn)
 
         self._delete_btn = QPushButton("删除配置组")
+        self._delete_btn.setObjectName("skillAgentSettingsDeleteConfigButton")
         self._delete_btn.clicked.connect(self._on_delete_config)
         row1.addWidget(self._delete_btn)
         btn_layout.addLayout(row1)
 
         row3 = QHBoxLayout()
         self._move_up_btn = QPushButton("↑ 上移")
+        self._move_up_btn.setObjectName("skillAgentSettingsMoveUpButton")
         self._move_up_btn.clicked.connect(self._on_move_up)
         row3.addWidget(self._move_up_btn)
 
         self._move_down_btn = QPushButton("↓ 下移")
+        self._move_down_btn.setObjectName("skillAgentSettingsMoveDownButton")
         self._move_down_btn.clicked.connect(self._on_move_down)
         row3.addWidget(self._move_down_btn)
         btn_layout.addLayout(row3)
