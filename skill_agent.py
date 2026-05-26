@@ -323,41 +323,16 @@ class SkillAgent:
         return True
 
     def _is_dangerous_command(self, command: str) -> bool:
+        if not config.DANGEROUS_COMMAND_CHECK_ENABLED:
+            return False
+        
         cmd_lower = command.lower().strip()
-        dangerous_prefixes = [
-            "del ",
-            "erase ",
-            "rmdir ",
-            "rd ",
-            "copy ",
-            "move ",
-            "ren ",
-            "rename ",
-            "mkdir ",
-            "md ",
-        ]
-        for pattern in dangerous_prefixes:
+        
+        for pattern in config.DANGEROUS_COMMAND_PREFIXES:
             if cmd_lower.startswith(pattern):
                 return True
         
-        dangerous_contains = [
-            " > ",
-            " >> ",
-            " >",
-            " >>",
-            " set-content ",
-            " set-content-",
-            " add-content ",
-            " add-content-",
-            " out-file ",
-            " out-file-",
-            " new-item ",
-            " new-item-",
-            " remove-item ",
-            " remove-item-",
-            " rm ",
-        ]
-        for pattern in dangerous_contains:
+        for pattern in config.DANGEROUS_COMMAND_CONTAINS:
             if pattern in cmd_lower:
                 return True
         

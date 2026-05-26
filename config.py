@@ -155,3 +155,29 @@ if _cbet is None or str(_cbet).strip() == "":
     COPY_BUTTON_ENABLED_TYPES = {"user", "assistant"}
 else:
     COPY_BUTTON_ENABLED_TYPES = set(t.strip().lower() for t in str(_cbet).split(",") if t.strip())
+
+# ===== 危险命令检测配置 =====
+
+# 是否启用危险命令检测（true/false）
+_dce = get_config("DANGEROUS_COMMAND_CHECK_ENABLED")
+DANGEROUS_COMMAND_CHECK_ENABLED = _env_bool(_dce, True)
+
+# 危险命令前缀列表（匹配命令开头），每行一个
+_dcp = get_config("DANGEROUS_COMMAND_PREFIXES")
+if _dcp is None or str(_dcp).strip() == "":
+    DANGEROUS_COMMAND_PREFIXES = [
+        "del ", "erase ", "rmdir ", "rd ", "copy ", "move ", "ren ", "rename ", "mkdir ", "md ",
+    ]
+else:
+    DANGEROUS_COMMAND_PREFIXES = [p.strip() for p in str(_dcp).split("\n") if p.strip()]
+
+# 危险命令包含模式列表（匹配命令任意位置），每行一个
+_dcc = get_config("DANGEROUS_COMMAND_CONTAINS")
+if _dcc is None or str(_dcc).strip() == "":
+    DANGEROUS_COMMAND_CONTAINS = [
+        " > ", " >> ", " >", " >>", " set-content ", " set-content-",
+        " add-content ", " add-content-", " out-file ", " out-file-",
+        " new-item ", " new-item-", " remove-item ", " remove-item-", " rm ",
+    ]
+else:
+    DANGEROUS_COMMAND_CONTAINS = [p.strip() for p in str(_dcc).split("\n") if p.strip()]
