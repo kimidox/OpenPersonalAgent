@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Callable
 
+from logger import get_module_logger
+
+logger = get_module_logger("settings_dialog")
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
@@ -83,25 +87,28 @@ def _llm_request_params_text() -> str:
 
 
 class ConfigItemWidget(QWidget):
-    """配置组列表项组件 - 简化版，完全信任QButtonGroup管理互斥性"""
+    """配置组列表项组件 - 完全自己管理状态"""
 
     selected = Signal(str)  # 信号：被选中查看/编辑，传递配置ID
+    activated = Signal(str)  # 信号：被激活，传递配置ID
     
     def __init__(self, config_item: LLMConfigItem, is_active: bool, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.config_id = config_item.id
+        self._is_active = is_active
         self._setup_ui(config_item)
-        self.set_active(is_active)
+        self._update_appearance()
 
     def _setup_ui(self, config_item: LLMConfigItem) -> None:
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
 
-        # 使用 QRadioButton 显示激活状态
-        self._radio_btn = QRadioButton()
-        self._radio_btn.setFixedWidth(20)
-        layout.addWidget(self._radio_btn)
+        # 使用一个简单的指示器代替 QRadioButton
+        self._indicator = QLabel("●")
+        self._indicator.setFixedWidth(20)
+        self._indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._indicator)
 
         info_layout = QVBoxLayout()
         info_layout.setSpacing(2)
@@ -119,6 +126,16 @@ class ConfigItemWidget(QWidget):
 
         # 让点击整个区域也触发选中
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        # 安装事件过滤器来处理点击
+        self._indicator.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """事件过滤器，处理指示器的点击"""
+        if obj == self._indicator and event.type() == event.Type.MouseButtonPress:
+            self.activated.emit(self.config_id)
+            return True
+        return False
 
     def mousePressEvent(self, event) -> None:
         """点击整个控件时，选中为编辑对象（不激活）"""
@@ -127,24 +144,30 @@ class ConfigItemWidget(QWidget):
 
     def set_active(self, is_active: bool) -> None:
         """设置激活状态"""
-        self._radio_btn.setChecked(is_active)
+        logger.debug(f"[ConfigItemWidget] set_active called for {self.config_id}, is_active={is_active}")
+        self._is_active = is_active
         self._update_appearance()
 
     def _update_appearance(self) -> None:
-        """更新外观显示 - 完全重置样式"""
-        # 先清除所有样式，避免残留
-        self.setStyleSheet("")
-        self.style().unpolish(self)
+        """更新外观显示 - 简单直接"""
+        logger.debug(f"[ConfigItemWidget] _update_appearance called for {self.config_id}, is_active={self._is_active}")
         
-        # 重新应用正确的样式
-        if self._radio_btn.isChecked():
-            self.setStyleSheet("background-color: #ecfdf5; border-radius: 4px;")
+        # 更新指示器颜色
+        if self._is_active:
+            self._indicator.setStyleSheet("color: #10b981; font-weight: bold;")
         else:
-            self.setStyleSheet("background-color: transparent;")
+            self._indicator.setStyleSheet("color: #d1d5db;")
         
-        # 强制应用新样式
-        self.style().polish(self)
-        self.repaint()
+        # 使用 QPalette 来设置背景色
+        palette = self.palette()
+        if self._is_active:
+            palette.setColor(self.backgroundRole(), QColor("#ecfdf5"))
+        else:
+            palette.setColor(self.backgroundRole(), QColor(0, 0, 0, 0))  # 透明
+        
+        self.setPalette(palette)
+        self.setAutoFillBackground(True)
+        self.update()
 
 
 class ConfigEditPanel(QWidget):
@@ -359,8 +382,8 @@ class SettingsDialog(QDialog):
         self._on_config_changed = on_config_changed
         self._disabled: set[str] = set(load_disabled_skill_ids())
         self._skill_checks: list[tuple[str, QCheckBox]] = []
-        self._config_button_group = QButtonGroup(self)
-        self._config_button_group.setExclusive(True)  # 关键：设置为互斥模式，确保只有一个按钮可以选中
+        # 不再使用 QButtonGroup，自己管理互斥性
+        self._config_widgets: dict[str, ConfigItemWidget] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -527,10 +550,7 @@ class SettingsDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _refresh_config_list(self) -> None:
-        # 清空按钮组
-        for button in self._config_button_group.buttons():
-            self._config_button_group.removeButton(button)
-        
+        logger.debug("[SettingsDialog] _refresh_config_list called")
         # 清空现有配置列表
         while self._config_list_layout.count() > 1:
             item = self._config_list_layout.takeAt(0)
@@ -541,34 +561,24 @@ class SettingsDialog(QDialog):
         configs = list_configs()
         active_config = get_active_config_item()
         active_id = active_config.id if active_config else None
+        logger.debug(f"[SettingsDialog] Active config id from data: {active_id}")
 
-        # 重新创建所有组件，添加到QButtonGroup让它管理互斥性
+        # 重新创建所有组件，自己管理互斥性
         for config_item in configs:
             is_active = (config_item.id == active_id)
             widget = ConfigItemWidget(config_item, is_active)
             widget.selected.connect(self._on_config_selected)
-            # 添加到QButtonGroup让Qt管理互斥性
-            self._config_button_group.addButton(widget._radio_btn)
+            widget.activated.connect(self._on_config_activate)
             self._config_list_layout.insertWidget(self._config_list_layout.count() - 1, widget)
             self._config_widgets[config_item.id] = widget
+            logger.debug(f"[SettingsDialog] Created widget for {config_item.id}, is_active={is_active}")
 
         self._selected_config_id: str | None = active_id
-        
-        # 监听按钮组的点击事件
-        self._config_button_group.buttonClicked.connect(self._on_config_button_clicked)
         
         if active_id:
             self._load_config_to_editor(active_id)
             
         self._update_button_states()
-
-    def _on_config_button_clicked(self, button: QRadioButton) -> None:
-        """QButtonGroup中某个单选按钮被点击"""
-        # 找到对应的配置项ID
-        for config_id, widget in self._config_widgets.items():
-            if widget._radio_btn is button:
-                self._on_config_activate(config_id)
-                break
 
     def _on_config_selected(self, config_id: str) -> None:
         """配置被选中用于查看/编辑"""
@@ -578,11 +588,17 @@ class SettingsDialog(QDialog):
 
     def _on_config_activate(self, config_id: str) -> None:
         """配置被激活"""
+        logger.debug(f"[SettingsDialog] _on_config_activate called for {config_id}")
         if set_active_config(config_id):
+            logger.debug(f"[SettingsDialog] set_active_config succeeded for {config_id}")
             self._selected_config_id = config_id
-            # 更新所有组件的外观（QButtonGroup已经处理了互斥性，我们只需更新样式）
+            
+            # 完全自己管理互斥性：遍历所有配置项，设置正确的激活状态
             for cid, widget in self._config_widgets.items():
-                widget._update_appearance()
+                is_active = (cid == config_id)
+                logger.debug(f"[SettingsDialog] Setting {cid} active={is_active}")
+                widget.set_active(is_active)
+            
             self._load_config_to_editor(config_id)
             self._update_status_bar()
             self._refresh_params()
