@@ -3,25 +3,52 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QFrame,
+    QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
+    QStatusBar,
     QTextEdit,
+    QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
-from llm.llm_config_manager import LLMConfig, get_current_config, reset_to_default, set_config
+from llm.llm_config_manager import (
+    LLMConfig,
+    LLMConfigItem,
+    add_config,
+    delete_config,
+    generate_config_id,
+    get_active_config_item,
+    get_current_config,
+    get_current_multi_config,
+    get_switch_events,
+    is_auto_switch_enabled,
+    list_configs,
+    move_config_down,
+    move_config_up,
+    reset_to_default,
+    set_active_config,
+    set_multi_config,
+    update_config,
+)
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 from ui.styles.style_manager import StyleManager
 
@@ -55,8 +82,266 @@ def _llm_request_params_text() -> str:
     return "\n".join(parts)
 
 
+class ConfigItemWidget(QWidget):
+    """配置组列表项组件 - 简化版，完全信任QButtonGroup管理互斥性"""
+
+    selected = Signal(str)  # 信号：被选中查看/编辑，传递配置ID
+    
+    def __init__(self, config_item: LLMConfigItem, is_active: bool, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.config_id = config_item.id
+        self._setup_ui(config_item)
+        self.set_active(is_active)
+
+    def _setup_ui(self, config_item: LLMConfigItem) -> None:
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+
+        # 使用 QRadioButton 显示激活状态
+        self._radio_btn = QRadioButton()
+        self._radio_btn.setFixedWidth(20)
+        layout.addWidget(self._radio_btn)
+
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(2)
+
+        self._name_label = QLabel(config_item.name)
+        self._name_label.setFont(QFont("Microsoft YaHei", 9, QFont.Weight.Bold))
+        info_layout.addWidget(self._name_label)
+
+        self._model_label = QLabel(config_item.model_name)
+        self._model_label.setFont(QFont("Microsoft YaHei", 8))
+        self._model_label.setStyleSheet("color: #6b7280;")
+        info_layout.addWidget(self._model_label)
+
+        layout.addLayout(info_layout, stretch=1)
+
+        # 让点击整个区域也触发选中
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:
+        """点击整个控件时，选中为编辑对象（不激活）"""
+        super().mousePressEvent(event)
+        self.selected.emit(self.config_id)
+
+    def set_active(self, is_active: bool) -> None:
+        """设置激活状态"""
+        self._radio_btn.setChecked(is_active)
+        self._update_appearance()
+
+    def _update_appearance(self) -> None:
+        """更新外观显示 - 完全重置样式"""
+        # 先清除所有样式，避免残留
+        self.setStyleSheet("")
+        self.style().unpolish(self)
+        
+        # 重新应用正确的样式
+        if self._radio_btn.isChecked():
+            self.setStyleSheet("background-color: #ecfdf5; border-radius: 4px;")
+        else:
+            self.setStyleSheet("background-color: transparent;")
+        
+        # 强制应用新样式
+        self.style().polish(self)
+        self.repaint()
+
+
+class ConfigEditPanel(QWidget):
+    """配置参数编辑面板"""
+
+    config_saved = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._current_config_id: str | None = None
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        title = QLabel("配置参数编辑")
+        title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        layout.addWidget(title)
+
+        form_layout = QVBoxLayout()
+        form_layout.setSpacing(6)
+
+        self._config_name_edit = QLineEdit()
+        self._config_name_edit.setPlaceholderText("配置名称（如：主配置、备用配置）")
+        self._config_name_edit.setObjectName("configNameEdit")
+        form_layout.addWidget(QLabel("配置名称："))
+        form_layout.addWidget(self._config_name_edit)
+
+        self._model_name_edit = QLineEdit()
+        self._model_name_edit.setPlaceholderText("模型名称（如：qwen3.5-plus、glm-4）")
+        form_layout.addWidget(QLabel("模型名称："))
+        form_layout.addWidget(self._model_name_edit)
+
+        self._api_key_edit = QLineEdit()
+        self._api_key_edit.setPlaceholderText("API Key")
+        self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        form_layout.addWidget(QLabel("API Key："))
+        form_layout.addWidget(self._api_key_edit)
+
+        self._base_url_edit = QLineEdit()
+        self._base_url_edit.setPlaceholderText("API 基础 URL")
+        form_layout.addWidget(QLabel("Base URL："))
+        form_layout.addWidget(self._base_url_edit)
+
+        temp_layout = QHBoxLayout()
+        temp_layout.addWidget(QLabel("温度系数："))
+        self._temperature_edit = QLineEdit()
+        self._temperature_edit.setPlaceholderText("0.7")
+        self._temperature_edit.setFixedWidth(80)
+        temp_layout.addWidget(self._temperature_edit)
+        temp_hint = QLabel("（0-2，值越高越随机）")
+        temp_hint.setStyleSheet("color: #6b7280; font-size: 8pt;")
+        temp_layout.addWidget(temp_hint)
+        temp_layout.addStretch()
+        form_layout.addLayout(temp_layout)
+
+        top_p_layout = QHBoxLayout()
+        top_p_layout.addWidget(QLabel("Top P："))
+        self._top_p_edit = QLineEdit()
+        self._top_p_edit.setPlaceholderText("0.95")
+        self._top_p_edit.setFixedWidth(80)
+        top_p_layout.addWidget(self._top_p_edit)
+        top_p_hint = QLabel("（0-1，值越小越聚焦）")
+        top_p_hint.setStyleSheet("color: #6b7280; font-size: 8pt;")
+        top_p_layout.addWidget(top_p_hint)
+        top_p_layout.addStretch()
+        form_layout.addLayout(top_p_layout)
+
+        freq_layout = QHBoxLayout()
+        freq_layout.addWidget(QLabel("频率惩罚："))
+        self._frequency_penalty_edit = QLineEdit()
+        self._frequency_penalty_edit.setPlaceholderText("0.6")
+        self._frequency_penalty_edit.setFixedWidth(80)
+        freq_layout.addWidget(self._frequency_penalty_edit)
+        freq_hint = QLabel("（值越高越避免重复）")
+        freq_hint.setStyleSheet("color: #6b7280; font-size: 8pt;")
+        freq_layout.addWidget(freq_hint)
+        freq_layout.addStretch()
+        form_layout.addLayout(freq_layout)
+
+        self._enable_thinking_check = QCheckBox("启用深度思考模式")
+        form_layout.addWidget(self._enable_thinking_check)
+
+        layout.addLayout(form_layout)
+
+        save_btn = QPushButton("保存参数")
+        save_btn.setObjectName("saveConfigButton")
+        save_btn.clicked.connect(self._on_save)
+        layout.addWidget(save_btn)
+
+        layout.addStretch()
+
+    def load_config(self, config_item: LLMConfigItem | None) -> None:
+        if config_item is None:
+            self._current_config_id = None
+            self._config_name_edit.clear()
+            self._model_name_edit.clear()
+            self._api_key_edit.clear()
+            self._base_url_edit.clear()
+            self._temperature_edit.clear()
+            self._top_p_edit.clear()
+            self._frequency_penalty_edit.clear()
+            self._enable_thinking_check.setChecked(True)
+            self.setEnabled(False)
+            return
+
+        self._current_config_id = config_item.id
+        self._config_name_edit.setText(config_item.name)
+        self._model_name_edit.setText(config_item.model_name)
+        self._api_key_edit.setText(config_item.api_key)
+        self._base_url_edit.setText(config_item.base_url)
+        self._temperature_edit.setText(str(config_item.temperature))
+        self._top_p_edit.setText(str(config_item.top_p))
+        self._frequency_penalty_edit.setText(str(config_item.frequency_penalty))
+        self._enable_thinking_check.setChecked(config_item.enable_thinking)
+        self.setEnabled(True)
+
+    def _on_save(self) -> None:
+        if not self._current_config_id:
+            QMessageBox.warning(self, "警告", "请先选择一个配置组")
+            return
+
+        config_name = self._config_name_edit.text().strip()
+        model_name = self._model_name_edit.text().strip()
+        api_key = self._api_key_edit.text().strip()
+        base_url = self._base_url_edit.text().strip()
+
+        if not config_name:
+            QMessageBox.warning(self, "警告", "请输入配置名称")
+            return
+        if not model_name:
+            QMessageBox.warning(self, "警告", "请输入模型名称")
+            return
+        if not api_key:
+            QMessageBox.warning(self, "警告", "请输入 API Key")
+            return
+        if not base_url:
+            QMessageBox.warning(self, "警告", "请输入 API 基础 URL")
+            return
+
+        temperature = 0.7
+        try:
+            temp_val = float(self._temperature_edit.text().strip())
+            if 0 <= temp_val <= 2:
+                temperature = temp_val
+            else:
+                QMessageBox.warning(self, "警告", "温度系数必须在 0 到 2 之间")
+                return
+        except ValueError:
+            QMessageBox.warning(self, "警告", "温度系数必须是数字")
+            return
+
+        top_p = 0.95
+        try:
+            top_p_val = float(self._top_p_edit.text().strip())
+            if 0 <= top_p_val <= 1:
+                top_p = top_p_val
+            else:
+                QMessageBox.warning(self, "警告", "Top P 必须在 0 到 1 之间")
+                return
+        except ValueError:
+            QMessageBox.warning(self, "警告", "Top P 必须是数字")
+            return
+
+        frequency_penalty = 0.6
+        try:
+            freq_val = float(self._frequency_penalty_edit.text().strip())
+            frequency_penalty = freq_val
+        except ValueError:
+            QMessageBox.warning(self, "警告", "频率惩罚必须是数字")
+            return
+
+        enable_thinking = self._enable_thinking_check.isChecked()
+
+        updated_config = LLMConfigItem(
+            id=self._current_config_id,
+            name=config_name,
+            model_name=model_name,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            enable_thinking=enable_thinking,
+        )
+
+        if update_config(self._current_config_id, updated_config):
+            QMessageBox.information(self, "提示", "配置已保存")
+            self.config_saved.emit()
+        else:
+            QMessageBox.warning(self, "警告", "保存配置失败")
+
+
 class SettingsDialog(QDialog):
-    """会话设置：模型信息、LLM 请求参数摘要、Skill 启用/禁用（禁用后不可加载到会话）。"""
+    """会话设置：多配置组管理、模型信息、Skill 启用/禁用。"""
 
     def __init__(
         self,
@@ -67,139 +352,56 @@ class SettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("skillAgentSettingsDialog")
-        self.setWindowTitle("会话与模型设置")
+        self.setWindowTitle("大模型配置管理")
         self.setModal(True)
-        self.resize(560, 720)
+        self.resize(900, 800)
         self._skill_agent = skill_agent
         self._on_config_changed = on_config_changed
         self._disabled: set[str] = set(load_disabled_skill_ids())
         self._skill_checks: list[tuple[str, QCheckBox]] = []
+        self._config_button_group = QButtonGroup(self)
+        self._config_button_group.setExclusive(True)  # 关键：设置为互斥模式，确保只有一个按钮可以选中
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
 
-        self._setup_llm_config_section(root)
-        self._setup_config_buttons(root)
-        self._setup_params_section(root)
-        self._setup_skills_section(root)
-        self._setup_close_button(root)
+        self._setup_main_content(root)
+        self._setup_auto_switch_section(root)
+        self._setup_status_bar(root)
+        self._setup_bottom_buttons(root)
 
         self._apply_style()
+        self._refresh_config_list()
         self._repopulate_skill_rows()
-        self._refresh_llm_block()
+        self._update_status_bar()
 
     def _apply_style(self) -> None:
         style = StyleManager.get_style("settings_dialog_stylesheet")
         if style:
             self.setStyleSheet(style)
 
-    def _setup_llm_config_section(self, layout: QVBoxLayout) -> None:
-        lm = QLabel("大模型配置")
-        f = lm.font()
-        f.setBold(True)
-        lm.setFont(f)
-        layout.addWidget(lm)
+    def _setup_main_content(self, layout: QVBoxLayout) -> None:
+        # 顶部：配置管理区域（左右分栏）
+        config_section = QGroupBox("大模型配置组管理")
+        config_layout = QVBoxLayout(config_section)
 
-        self._model_name_edit = QLineEdit()
-        self._model_name_edit.setPlaceholderText("模型名称（如：qwen3.5-plus、glm-4）")
-        layout.addWidget(self._model_name_edit)
+        config_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        self._api_key_edit = QLineEdit()
-        self._api_key_edit.setPlaceholderText("API Key")
-        layout.addWidget(self._api_key_edit)
+        left_panel = self._create_left_panel()
+        config_splitter.addWidget(left_panel)
 
-        self._base_url_edit = QLineEdit()
-        self._base_url_edit.setPlaceholderText("API 基础 URL")
-        layout.addWidget(self._base_url_edit)
+        right_panel = self._create_right_panel()
+        config_splitter.addWidget(right_panel)
 
-        temp_layout = QHBoxLayout()
-        temp_label = QLabel("温度系数：")
-        temp_label.setFont(QFont("Microsoft YaHei", 9))
-        temp_layout.addWidget(temp_label)
-        self._temperature_edit = QLineEdit()
-        self._temperature_edit.setPlaceholderText("0.7")
-        self._temperature_edit.setFixedWidth(80)
-        temp_layout.addWidget(self._temperature_edit)
-        temp_hint = QLabel("（控制输出随机性，0-2之间，值越高越随机）")
-        temp_hint.setFont(QFont("Microsoft YaHei", 9))
-        temp_hint.setStyleSheet("color: #6b7280;")
-        temp_layout.addWidget(temp_hint)
-        layout.addLayout(temp_layout)
+        config_splitter.setSizes([280, 620])
+        config_layout.addWidget(config_splitter)
 
-        top_p_layout = QHBoxLayout()
-        top_p_label = QLabel("Top P：")
-        top_p_label.setFont(QFont("Microsoft YaHei", 9))
-        top_p_layout.addWidget(top_p_label)
-        self._top_p_edit = QLineEdit()
-        self._top_p_edit.setPlaceholderText("0.95")
-        self._top_p_edit.setFixedWidth(80)
-        top_p_layout.addWidget(self._top_p_edit)
-        top_p_hint = QLabel("（核采样，0-1之间，值越小越聚焦）")
-        top_p_hint.setFont(QFont("Microsoft YaHei", 9))
-        top_p_hint.setStyleSheet("color: #6b7280;")
-        top_p_layout.addWidget(top_p_hint)
-        layout.addLayout(top_p_layout)
+        layout.addWidget(config_section)
 
-        freq_pen_layout = QHBoxLayout()
-        freq_pen_label = QLabel("频率惩罚：")
-        freq_pen_label.setFont(QFont("Microsoft YaHei", 9))
-        freq_pen_layout.addWidget(freq_pen_label)
-        self._frequency_penalty_edit = QLineEdit()
-        self._frequency_penalty_edit.setPlaceholderText("0.6")
-        self._frequency_penalty_edit.setFixedWidth(80)
-        freq_pen_layout.addWidget(self._frequency_penalty_edit)
-        freq_pen_hint = QLabel("（控制重复输出，值越高越避免重复）")
-        freq_pen_hint.setFont(QFont("Microsoft YaHei", 9))
-        freq_pen_hint.setStyleSheet("color: #6b7280;")
-        freq_pen_layout.addWidget(freq_pen_hint)
-        layout.addLayout(freq_pen_layout)
-
-        enable_thinking_layout = QHBoxLayout()
-        self._enable_thinking_check = QCheckBox("启用深度思考模式")
-        self._enable_thinking_check.setFont(QFont("Microsoft YaHei", 9))
-        enable_thinking_layout.addWidget(self._enable_thinking_check)
-        thinking_hint = QLabel("（启用后模型会输出思考过程）")
-        thinking_hint.setFont(QFont("Microsoft YaHei", 9))
-        thinking_hint.setStyleSheet("color: #6b7280;")
-        enable_thinking_layout.addWidget(thinking_hint)
-        layout.addLayout(enable_thinking_layout)
-
-    def _setup_config_buttons(self, layout: QVBoxLayout) -> None:
-        config_buttons = QHBoxLayout()
-        self._apply_btn = QPushButton("应用配置")
-        self._apply_btn.setObjectName("skillAgentSettingsApplyButton")
-        self._apply_btn.clicked.connect(self._on_apply_config)
-        config_buttons.addWidget(self._apply_btn)
-
-        self._reset_btn = QPushButton("恢复默认")
-        self._reset_btn.setObjectName("skillAgentSettingsResetButton")
-        self._reset_btn.clicked.connect(self._on_reset_config)
-        config_buttons.addWidget(self._reset_btn)
-        layout.addLayout(config_buttons)
-
-    def _setup_params_section(self, layout: QVBoxLayout) -> None:
-        lp = QLabel("当前 LLM 请求参数（只读）")
-        fp = lp.font()
-        fp.setBold(True)
-        lp.setFont(fp)
-        layout.addWidget(lp)
-        self._params_edit = QTextEdit()
-        self._params_edit.setReadOnly(True)
-        self._params_edit.setFont(QFont("Consolas", 9))
-        self._params_edit.setMinimumHeight(100)
-        self._params_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        layout.addWidget(self._params_edit)
-
-    def _setup_skills_section(self, layout: QVBoxLayout) -> None:
-        ls = QLabel(
-            "Skill 列表：勾选「启用」表示可用；取消勾选即禁用，禁用后不出现在系统列表中，且无法 select_skill 加载。"
-        )
-        ls.setWordWrap(True)
-        fs = ls.font()
-        fs.setBold(True)
-        ls.setFont(fs)
-        layout.addWidget(ls)
+        # 底部：Skill列表（独立区域，所有配置共用）
+        skills_section = QGroupBox("Skill 管理（所有配置共用）")
+        skills_layout = QVBoxLayout(skills_section)
 
         self._skills_scroll = QScrollArea()
         self._skills_scroll.setWidgetResizable(True)
@@ -210,25 +412,336 @@ class SettingsDialog(QDialog):
         self._skills_layout.setContentsMargins(8, 8, 8, 8)
         self._skills_layout.setSpacing(6)
         self._skills_scroll.setWidget(self._skills_inner)
-        layout.addWidget(self._skills_scroll, stretch=1)
+        skills_layout.addWidget(self._skills_scroll)
 
-    def _setup_close_button(self, layout: QVBoxLayout) -> None:
+        layout.addWidget(skills_section)
+
+    def _create_left_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        title = QLabel("配置组列表")
+        title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        layout.addWidget(title)
+
+        self._config_list_widget = QWidget()
+        self._config_list_layout = QVBoxLayout(self._config_list_widget)
+        self._config_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._config_list_layout.setSpacing(4)
+        self._config_list_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._config_list_widget)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        layout.addWidget(scroll, stretch=1)
+
+        btn_layout = QVBoxLayout()
+        btn_layout.setSpacing(4)
+
+        row1 = QHBoxLayout()
+        self._add_btn = QPushButton("添加配置组")
+        self._add_btn.clicked.connect(self._on_add_config)
+        row1.addWidget(self._add_btn)
+
+        self._delete_btn = QPushButton("删除配置组")
+        self._delete_btn.clicked.connect(self._on_delete_config)
+        row1.addWidget(self._delete_btn)
+        btn_layout.addLayout(row1)
+
+        row3 = QHBoxLayout()
+        self._move_up_btn = QPushButton("↑ 上移")
+        self._move_up_btn.clicked.connect(self._on_move_up)
+        row3.addWidget(self._move_up_btn)
+
+        self._move_down_btn = QPushButton("↓ 下移")
+        self._move_down_btn.clicked.connect(self._on_move_down)
+        row3.addWidget(self._move_down_btn)
+        btn_layout.addLayout(row3)
+
+        layout.addLayout(btn_layout)
+
+        return panel
+
+    def _create_right_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self._config_edit_panel = ConfigEditPanel()
+        self._config_edit_panel.config_saved.connect(self._on_config_saved)
+        self._config_edit_panel.setEnabled(False)
+        layout.addWidget(self._config_edit_panel)
+
+        params_group = QGroupBox("当前 LLM 请求参数（只读）")
+        params_layout = QVBoxLayout(params_group)
+        self._params_edit = QTextEdit()
+        self._params_edit.setReadOnly(True)
+        self._params_edit.setFont(QFont("Consolas", 9))
+        self._params_edit.setMinimumHeight(100)
+        self._params_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        params_layout.addWidget(self._params_edit)
+        layout.addWidget(params_group)
+
+        return panel
+
+    def _setup_auto_switch_section(self, layout: QVBoxLayout) -> None:
+        auto_switch_layout = QHBoxLayout()
+        self._auto_switch_check = QCheckBox("启用自动故障切换（当当前配置失败时自动切换到下一组）")
+        self._auto_switch_check.setChecked(is_auto_switch_enabled())
+        self._auto_switch_check.stateChanged.connect(self._on_auto_switch_changed)
+        auto_switch_layout.addWidget(self._auto_switch_check)
+        auto_switch_layout.addStretch()
+        layout.addLayout(auto_switch_layout)
+
+    def _setup_status_bar(self, layout: QVBoxLayout) -> None:
+        self._status_bar = QStatusBar()
+        self._status_bar.setSizeGripEnabled(False)
+        layout.addWidget(self._status_bar)
+
+    def _setup_bottom_buttons(self, layout: QVBoxLayout) -> None:
+        btn_layout = QHBoxLayout()
+
+        self._apply_all_btn = QPushButton("应用全部配置")
+        self._apply_all_btn.setObjectName("skillAgentSettingsApplyButton")
+        self._apply_all_btn.clicked.connect(self._on_apply_all)
+        btn_layout.addWidget(self._apply_all_btn)
+
+        self._reset_btn = QPushButton("恢复默认")
+        self._reset_btn.setObjectName("skillAgentSettingsResetButton")
+        self._reset_btn.clicked.connect(self._on_reset_config)
+        btn_layout.addWidget(self._reset_btn)
+
+        btn_layout.addStretch()
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close_btn = buttons.button(QDialogButtonBox.StandardButton.Close)
         if close_btn is not None:
             close_btn.setText("关闭")
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        btn_layout.addWidget(buttons)
 
-    def _refresh_llm_block(self) -> None:
-        current = get_current_config()
-        self._model_name_edit.setText(current.model_name)
-        self._api_key_edit.setText(current.api_key)
-        self._base_url_edit.setText(current.base_url)
-        self._temperature_edit.setText(str(current.temperature))
-        self._top_p_edit.setText(str(current.top_p))
-        self._frequency_penalty_edit.setText(str(current.frequency_penalty))
-        self._enable_thinking_check.setChecked(current.enable_thinking)
+        layout.addLayout(btn_layout)
+
+    def _refresh_config_list(self) -> None:
+        # 清空按钮组
+        for button in self._config_button_group.buttons():
+            self._config_button_group.removeButton(button)
+        
+        # 清空现有配置列表
+        while self._config_list_layout.count() > 1:
+            item = self._config_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._config_widgets: dict[str, ConfigItemWidget] = {}
+        configs = list_configs()
+        active_config = get_active_config_item()
+        active_id = active_config.id if active_config else None
+
+        # 重新创建所有组件，添加到QButtonGroup让它管理互斥性
+        for config_item in configs:
+            is_active = (config_item.id == active_id)
+            widget = ConfigItemWidget(config_item, is_active)
+            widget.selected.connect(self._on_config_selected)
+            # 添加到QButtonGroup让Qt管理互斥性
+            self._config_button_group.addButton(widget._radio_btn)
+            self._config_list_layout.insertWidget(self._config_list_layout.count() - 1, widget)
+            self._config_widgets[config_item.id] = widget
+
+        self._selected_config_id: str | None = active_id
+        
+        # 监听按钮组的点击事件
+        self._config_button_group.buttonClicked.connect(self._on_config_button_clicked)
+        
+        if active_id:
+            self._load_config_to_editor(active_id)
+            
+        self._update_button_states()
+
+    def _on_config_button_clicked(self, button: QRadioButton) -> None:
+        """QButtonGroup中某个单选按钮被点击"""
+        # 找到对应的配置项ID
+        for config_id, widget in self._config_widgets.items():
+            if widget._radio_btn is button:
+                self._on_config_activate(config_id)
+                break
+
+    def _on_config_selected(self, config_id: str) -> None:
+        """配置被选中用于查看/编辑"""
+        self._selected_config_id = config_id
+        self._load_config_to_editor(config_id)
+        self._update_button_states()
+
+    def _on_config_activate(self, config_id: str) -> None:
+        """配置被激活"""
+        if set_active_config(config_id):
+            self._selected_config_id = config_id
+            # 更新所有组件的外观（QButtonGroup已经处理了互斥性，我们只需更新样式）
+            for cid, widget in self._config_widgets.items():
+                widget._update_appearance()
+            self._load_config_to_editor(config_id)
+            self._update_status_bar()
+            self._refresh_params()
+            if self._on_config_changed:
+                self._on_config_changed()
+
+    def _load_config_to_editor(self, config_id: str) -> None:
+        configs = list_configs()
+        for config_item in configs:
+            if config_item.id == config_id:
+                self._config_edit_panel.load_config(config_item)
+                return
+        self._config_edit_panel.load_config(None)
+
+    def _update_button_states(self) -> None:
+        configs = list_configs()
+        has_selection = self._selected_config_id is not None
+        can_delete = len(configs) > 1 and has_selection
+
+        self._delete_btn.setEnabled(can_delete)
+
+        if has_selection:
+            config_ids = [c.id for c in configs]
+            idx = config_ids.index(self._selected_config_id) if self._selected_config_id in config_ids else -1
+            self._move_up_btn.setEnabled(idx > 0)
+            self._move_down_btn.setEnabled(idx >= 0 and idx < len(config_ids) - 1)
+        else:
+            self._move_up_btn.setEnabled(False)
+            self._move_down_btn.setEnabled(False)
+
+    def _on_add_config(self) -> None:
+        active_config = get_active_config_item()
+        if active_config:
+            new_config = LLMConfigItem(
+                id=generate_config_id(),
+                name="新配置",
+                model_name=active_config.model_name,
+                api_key=active_config.api_key,
+                base_url=active_config.base_url,
+                temperature=active_config.temperature,
+                top_p=active_config.top_p,
+                frequency_penalty=active_config.frequency_penalty,
+                enable_thinking=active_config.enable_thinking,
+            )
+        else:
+            current = get_current_config()
+            new_config = LLMConfigItem.from_llm_config(current, "新配置")
+
+        add_config(new_config)
+        self._refresh_config_list()
+        self._selected_config_id = new_config.id
+        self._load_config_to_editor(new_config.id)
+        self._update_status_bar()
+        QMessageBox.information(self, "提示", f"已添加配置组「{new_config.name}」，请在右侧编辑参数")
+
+    def _on_delete_config(self) -> None:
+        if not self._selected_config_id:
+            return
+
+        configs = list_configs()
+        if len(configs) <= 1:
+            QMessageBox.warning(self, "警告", "至少需要保留一个配置组")
+            return
+
+        config_to_delete = None
+        for c in configs:
+            if c.id == self._selected_config_id:
+                config_to_delete = c
+                break
+
+        if not config_to_delete:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            f"确定要删除配置组「{config_to_delete.name}」吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            active_config = get_active_config_item()
+            was_active = active_config and active_config.id == self._selected_config_id
+
+            if delete_config(self._selected_config_id):
+                if was_active:
+                    new_active = get_active_config_item()
+                    if new_active:
+                        self._selected_config_id = new_active.id
+                else:
+                    self._selected_config_id = None
+
+                self._refresh_config_list()
+                self._update_status_bar()
+                if self._selected_config_id:
+                    self._load_config_to_editor(self._selected_config_id)
+                else:
+                    self._config_edit_panel.load_config(None)
+                QMessageBox.information(self, "提示", "配置组已删除")
+
+    def _on_move_up(self) -> None:
+        if self._selected_config_id and move_config_up(self._selected_config_id):
+            self._refresh_config_list()
+            self._update_status_bar()
+
+    def _on_move_down(self) -> None:
+        if self._selected_config_id and move_config_down(self._selected_config_id):
+            self._refresh_config_list()
+            self._update_status_bar()
+
+    def _on_auto_switch_changed(self, state: int) -> None:
+        multi_config = get_current_multi_config()
+        multi_config.auto_switch_on_failure = state == Qt.CheckState.Checked.value
+        set_multi_config(multi_config)
+
+    def _on_config_saved(self) -> None:
+        self._refresh_config_list()
+        self._update_status_bar()
+        if self._on_config_changed:
+            self._on_config_changed()
+
+    def _on_apply_all(self) -> None:
+        self._refresh_params()
+        QMessageBox.information(self, "提示", "配置已应用")
+        if self._on_config_changed:
+            self._on_config_changed()
+
+    def _on_reset_config(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "确认",
+            "确定要恢复默认配置吗？这将使用 .env 文件中的设置。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            reset_to_default()
+            self._refresh_config_list()
+            self._update_status_bar()
+            self._refresh_params()
+            self._auto_switch_check.setChecked(is_auto_switch_enabled())
+            QMessageBox.information(self, "提示", "已恢复默认配置")
+            if self._on_config_changed:
+                self._on_config_changed()
+
+    def _update_status_bar(self) -> None:
+        active_config = get_active_config_item()
+        if active_config:
+            status_text = f"当前激活：「{active_config.name}」({active_config.model_name})"
+        else:
+            status_text = "无激活配置"
+
+        switch_events = get_switch_events()
+        if switch_events:
+            last_event = switch_events[-1]
+            status_text += f" | 最近切换: {last_event.get('reason', '未知')}"
+
+        self._status_bar.showMessage(status_text)
+
+    def _refresh_params(self) -> None:
         self._params_edit.setPlainText(_llm_request_params_text())
 
     def _repopulate_skill_rows(self) -> None:
@@ -267,86 +780,12 @@ class SettingsDialog(QDialog):
             self._disabled.add(skill_id)
         save_disabled_skill_ids(self._disabled)
 
-    def _on_apply_config(self) -> None:
-        model_name = self._model_name_edit.text().strip()
-        api_key = self._api_key_edit.text().strip()
-        base_url = self._base_url_edit.text().strip()
-
-        temperature = 0.7
-        try:
-            temp_val = float(self._temperature_edit.text().strip())
-            if 0 <= temp_val <= 2:
-                temperature = temp_val
-            else:
-                QMessageBox.warning(self, "警告", "温度系数必须在 0 到 2 之间")
-                return
-        except ValueError:
-            QMessageBox.warning(self, "警告", "温度系数必须是数字")
-            return
-
-        top_p = 0.95
-        try:
-            top_p_val = float(self._top_p_edit.text().strip())
-            if 0 <= top_p_val <= 1:
-                top_p = top_p_val
-            else:
-                QMessageBox.warning(self, "警告", "Top P 必须在 0 到 1 之间")
-                return
-        except ValueError:
-            QMessageBox.warning(self, "警告", "Top P 必须是数字")
-            return
-
-        frequency_penalty = 0.6
-        try:
-            freq_val = float(self._frequency_penalty_edit.text().strip())
-            frequency_penalty = freq_val
-        except ValueError:
-            QMessageBox.warning(self, "警告", "频率惩罚必须是数字")
-            return
-
-        enable_thinking = self._enable_thinking_check.isChecked()
-
-        if not model_name:
-            QMessageBox.warning(self, "警告", "请输入模型名称")
-            return
-        if not api_key:
-            QMessageBox.warning(self, "警告", "请输入 API Key")
-            return
-        if not base_url:
-            QMessageBox.warning(self, "警告", "请输入 API 基础 URL")
-            return
-
-        new_config = LLMConfig(
-            model_name=model_name,
-            api_key=api_key,
-            base_url=base_url,
-            temperature=temperature,
-            top_p=top_p,
-            frequency_penalty=frequency_penalty,
-            enable_thinking=enable_thinking,
-        )
-        set_config(new_config)
-
-        QMessageBox.information(self, "提示", "配置已保存并生效，新配置将立即应用到所有会话")
-        self._refresh_llm_block()
-        if self._on_config_changed:
-            self._on_config_changed()
-
-    def _on_reset_config(self) -> None:
-        reply = QMessageBox.question(
-            self, "确认", "确定要恢复默认配置吗？这将使用 .env 文件中的设置。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            reset_to_default()
-            self._refresh_llm_block()
-            QMessageBox.information(self, "提示", "已恢复默认配置")
-            if self._on_config_changed:
-                self._on_config_changed()
-
     def showEvent(self, event: Any) -> None:
         super().showEvent(event)
         self._skill_agent.reload_skills()
         self._disabled = set(load_disabled_skill_ids())
         self._repopulate_skill_rows()
-        self._refresh_llm_block()
+        self._refresh_config_list()
+        self._refresh_params()
+        self._update_status_bar()
+        self._auto_switch_check.setChecked(is_auto_switch_enabled())
