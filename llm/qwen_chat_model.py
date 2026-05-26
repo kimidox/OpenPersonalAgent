@@ -148,9 +148,9 @@ class QwenChatModel(BaseChatModel):
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
-                temperature=0.7,
-                top_p=0.95,
-                frequency_penalty=0.6,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
                 extra_body=self.extra_body,
             )
             msg = response.choices[0].message
@@ -186,9 +186,9 @@ class QwenChatModel(BaseChatModel):
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
-                temperature=0.7,
-                top_p=0.95,
-                frequency_penalty=0.6,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
                 extra_body=self.extra_body,
                 stream=True,
                 stream_options={"include_usage": True},
@@ -354,9 +354,9 @@ class QwenChatModel(BaseChatModel):
             stream = self.get_client().chat.completions.create(
                 model=self.model_name,
                 messages=messages,
-                temperature=0.7,
-                top_p=0.95,
-                frequency_penalty=0.6,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
                 extra_body=self.extra_body,
                 stream=True,
             )

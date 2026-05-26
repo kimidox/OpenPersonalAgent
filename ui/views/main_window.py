@@ -203,6 +203,11 @@ class SkillAgentMainWindow(QMainWindow):
 
     def _replay_messages(self, tab: ChatSessionTab, records: list) -> None:
         show_tool = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
+        # 获取当前的 enable_thinking 设置
+        from llm.llm_config_manager import get_current_config
+        current_config = get_current_config()
+        show_thinking = current_config.enable_thinking
+        
         for m in records:
             role, content, meta = str(m.get("role") or ""), str(m.get("content") or ""), m.get("metadata") or {}
             if role == "user":
@@ -210,6 +215,9 @@ class SkillAgentMainWindow(QMainWindow):
             elif role == "assistant":
                 msg_type = meta.get("type")
                 if msg_type == "think":
+                    # 只有当启用思考模式时才显示思考消息
+                    if not show_thinking:
+                        continue
                     msg_type = "think"
                 elif msg_type == "tool_call":
                     msg_type = "tool_call"

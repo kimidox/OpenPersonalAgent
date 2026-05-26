@@ -884,10 +884,19 @@ class SkillAgent:
                 
                 thinking_parts: list[str] = []
                 content_parts: list[str] = []
+                
+                # 获取当前的 enable_thinking 设置
+                from llm.llm_config_manager import get_current_config
+                current_config = get_current_config()
+                show_thinking = current_config.enable_thinking
 
                 def _stream_callback(content: str, msg_type: str) -> None:
                     if log_callback:
-                        log_callback(content, msg_type)
+                        # 只有当启用思考模式时才发送 think 类型的消息
+                        if msg_type == "think" and not show_thinking:
+                            pass  # 不发送思考消息
+                        else:
+                            log_callback(content, msg_type)
                     if msg_type == "think":
                         thinking_parts.append(content)
                     elif msg_type == "content":
