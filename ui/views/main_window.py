@@ -78,7 +78,7 @@ class SkillAgentMainWindow(QMainWindow):
 
     def _init_ui(self) -> None:
         self.setWindowTitle("SkillAgent")
-        self.setGeometry(120, 120, 780, 620)
+        self.setGeometry(120, 120, config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
         self._set_window_icon()
         central = QWidget()
         central.setObjectName("skillAgentCentral")

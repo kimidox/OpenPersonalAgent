@@ -53,6 +53,7 @@ from llm.llm_config_manager import (
     set_multi_config,
     update_config,
 )
+import config
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 from ui.styles.style_manager import StyleManager
 
@@ -391,6 +392,7 @@ class SettingsDialog(QDialog):
 
         self._setup_main_content(root)
         self._setup_auto_switch_section(root)
+        self._setup_window_size_section(root)
         self._setup_status_bar(root)
         self._setup_bottom_buttons(root)
 
@@ -523,6 +525,44 @@ class SettingsDialog(QDialog):
         auto_switch_layout.addWidget(self._auto_switch_check)
         auto_switch_layout.addStretch()
         layout.addLayout(auto_switch_layout)
+
+    def _setup_window_size_section(self, layout: QVBoxLayout) -> None:
+        window_size_section = QGroupBox("窗口尺寸设置")
+        window_size_layout = QVBoxLayout(window_size_section)
+        
+        # 窗口宽度设置
+        width_layout = QHBoxLayout()
+        width_layout.addWidget(QLabel("窗口宽度："))
+        self._window_width_edit = QLineEdit()
+        self._window_width_edit.setPlaceholderText("780")
+        self._window_width_edit.setFixedWidth(100)
+        width_layout.addWidget(self._window_width_edit)
+        width_hint = QLabel("（最小400，默认780）")
+        width_hint.setStyleSheet("color: #6b7280; font-size: 8pt;")
+        width_layout.addWidget(width_hint)
+        width_layout.addStretch()
+        window_size_layout.addLayout(width_layout)
+        
+        # 窗口高度设置
+        height_layout = QHBoxLayout()
+        height_layout.addWidget(QLabel("窗口高度："))
+        self._window_height_edit = QLineEdit()
+        self._window_height_edit.setPlaceholderText("620")
+        self._window_height_edit.setFixedWidth(100)
+        height_layout.addWidget(self._window_height_edit)
+        height_hint = QLabel("（最小300，默认620）")
+        height_hint.setStyleSheet("color: #6b7280; font-size: 8pt;")
+        height_layout.addWidget(height_hint)
+        height_layout.addStretch()
+        window_size_layout.addLayout(height_layout)
+        
+        # 保存按钮
+        save_window_size_btn = QPushButton("保存窗口尺寸")
+        save_window_size_btn.setObjectName("skillAgentSettingsSaveWindowSizeButton")
+        save_window_size_btn.clicked.connect(self._on_save_window_size)
+        window_size_layout.addWidget(save_window_size_btn)
+        
+        layout.addWidget(window_size_section)
 
     def _setup_status_bar(self, layout: QVBoxLayout) -> None:
         self._status_bar = QStatusBar()
@@ -809,3 +849,40 @@ class SettingsDialog(QDialog):
         self._refresh_params()
         self._update_status_bar()
         self._auto_switch_check.setChecked(is_auto_switch_enabled())
+        # 加载窗口尺寸设置
+        self._window_width_edit.setText(str(config.WINDOW_WIDTH))
+        self._window_height_edit.setText(str(config.WINDOW_HEIGHT))
+
+    def _on_save_window_size(self) -> None:
+        """保存窗口尺寸设置"""
+        width_text = self._window_width_edit.text().strip()
+        height_text = self._window_height_edit.text().strip()
+        
+        # 验证和解析宽度
+        try:
+            window_width = int(width_text)
+            if window_width < 400:
+                QMessageBox.warning(self, "警告", "窗口宽度不能小于 400")
+                return
+        except ValueError:
+            QMessageBox.warning(self, "警告", "窗口宽度必须是数字")
+            return
+        
+        # 验证和解析高度
+        try:
+            window_height = int(height_text)
+            if window_height < 300:
+                QMessageBox.warning(self, "警告", "窗口高度不能小于 300")
+                return
+        except ValueError:
+            QMessageBox.warning(self, "警告", "窗口高度必须是数字")
+            return
+        
+        # 保存配置
+        success_width = config.set_config("WINDOW_WIDTH", str(window_width))
+        success_height = config.set_config("WINDOW_HEIGHT", str(window_height))
+        
+        if success_width and success_height:
+            QMessageBox.information(self, "提示", "窗口尺寸已保存，请重启应用后生效")
+        else:
+            QMessageBox.warning(self, "警告", "保存窗口尺寸失败")

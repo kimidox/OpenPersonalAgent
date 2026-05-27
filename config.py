@@ -29,6 +29,31 @@ def get_config(key: str):
         dotenv.load_dotenv(str(env_path))
         return dotenv.get_key(dotenv_path=str(env_path), key_to_get=key)
     return None
+
+
+def set_config(key: str, value: str):
+    import shutil
+
+    if paths.is_frozen:
+        # 用户配置路径
+        user_env = paths.user_data_dir / env_file
+        # 默认配置路径（打包内部）
+        default_env = paths.get_bundled_resource(env_file)
+
+        # 确保用户配置存在
+        if not user_env.exists() and default_env.exists():
+            shutil.copy(default_env, user_env)
+
+        env_path = user_env
+    else:
+        env_path = paths.project_root / env_file
+
+    # 确保目录存在
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # 使用 dotenv 设置键值
+    success = dotenv.set_key(dotenv_path=str(env_path), key_to_set=key, value_to_set=str(value))
+    return success
 OPENAI_API_KEY = get_config("OPENAI_API_KEY")
 OPENAI_BASE_URL = get_config("OPENAI_BASE_URL")
 MODEL_NAME = get_config("MODEL_NAME")
@@ -148,6 +173,22 @@ if MEMORY_MIN_SCORE < 0:
 
 _msr = get_config("MEMORY_SEARCH_ENABLED")
 MEMORY_SEARCH_ENABLED = _env_bool(_msr, True)
+
+_ww = get_config("WINDOW_WIDTH")
+try:
+    WINDOW_WIDTH = int(_ww) if _ww not in (None, "") else 780
+except (TypeError, ValueError):
+    WINDOW_WIDTH = 780
+if WINDOW_WIDTH < 400:
+    WINDOW_WIDTH = 780
+
+_wh = get_config("WINDOW_HEIGHT")
+try:
+    WINDOW_HEIGHT = int(_wh) if _wh not in (None, "") else 620
+except (TypeError, ValueError):
+    WINDOW_HEIGHT = 620
+if WINDOW_HEIGHT < 300:
+    WINDOW_HEIGHT = 620
 
 _cbet = get_config("COPY_BUTTON_ENABLED_TYPES")
 if _cbet is None or str(_cbet).strip() == "":
