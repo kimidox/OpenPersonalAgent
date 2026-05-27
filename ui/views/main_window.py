@@ -4,10 +4,10 @@ import json
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QKeyEvent, QIcon
+from PySide6.QtGui import QFont, QKeyEvent, QIcon, QAction
 from PySide6.QtWidgets import (
     QHBoxLayout, QPlainTextEdit, QMainWindow, QMessageBox,
-    QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QPushButton, QTabWidget, QVBoxLayout, QWidget, QMenu, QSystemTrayIcon,
 )
 
 import config
@@ -71,6 +71,7 @@ class SkillAgentMainWindow(QMainWindow):
         self.stream_state = StreamState(self)
         self.ui_state = UIState(self)
         self._init_ui()
+        self._init_tray_icon()
         self._connect_signals()
         self._populate_initial_tabs()
         refresh_all_tab_close_buttons(self.chat_tabs)
@@ -96,6 +97,47 @@ class SkillAgentMainWindow(QMainWindow):
         icon_path = paths.get_bundled_resource("application.ico")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
+
+    def _init_tray_icon(self) -> None:
+        icon_path = paths.get_bundled_resource("application.ico")
+        if not icon_path.exists():
+            return
+
+        icon = QIcon(str(icon_path))
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(icon)
+        self.tray_icon.setToolTip("SkillAgent")
+
+        tray_menu = QMenu(self)
+        show_action = QAction("显示窗口", self)
+        show_action.triggered.connect(self._show_window)
+        tray_menu.addAction(show_action)
+
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(self._quit_application)
+        tray_menu.addAction(quit_action)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._tray_icon_activated)
+        self.tray_icon.show()
+
+    def _tray_icon_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._show_window()
+
+    def _show_window(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_application(self) -> None:
+        if self.stream_renderer.is_active():
+            self.stream_renderer.complete()
+        if self.worker_thread and self.worker_thread.isRunning():
+            self.worker_thread.terminate()
+            self.worker_thread.wait(2000)
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().quit()
 
     def _setup_header(self, layout: QVBoxLayout) -> None:
         header = QHBoxLayout()
@@ -460,9 +502,82 @@ class SkillAgentMainWindow(QMainWindow):
             tab.scroll_to_bottom()
 
     def closeEvent(self, event) -> None:
+        event.ignore()
+        
+        from PySide6.QtWidgets import QDialog, QLabel, QHBoxLayout
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("关闭确认")
+        dialog.setFixedSize(300, 120)
+        
+        layout = QVBoxLayout(dialog)
+        
+        label = QLabel("请选择关闭方式：")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(label)
+        
+        btn_layout = QHBoxLayout()
+        
+        minimize_btn = QPushButton("最小化到托盘")
+        minimize_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2563eb;
+                color: #ffffff;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 22px;
+                font-weight: 600;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+            QPushButton:pressed {
+                background-color: #1e40af;
+            }
+        """)
+        
+        close_btn = QPushButton("直接关闭")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                color: #374151;
+                border: 1px solid #e5e7eb;
+                border-radius: 6px;
+                padding: 8px 22px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #f9fafb;
+                border-color: #d1d5db;
+                color: #2563eb;
+            }
+            QPushButton:pressed {
+                background-color: #f3f4f6;
+            }
+        """)
+        
+        btn_layout.addWidget(minimize_btn)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        minimize_btn.clicked.connect(lambda: (
+            self.hide(),
+            dialog.done(1)
+        ))
+        
+        close_btn.clicked.connect(lambda: (
+            self._cleanup_and_close(),
+            dialog.done(2)
+        ))
+        
+        dialog.exec()
+
+    def _cleanup_and_close(self) -> None:
         if self.stream_renderer.is_active():
             self.stream_renderer.complete()
         if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.terminate()
             self.worker_thread.wait(2000)
-        super().closeEvent(event)
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().quit()
