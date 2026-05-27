@@ -9,7 +9,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('ui_skill_agent_styles.css', 'ui/styles'),
+        ('ui/styles/ui_skill_agent_styles.css', 'ui/styles'),
         ('application.ico', '.'),
         ('PersonalData', 'PersonalData'),
         ('.env', '.'),
