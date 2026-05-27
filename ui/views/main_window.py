@@ -175,11 +175,8 @@ class SkillAgentMainWindow(QMainWindow):
         QApplication.instance().quit()
 
     def _setup_header(self, layout: QVBoxLayout) -> None:
-        header = QHBoxLayout()
-        header.addStretch(1)
-        self.settings_btn = self._create_toolbar_button("设置", self._open_settings)
-        header.addWidget(self.settings_btn, alignment=Qt.AlignmentFlag.AlignRight)
-        layout.addLayout(header)
+        # 头部区域暂时为空，后续可添加其他元素
+        pass
     
     def _setup_chat_area(self, layout: QVBoxLayout) -> None:
         # 创建一个容器来容纳当前显示的会话
@@ -229,6 +226,7 @@ class SkillAgentMainWindow(QMainWindow):
         self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
         self.sidebar.conversation_selected.connect(self._on_conversation_selected)
         self.sidebar.conversation_deleted.connect(self._on_conversation_deleted)
+        self.sidebar.settings_requested.connect(self._open_settings)
 
     def _populate_initial_conversations(self) -> None:
         sessions = [c for c in self.skill_agent.list_saved_conversations() if (c.conversation_id or "").strip()]
