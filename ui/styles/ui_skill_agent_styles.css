@@ -150,6 +150,21 @@ QWidget#skillAgentCentral QTabBar QToolButton#skillAgentTabCloseButton:hover {
 QWidget#skillAgentCentral QTabBar QToolButton#skillAgentTabCloseButton:pressed {
   background-color: #bfdbfe;
 }
+QPushButton#skillAgentToggleButton {
+  background-color: transparent;
+  color: #9ca3af;
+  border: none;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+QPushButton#skillAgentToggleButton:hover {
+  background-color: rgba(37, 99, 235, 0.08);
+  color: #2563eb;
+}
+QPushButton#skillAgentToggleButton:pressed {
+  background-color: rgba(37, 99, 235, 0.12);
+}
 
 /* -------------------------------------------------------------------------
  * 组件：SkillAgentSettingsDialog — 会话与模型设置（与主窗口同一色板 / Fusion）

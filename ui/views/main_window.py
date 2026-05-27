@@ -87,12 +87,26 @@ class SkillAgentMainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        # 创建左右分栏
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        # 侧边栏状态
+        self._sidebar_collapsed = False
+        self._sidebar_default_width = 182
+        
+        # 创建左侧容器（侧边栏 + 切换按钮）
+        left_container = QWidget()
+        left_layout = QHBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
         
         # 左侧边栏
         self.sidebar = ConversationSidebar()
-        splitter.addWidget(self.sidebar)
+        left_layout.addWidget(self.sidebar)
+        
+        # 切换按钮
+        self._toggle_btn = QPushButton("◀")
+        self._toggle_btn.setObjectName("skillAgentToggleButton")
+        self._toggle_btn.setFixedWidth(24)
+        self._toggle_btn.clicked.connect(self._toggle_sidebar)
+        left_layout.addWidget(self._toggle_btn)
         
         # 右侧聊天区域
         chat_container = QWidget()
@@ -104,10 +118,11 @@ class SkillAgentMainWindow(QMainWindow):
         self._setup_chat_area(chat_layout)
         self._setup_input_area(chat_layout)
         
-        splitter.addWidget(chat_container)
-        splitter.setSizes([260, 740])
+        layout.addWidget(left_container)
+        layout.addWidget(chat_container, stretch=1)
         
-        layout.addWidget(splitter)
+        # 设置初始侧边栏宽度
+        self.sidebar.setFixedWidth(self._sidebar_default_width)
         
         style = StyleManager.get_style("main_window_stylesheet")
         if style:
@@ -238,7 +253,7 @@ class SkillAgentMainWindow(QMainWindow):
         self._add_conversation(cid, title, pending_db_history=False)
         # 添加到侧边栏
         from memory.conversation import Conversation
-        conv = Conversation(cid, title)
+        conv = Conversation(cid, self.skill_agent.username, title)
         self.sidebar.add_conversation(conv)
         # 切换到新会话
         self._switch_to_conversation(cid)
@@ -617,6 +632,21 @@ class SkillAgentMainWindow(QMainWindow):
         
         dialog.exec()
 
+    def _toggle_sidebar(self) -> None:
+        """切换侧边栏的折叠/展开状态"""
+        self._sidebar_collapsed = not self._sidebar_collapsed
+        
+        if self._sidebar_collapsed:
+            # 折叠侧边栏
+            self.sidebar.setFixedWidth(0)
+            self.sidebar.hide()
+            self._toggle_btn.setText("▶")
+        else:
+            # 展开侧边栏
+            self.sidebar.setFixedWidth(self._sidebar_default_width)
+            self.sidebar.show()
+            self._toggle_btn.setText("◀")
+    
     def _cleanup_and_close(self) -> None:
         if self.stream_renderer.is_active():
             self.stream_renderer.complete()
