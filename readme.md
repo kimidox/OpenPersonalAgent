@@ -7,10 +7,12 @@
 OpenPersonalAgent is an **intelligent agent system (SkillAgent) based on LLM tool calling**, featuring an innovative **"Skill-First" architecture**:
 
 - 📋 **Business Rules as Documents**: Write business specifications as Markdown Skill documents on disk
-- 🔧 **On-Demand Dynamic Loading**: Agent intelligently selects and loads relevant Skills based on user needs
+- 🔧 **On-demand Dynamic Loading**: Agent intelligently selects and loads relevant Skills based on user needs
 - 🧩 **Multi-Skill Composition**: Combine multiple Skill constraints in a single task
-- ⚡ **Atomic Command Execution**: Complete file operations and desktop automation via `run_command` within a bounded workspace
+- ⚡ **Atomic Command Execution**: Complete file operations and desktop automation via tools in a bounded workspace
 - 🤖 **Multi-Model Support**: Supports GLM, Qwen, Gemma, and other LLM backends
+- 🏗️ **Virtual Environment Isolation**: Automatic venv creation and management for secure dependency handling
+- 📝 **Long-term Memory System**: Persistent user memory with semantic search using jieba Chinese segmentation
 
 ---
 
@@ -21,17 +23,19 @@ OpenPersonalAgent is an **intelligent agent system (SkillAgent) based on LLM too
 | Layer | Function | Description |
 |------|----------|-------------|
 | **Skill Registry** | Scan Skills directory, parse metadata and body | Supports hot-reload via `reload_skills()` |
-| **Control Tools** | `select_skill` / `finish` / `ask_user` | Load Skills, end session, ask user |
-| **Atomic Tools** | `run_command` | Unified execution through `ToolContext(work_dir)` |
+| **Control Tools** | `select_skill` / `finish` / `ask_user` / `load_skill_memory` | Load Skills, end session, ask user, load execution memory |
+| **Atomic Tools** | `run_command` / `file_operation` / `edit` / `read_memory` / `write_memory` | Unified execution through `ToolContext(work_dir)` |
 
 ### 2. Secure Execution Mechanism
 
 - ✅ **Workspace Isolation**: All file operations confined to `work_dir`, preventing path traversal attacks
+- ✅ **Virtual Environment**: Automatic venv creation in `PersonalData/venv`, all Python commands execute in isolation
 - ✅ **Dangerous Command Detection**: Auto-detects `del`, `rmdir`, `>` etc. and requires user confirmation
 - ✅ **Package Installation Confirmation**: Detects pip/npm commands and requires user confirmation
-- ✅ **Skill Dependency Management**: Auto-detects Skill package requirements.txt and prompts installation
+- ✅ **Skill Dependency Management**: Auto-scans Skill requirements.txt and prompts for installation
 - ✅ **Step Limit Protection**: `SKILL_AGENT_MAX_STEPS` (default 50) prevents infinite loops
 - ✅ **Write Operation Monitoring**: Auto-detects repeated writes and intelligently ends tasks
+- ✅ **Duplicate Call Detection**: Prevents infinite loops by detecting repeated tool calls
 
 ### 3. Multi-Model Support
 
@@ -47,10 +51,13 @@ The project supports multiple LLM backends:
 ### 4. Intelligent Memory System
 
 - ✅ **Skill Execution Memory**: Records execution experiences (failures, fixes, best practices) to avoid repeating mistakes
+- ✅ **Skill Memory Loading**: `load_skill_memory` tool with semantic search for relevant experiences
 - ✅ **Lazy Loading**: Memory loaded on-demand when Skill encounters difficulties
-- ✅ **FTS5 Semantic Search**: SQLite FTS5 full-text indexing for relevant memory retrieval
+- ✅ **FTS5 Semantic Search**: SQLite FTS5 full-text indexing with jieba Chinese segmentation for better Chinese search
 - ✅ **Async Summarization**: Background thread summarization without blocking main workflow
 - ✅ **Long-term Memory**: Cross-session user memory with semantic search support
+- ✅ **Memory Compaction**: Automatic memory compaction when reaching threshold
+- ✅ **Read/Write Tools**: `read_memory` and `write_memory` for explicit memory management
 
 ### 5. Dynamic System Prompt
 
@@ -65,12 +72,25 @@ The project supports multiple LLM backends:
 - ✅ **State Management**: Centralized session state, stream state, UI state
 - ✅ **Style Management**: Type-safe style constants and theme support
 - ✅ **Decoupled Logic**: Message handling and stream rendering as independent modules
+- ✅ **Token Usage Display**: Optional token usage tracking in UI
+
+### 7. Path & Configuration Management
+
+- ✅ **Unified Path Manager**: `resource_path.paths` handles dev/bundled environment paths
+- ✅ **Smart Config Loading**: `.env` auto-copied to user data dir on first run (bundled mode)
+- ✅ **Data Directory Isolation**: Clear separation between bundled resources and user data
+
+### 8. Logging System
+
+- ✅ **Dual Output**: Console + rotating file logs in `PersonalData/logs/`
+- ✅ **Module Loggers**: Per-module log adapters for better organization
+- ✅ **Exception Hook**: Global exception handling and logging
 
 ---
 
 ## 📁 Built-in Skill Examples
 
-The project provides 8 ready-to-use Skill examples demonstrating different scenarios:
+The project provides 9 ready-to-use Skill examples demonstrating different scenarios:
 
 ### 1️⃣ Novel Generation (`id: 1`)
 - **Function**: Automatically generate novel content based on chapter outlines
@@ -111,6 +131,11 @@ The project provides 8 ready-to-use Skill examples demonstrating different scena
 - **Features**: Hotkey simulation, coordinate clicking, OpenCV template matching
 - **Scenarios**: Desktop automation testing
 
+### 9️⃣ WeChat Official Account Article Generation (`id: 100`)
+- **Function**: Generate WeChat Official Account articles based on user-provided topics
+- **Features**: Structured content (title, intro, body sections, conclusion), word count control (1500-2000 words)
+- **Output**: Markdown formatted articles ready for WeChat platform
+
 ---
 
 ## 🏗️ Technical Architecture
@@ -118,16 +143,23 @@ The project provides 8 ready-to-use Skill examples demonstrating different scena
 ```
 PersonalWindowGLM/
 ├── main.py                     # Program entry
+├── agent.py                    # Legacy desktop automation agent (screenshot-based)
 ├── skill_agent.py              # Core Agent logic
 ├── ui_skill_agent.py           # Desktop GUI (PySide6)
 ├── config.py                   # Configuration management
 ├── executor.py                 # Command executor
+├── logger.py                   # Logging system
+├── resource_path.py            # Unified path manager (dev/bundled)
+├── skill_agent_preferences.py  # Skill visibility/disabled state management
+├── PersonalWindowGLM.spec      # PyInstaller spec
+├── PersonalWindowGLM_onefile.spec  # Single-file spec
+├── build.bat                   # Build script
 ├── base_tool/                  # Atomic tool definitions
-│   ├── definitions.py          # Tool schema definitions
-│   ├── dispatch.py             # Tool dispatch and security validation
+│   ├── definitions.py          # Tool schema definitions (all control/atomic tools)
+│   ├── dispatch.py             # Tool dispatch, security validation, venv management
 │   └── context.py              # ToolContext implementation
 ├── skill/                      # Skill loading and execution
-│   ├── loader.py               # File scanning and parsing
+│   ├── loader.py               # File scanning, parsing, memory loading
 │   ├── registry.py             # Skill registry
 │   ├── execution.py            # Control tool execution
 │   ├── processing.py           # Skill processing utilities
@@ -138,13 +170,17 @@ PersonalWindowGLM/
 │   ├── glm_chat_model.py       # GLM model implementation
 │   ├── qwen_chat_model.py      # Qwen model implementation
 │   ├── gemma_chat_model.py     # Gemma model implementation
-│   └── llm_config_manager.py   # Model configuration management
+│   ├── llm_config_manager.py   # Model configuration management
+│   └── token_usage.py          # Token usage tracking
 ├── memory/                     # Session persistence
 │   ├── memory.py               # Memory management interface
 │   ├── sqlite_memory.py        # SQLite storage implementation
 │   ├── long_term_memory.py     # Long-term memory management
-│   ├── searcher.py             # FTS5 semantic search
-│   └── conversation.py         # Conversation management
+│   ├── searcher.py             # FTS5 semantic search with jieba
+│   ├── conversation.py         # Conversation management
+│   ├── migration.py            # Memory migration system
+│   ├── message.py              # Message model
+│   └── reindex_fts.py          # FTS index rebuild
 ├── prompt/                     # Dynamic prompt management
 │   ├── dynamic_prompt.py       # Dynamic system prompt builder
 │   └── template.py             # Prompt template definitions
@@ -152,19 +188,30 @@ PersonalWindowGLM/
 │   ├── components/             # Reusable UI components
 │   │   ├── chat_bubble.py      # Chat bubble component
 │   │   ├── message_card.py     # Message card component
+│   │   ├── chat_session_tab.py # Chat session tab
+│   │   ├── await_user_card.py  # Await user confirmation card
 │   │   └── settings_dialog.py  # Settings dialog
 │   ├── views/                  # Page views
-│   │   └── main_window.py      # Main window
+│   │   ├── main_window.py      # Main window
+│   │   └── worker_thread.py    # Worker thread
 │   ├── state/                  # State management
 │   │   ├── session_state.py    # Session state
-│   │   └── stream_state.py     # Stream state
+│   │   ├── stream_state.py     # Stream state
+│   │   └── ui_state.py         # UI state
 │   ├── styles/                 # Style management
+│   │   ├── color_scheme.py     # Color scheme
 │   │   └── style_manager.py    # Style manager
 │   └── utils/                  # UI utilities
+│       ├── html_utils.py       # HTML utilities
+│       ├── markdown_utils.py   # Markdown utilities
 │       ├── message_handler.py  # Message handling
+│       ├── simple_stream_renderer.py # Simple stream renderer
+│       ├── text_utils.py       # Text utilities
 │       └── stream_renderer.py  # Stream rendering
-├── database/                   # Database layer
-└── PersonalData/               # User data directory
+├── database/                   # Database layer (SQLAlchemy)
+│   ├── __init__.py             # DB setup
+│   └── models.py               # SQLAlchemy models (Conversations, Messages, User)
+└── PersonalData/               # User data directory (gitignored)
     ├── Skills/                 # Skill document directory
     │   ├── DuckDuckGoSearch/
     │   ├── baiduSearch/
@@ -173,9 +220,13 @@ PersonalWindowGLM/
     │   ├── 小说生成/
     │   ├── 时间格式转换/
     │   ├── 聊天语气/
-    │   └── 图片匹配测试/
-    ├── data/                   # Database files
-    └── logs/                   # Log files
+    │   ├── 图片匹配测试/
+    │   └── 微信公众号文章生成/
+    ├── data/                   # Database files (app.db)
+    ├── logs/                   # Log files (app_YYYYMMDD.log)
+    ├── venv/                   # Auto-created virtual environment
+    ├── cache/                  # Cache directory
+    └── config/                 # Config directory
 ```
 
 ---
@@ -186,7 +237,8 @@ PersonalWindowGLM/
 1. **Directory Scan**: Each first-level subfolder is treated as a Skill package
 2. **Main Document Resolution**: Prefer `<folder_name>.md` or `SKILL.md`, otherwise take first `.md`
 3. **Metadata Extraction**: Parse frontmatter wrapped in `---` (`id`, `name`, `description`)
-4. **Runtime Indexing**: Maintained by `SkillRegistry`, supports hot-reload
+4. **Memory File Detection**: Look for `skill_memory.md` for execution experiences
+5. **Runtime Indexing**: Maintained by `SkillRegistry`, supports hot-reload
 
 ### Execution Flow
 ```
@@ -204,7 +256,9 @@ User Query → [System Prompt: Skill Catalog Summary]
            ↓
       [Context Injection: All loaded Skill full texts]
            ↓
-      Execute run_command to complete operations
+      [Optional: load_skill_memory for past experiences]
+           ↓
+      Execute atomic tools (run_command/file_operation/edit/etc)
            ↓
       finish(message) Return result
 ```
@@ -214,6 +268,35 @@ User Query → [System Prompt: Skill Catalog Summary]
 - **Deduplication Optimization**: Same Skill not appended repeatedly
 - **Conflict Resolution**: More specific or later-loaded rules take precedence
 - **Cross-Skill Collaboration**: Documents can declare dependencies on other Skills
+
+---
+
+## 🛠️ Atomic Tool Reference
+
+### Control Tools
+| Tool | Purpose | Parameters |
+|------|---------|-----------|
+| `select_skill` | Load a Skill document | `skill_id` (required) |
+| `finish` | Complete the task | `message` (required) |
+| `ask_user` | Ask user for info/confirmation | `question` (required), `choices` (optional), `context` (optional) |
+| `load_skill_memory` | Load Skill execution memory | `skill_id` (required), `query` (required), `limit` (required) |
+
+### File Operations
+| Tool | Purpose | Parameters |
+|------|---------|-----------|
+| `file_operation` | Read/write/delete/list files | `action` (read/write/delete/list, required), `path` (required), `content` (write-only), `skill_id` (optional) |
+| `edit` | Precise file edit (search & replace) | `path` (required), `old_str` (required), `new_str` (required), `skill_id` (optional) |
+
+### Command Execution
+| Tool | Purpose | Parameters |
+|------|---------|-----------|
+| `run_command` | Execute shell commands/scripts | `command` (required), `cwd` (required), `skill_id` (optional), `timeout_sec` (optional, default 60, max 180) |
+
+### Memory Operations
+| Tool | Purpose | Parameters |
+|------|---------|-----------|
+| `read_memory` | Read long-term memory (semantic search) | `query` (required), `limit` (required) |
+| `write_memory` | Write to long-term memory | `content` (required), `mode` (optional, append/overwrite, default append) |
 
 ---
 
@@ -227,6 +310,16 @@ User Query → [System Prompt: Skill Catalog Summary]
 - Error message: "Path must stay inside the working directory"
 ```
 
+### Virtual Environment Isolation
+```python
+# base_tool/dispatch.py - _ensure_venv_exists()
+- Auto-creates venv in PersonalData/venv on first use
+- Finds system Python (skips virtual envs) via multiple strategies
+- Auto-installs pip if missing using get-pip.py
+- All Python commands use venv's python.exe
+- Skill dependencies auto-installed in venv
+```
+
 ### Dangerous Command Interception
 ```python
 # skill_agent.py - _is_dangerous_command()
@@ -237,6 +330,7 @@ Triggered Actions:
 → Show confirmation dialog ("Confirm" / "Cancel")
 → User cancellation terminates command
 → Record to session history
+→ Configurable via DANGEROUS_COMMAND_PREFIXES / DANGEROUS_COMMAND_CONTAINS
 ```
 
 ### Package Installation Confirmation
@@ -253,14 +347,16 @@ Triggered Actions:
 ```python
 # base_tool/dispatch.py - check_skill_dependencies()
 - Auto-scan requirements.txt in Skill package
-- Detect if required dependencies are installed
+- Detect if required dependencies are installed in venv
 - Prompt user to confirm installation of missing packages
+- Auto-install on confirmation
 ```
 
 ### Auto-End Detection
-- Monitor last 10 commands
-- Detect 2+ repeated successful writes → auto-call `finish()`
+- Monitor last N commands (configurable via REPEAT_DETECTION_WINDOW_SIZE)
+- Detect repeated successful writes → auto-call `finish()`
 - Prevent infinite write loops
+- Configurable via MAX_CONSECUTIVE_REPEATS
 
 ---
 
@@ -270,23 +366,27 @@ Triggered Actions:
 - **New Session**: `start_new_conversation()` → Generate UUID
 - **Switch Session**: `set_conversation_id(id)`
 - **History List**: `list_saved_conversations()`
+- **Auto-Title**: First message becomes conversation title
+- **DB Storage**: SQLite `Conversations` table
 
 ### Stored Content
 - Complete conversation history (system/user/assistant/tool)
-- Loaded Skill list
+- Loaded Skill IDs list
 - Tool call records (with parameters)
 - Reasoning process (reasoning_content)
+- Message metadata (timestamps, types)
 
 ### Skill Visibility Control
 - **Disable Mechanism**: `skill_agent_disabled_skills.json`
 - **UI Management**: Settings dialog can toggle enable/disable
 - **Effect**: Disabled Skills not shown in catalog, cannot be selected
+- **Storage**: User data dir (bundled mode) or project root (dev mode)
 
 ---
 
 ## ⚙️ Configuration
 
-Configure via `.env` file in project root:
+Configure via `.env` file in project root (dev) or user data dir (bundled):
 
 ```bash
 # ===== LLM Configuration =====
@@ -300,14 +400,37 @@ SKILLS_DIR=Skills                    # Relative path to Skills
 
 # ===== Execution Limits =====
 SKILL_AGENT_MAX_STEPS=50             # Max tool calls per turn
+MAX_ITERATIONS=20                    # Max iterations for legacy agent
 
 # ===== UI Options =====
 SKILL_AGENT_UI_SHOW_TOOL_CALLS=true  # Show tool call details
 SKILL_AGENT_AUTO_LOAD=true           # Auto-load Skills
 DEFAULT_SKILL_AGENT_USER=default_user
+TOKEN_USAGE_ENABLED=true             # Enable token usage tracking
+TOKEN_USAGE_SHOW_IN_UI=true          # Show token usage in UI
+COPY_BUTTON_ENABLED_TYPES=user,assistant  # Enable copy button for these message types
 
 # ===== Screenshot Configuration =====
 SCREENSHOT_GRID_STEP_PX=32           # Screenshot grid step size
+
+# ===== Memory Configuration =====
+CONTEXT_WINDOW_SIZE=128000           # Context window size limit
+COMPACTION_THRESHOLD=0.8             # Memory compaction threshold (0.0-1.0)
+COMPACTION_KEEP_RECENT=10            # Keep N recent messages when compacting
+COMPACTION_ENABLED=true              # Enable memory compaction
+MEMORY_SEARCH_LIMIT=5                # Max memory search results
+MEMORY_MIN_SCORE=0.0                 # Minimum memory search score (0.0-1.0)
+MEMORY_SEARCH_ENABLED=true           # Enable memory search
+
+# ===== Tool Call Deduplication =====
+TOOL_CALL_DEDUPLICATION_ENABLED=true # Enable duplicate tool call detection
+MAX_CONSECUTIVE_REPEATS=3            # Max consecutive repeats before warning
+REPEAT_DETECTION_WINDOW_SIZE=10      # Window size for repeat detection
+
+# ===== Dangerous Command Check =====
+DANGEROUS_COMMAND_CHECK_ENABLED=true # Enable dangerous command detection
+DANGEROUS_COMMAND_PREFIXES=del ,erase ,rmdir ,rd ,copy ,move ,ren ,rename ,mkdir ,md
+DANGEROUS_COMMAND_CONTAINS= > , >> , >, >>, set-content , set-content-, add-content , add-content-, out-file , out-file-, new-item , new-item-, remove-item , remove-item-, rm
 ```
 
 ---
@@ -316,6 +439,7 @@ SCREENSHOT_GRID_STEP_PX=32           # Screenshot grid step size
 
 ### Requirements
 - Python 3.11+
+- Windows (primarily, cross-platform codebase)
 
 ### Install Dependencies
 ```bash
@@ -330,7 +454,9 @@ Main dependencies:
 - Pillow >= 9.0.0 (Image processing)
 - opencv-python >= 4.8.0 (Image matching)
 - pyautogui >= 0.9.54 (Desktop automation)
+- pygetwindow >= 0.0.9 (Window management)
 - pandas ~= 3.0.1 (Data processing)
+- jieba >= 0.42.1 (Chinese text segmentation)
 
 ### Run the Application
 ```bash
@@ -338,22 +464,22 @@ Main dependencies:
 python main.py
 
 # Method 2: Package as exe (see build.bat)
-# Packaged exe is in dist/OpenPersonalAgent/ directory
+# Bundled exe uses %APPDATA%/OpenPersonalAgent/ for user data
 ```
 
 ### First-Time Setup
-1. Copy `.env.example` to `.env`
+1. Copy `.env.example` to `.env` (if not exists)
 2. Fill in API key and model configuration
 3. Run `main.py` to launch the interface
-4. View available Skills in the left sidebar list
-5. Enter questions to start chatting
+4. Virtual environment auto-created in `PersonalData/venv/`
+5. View available Skills in the left sidebar list
+6. Enter questions to start chatting
 
 ---
 
 ## 🎨 Interface Preview
 
 ![SkillAgent Main Interface](doc/img_1.png)
-
 
 ![Settings Dialog](doc/img_2.png)
 
@@ -391,10 +517,28 @@ requests
 - Constraint 2
 ```
 
+### Skill Memory File (Optional)
+Create `skill_memory.md` in the Skill package to record execution experiences:
+```markdown
+# Execution Experiences
+
+## 2024-05-27 - Successful Attempt
+- Problem: XYZ didn't work
+- Solution: Did ABC instead
+- Result: Success!
+
+## 2024-05-26 - Failed Attempt
+- Problem: Something went wrong
+- Root cause: Missing dependency
+```
+
+The `load_skill_memory` tool will retrieve this content, optionally filtered by query.
+
 ### Directory Convention
 ```
 my_skill/                # Skill package directory (first-level subfolder)
 ├── SKILL.md             # Main document (preferred) or my_skill.md
+├── skill_memory.md      # Optional: execution experiences
 ├── scripts/             # Optional: script files
 │   └── my_script.py
 ├── example/             # Optional: example files
@@ -410,6 +554,7 @@ my_skill/                # Skill package directory (first-level subfolder)
 ✅ **Error Handling**: Describe exception handling approaches  
 ✅ **Resource References**: Use backticks to mark intra-package file paths `` `./example/file.md` ``  
 ✅ **Dependency Declaration**: Declare required Python packages in requirements.txt
+✅ **Memory Recording**: Record important lessons in skill_memory.md
 
 ---
 
@@ -419,6 +564,7 @@ my_skill/                # Skill package directory (first-level subfolder)
 - First turn only injects **Skill catalog summary** (lightweight)
 - Full documents loaded only after `select_skill`
 - Effectively controls context length and cost
+- Token usage tracking optional
 
 ### Observability
 ```python
@@ -441,6 +587,20 @@ Skill documents can reference other Skill files:
 - If new Skill references found, continue recursive loading
 - Until no new files remain
 
+### Path Manager Architecture
+```python
+from resource_path import paths
+
+paths.is_frozen              # True if running as bundled exe
+paths.project_root           # Project root (dev) or exe dir (bundled)
+paths.user_data_dir          # %APPDATA%/OpenPersonalAgent (bundled) or project root (dev)
+paths.personal_data_dir      # PersonalData directory (always)
+paths.get_skills_dir()       # Skills directory
+paths.get_log_dir()          # Logs directory
+paths.get_venv_dir()         # Virtual environment directory
+paths.get_bundled_resource() # Read-only bundled resources
+```
+
 ---
 
 ## ❓ FAQ
@@ -449,16 +609,22 @@ Skill documents can reference other Skill files:
 A: Create a new folder under `PersonalData/Skills/`, write an `.md` document. Restart or call `reload_skills()` to take effect.
 
 **Q: What if dangerous commands are falsely blocked?**
-A: Currently uses hard-coded detection logic. To adjust whitelist, modify `_is_dangerous_command()` method in `skill_agent.py`.
+A: Adjust via `.env` config using `DANGEROUS_COMMAND_PREFIXES` and `DANGEROUS_COMMAND_CONTAINS`, or modify `_is_dangerous_command()` in `skill_agent.py`.
 
 **Q: Which LLM backends are supported?**
 A: Any OpenAI API-compatible backend (configured via `OPENAI_BASE_URL`). Built-in support: GLM, Qwen, Gemma series.
 
 **Q: How to export session records?**
-A: Session data stored in SQLite database (`PersonalData/data/`), can query directly or use export function in UI.
+A: Session data stored in SQLite database (`PersonalData/data/app.db`), can query directly or use export function in UI.
 
 **Q: How to install Skill dependencies?**
-A: When executing a Skill with missing dependencies, the system will automatically prompt user to confirm installation.
+A: When executing a Skill with missing dependencies, the system will automatically prompt user to confirm installation. Dependencies are installed in the isolated `PersonalData/venv`.
+
+**Q: Where is my data when running the bundled exe?**
+A: In `%APPDATA%/OpenPersonalAgent/`, including Skills, logs, database, and virtual environment. Config auto-copied from bundled resources on first run.
+
+**Q: What's the difference between the legacy agent.py and skill_agent.py?**
+A: `agent.py` is a screenshot-based desktop automation agent (legacy). `skill_agent.py` is the modern Skill-First architecture used by the main UI.
 
 ---
 
@@ -482,7 +648,23 @@ Issues and Pull Requests are welcome!
 
 ## Changelog
 
-### v2.1.0 (Current Version)
+### v2.2.0 (Current Version)
+- ✨ Added WeChat Official Account Article Generation Skill (id: 100)
+- ✨ Added token usage tracking with UI display
+- ✨ Added memory compaction mechanism with configurable threshold
+- ✨ Added duplicate tool call detection to prevent loops
+- ✨ Added copy button for message types with configurable types
+- ✨ Added jieba Chinese text segmentation for better FTS5 search
+- ✨ Added configurable dangerous command detection rules via env
+- ✨ Added memory migration system for seamless upgrades
+- ✨ Enhanced memory search with score threshold configuration
+- ✨ Added pygetwindow dependency for window management
+- ✨ Enhanced path manager with unified dev/bundled handling
+- ✨ Added comprehensive logging system with file rotation
+- ✨ Added separate Skill visibility management (skill_agent_preferences.py)
+- 🐛 Fixed multiple stability and UI issues
+
+### v2.1.0
 - ✨ Added Baidu Search Skill for Chinese content search
 - ✨ Added Fund Query Skill with akshare integration
 - ✨ Added Skill Execution Memory system to record experiences and avoid repeating mistakes
