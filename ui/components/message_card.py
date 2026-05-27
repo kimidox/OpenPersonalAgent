@@ -150,48 +150,31 @@ class MessageCardWidget(QWidget):
 
     def _apply_bubble_style(self) -> None:
         style_map = {
-            "user": """
-                QFrame {
-                    background-color: #eff6ff;
-                    border-radius: 12px;
-                }
-            """,
-            "assistant": """
-                QFrame {
-                    background-color: #ffffff;
-                    border-radius: 12px;
-                }
-            """,
-            "think": """
-                QFrame {
-                    background-color: #f9fafb;
-                    border-radius: 12px;
-                }
-            """,
-            "tool": """
-                QFrame {
-                    background-color: #f3f4f6;
-                    border-radius: 10px;
-                }
-            """,
-            "tool_call": """
-                QFrame {
-                    background-color: #fff7ed;
-                    border-radius: 10px;
-                }
-            """,
+            "user": "message_card_bubble_user",
+            "assistant": "message_card_bubble_assistant",
+            "think": "message_card_bubble_think",
+            "tool": "message_card_bubble_tool",
+            "tool_call": "message_card_bubble_tool_call",
         }
-        self._bubble_frame.setStyleSheet(style_map.get(self._msg_type, style_map["assistant"]))
+        style_name = style_map.get(self._msg_type, style_map["assistant"])
+        style = StyleManager.get_style(style_name)
+        self._bubble_frame.setObjectName(f"skillAgentMessageBubble{self._msg_type.capitalize()}")
+        if style:
+            self._bubble_frame.setStyleSheet(style)
 
     def _apply_caption_style(self) -> None:
         style_map = {
-            "user": "font-size: 11px; color: #2563eb; font-weight: 600; padding: 2px 4px; margin: 0px;",
-            "assistant": "font-size: 11px; color: #2563eb; font-weight: 600; padding: 2px 4px; margin: 0px;",
-            "think": "font-size: 11px; color: #6b7280; font-weight: 600; padding: 2px 4px; margin: 0px;",
-            "tool": "font-size: 11px; font-weight: 600; color: #374151; padding: 2px 4px; margin: 0px;",
-            "tool_call": "font-size: 11px; font-weight: 600; color: #c05621; padding: 2px 4px; margin: 0px;",
+            "user": "message_card_caption_user",
+            "assistant": "message_card_caption_assistant",
+            "think": "message_card_caption_think",
+            "tool": "message_card_caption_tool",
+            "tool_call": "message_card_caption_tool_call",
         }
-        self._caption_label.setStyleSheet(style_map.get(self._msg_type, style_map["assistant"]))
+        style_name = style_map.get(self._msg_type, style_map["assistant"])
+        style = StyleManager.get_style(style_name)
+        self._caption_label.setObjectName(f"skillAgentMessageCaption{self._msg_type.capitalize()}")
+        if style:
+            self._caption_label.setStyleSheet(style)
         
         # 对齐方式：用户消息右对齐，其他左对齐
         if self._msg_type == "user":
@@ -201,13 +184,17 @@ class MessageCardWidget(QWidget):
 
     def _apply_content_style(self) -> None:
         style_map = {
-            "user": "color: #374151; font-size: 10pt; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;",
-            "assistant": "color: #374151; font-size: 10pt; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;",
-            "think": "color: #4b5563; font-size: 10pt; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;",
-            "tool": "font-size: 11px; color: #6b7280; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;",
-            "tool_call": "font-size: 11px; color: #7b341e; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;",
+            "user": "message_card_content_user",
+            "assistant": "message_card_content_assistant",
+            "think": "message_card_content_think",
+            "tool": "message_card_content_tool",
+            "tool_call": "message_card_content_tool_call",
         }
-        self._content_label.setStyleSheet(style_map.get(self._msg_type, style_map["assistant"]))
+        style_name = style_map.get(self._msg_type, style_map["assistant"])
+        style = StyleManager.get_style(style_name)
+        self._content_label.setObjectName(f"skillAgentMessageContent{self._msg_type.capitalize()}")
+        if style:
+            self._content_label.setStyleSheet(style)
 
     def update_content(self, text: str) -> None:
         # 去除文本前后的空白行和空格
@@ -258,24 +245,10 @@ class MessageCardWidget(QWidget):
         return super().minimumSizeHint()
 
     def _apply_copy_button_style(self) -> None:
-        self._copy_button.setStyleSheet("""
-            QToolButton {
-                background-color: transparent;
-                color: #6b7280;
-                border: 1px solid #e5e7eb;
-                border-radius: 6px;
-                font-size: 11px;
-                padding: 2px 8px;
-            }
-            QToolButton:hover {
-                background-color: #f3f4f6;
-                color: #374151;
-                border-color: #d1d5db;
-            }
-            QToolButton:pressed {
-                background-color: #e5e7eb;
-            }
-        """)
+        self._copy_button.setObjectName("skillAgentCopyButton")
+        style = StyleManager.get_style("message_card_copy_button")
+        if style:
+            self._copy_button.setStyleSheet(style)
 
     def _on_copy_clicked(self) -> None:
         clipboard = QApplication.clipboard()

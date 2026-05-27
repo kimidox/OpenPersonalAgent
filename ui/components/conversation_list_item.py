@@ -5,6 +5,7 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QToolButton, QSizePolicy
 )
+from ui.styles.style_manager import StyleManager
 
 
 _DELETE_ICON: QIcon | None = None
@@ -62,17 +63,17 @@ class ConversationListItem(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMinimumHeight(40)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        
+
         self._main_layout = QHBoxLayout(self)
         self._main_layout.setContentsMargins(8, 6, 8, 6)
         self._main_layout.setSpacing(8)
-        
+
         # 标题标签
         self._title_label = QLabel(self._title)
         self._title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._title_label.setWordWrap(False)
         self._main_layout.addWidget(self._title_label)
-        
+
         # 删除按钮 - 与 tab 关闭按钮保持一致风格
         self._delete_button = QToolButton()
         self._delete_button.setObjectName("skillAgentTabCloseButton")  # 使用相同的 objectName 以便样式表生效
@@ -84,24 +85,10 @@ class ConversationListItem(QWidget):
         self._delete_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._delete_button.setToolTip("删除会话")
         self._delete_button.setFixedSize(20, 20)  # 与 tab 关闭按钮尺寸一致
-        self._delete_button.setStyleSheet("""
-            QToolButton#skillAgentTabCloseButton {
-                background-color: transparent;
-                border: none;
-                outline: none;
-                padding: 0px;
-                border-radius: 4px;
-            }
-            QToolButton#skillAgentTabCloseButton:hover {
-                background-color: #dbeafe;
-            }
-            QToolButton#skillAgentTabCloseButton:pressed {
-                background-color: #bfdbfe;
-            }
-        """)
+        # 注意：删除按钮使用主窗口样式表中的相同 objectName，不需要单独设置样式
         self._delete_button.clicked.connect(self._on_delete_clicked)
         self._main_layout.addWidget(self._delete_button)
-        
+
         self._update_style()
         
     def set_title(self, title: str) -> None:
@@ -130,37 +117,13 @@ class ConversationListItem(QWidget):
     def _update_style(self) -> None:
         """更新样式"""
         if self._is_selected:
-            self.setStyleSheet("""
-                ConversationListItem {
-                    background-color: #eff6ff;
-                    border-radius: 6px;
-                }
-            """)
-            self._title_label.setStyleSheet("""
-                QLabel {
-                    color: #2563eb;
-                    font-size: 10pt;
-                    font-weight: 600;
-                    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
-                }
-            """)
+            selected_style = StyleManager.get_style("conversation_list_item_selected")
+            if selected_style:
+                self.setStyleSheet(selected_style)
         else:
-            self.setStyleSheet("""
-                ConversationListItem {
-                    background-color: transparent;
-                    border-radius: 6px;
-                }
-                ConversationListItem:hover {
-                    background-color: #f3f4f6;
-                }
-            """)
-            self._title_label.setStyleSheet("""
-                QLabel {
-                    color: #374151;
-                    font-size: 10pt;
-                    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
-                }
-            """)
+            normal_style = StyleManager.get_style("conversation_list_item_normal")
+            if normal_style:
+                self.setStyleSheet(normal_style)
             
     def mousePressEvent(self, event) -> None:
         """点击事件：选中会话"""

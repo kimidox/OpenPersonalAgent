@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 
 from ui.components.conversation_list_item import ConversationListItem
 from memory.conversation import Conversation
+from ui.styles.style_manager import StyleManager
 
 
 class ConversationSidebar(QWidget):
@@ -27,107 +28,62 @@ class ConversationSidebar(QWidget):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.setMinimumWidth(168)
         self.setMaximumWidth(224)
-        self.setStyleSheet("""
-            ConversationSidebar {
-                background-color: #f9fafb;
-                border-right: 1px solid #e5e7eb;
-            }
-        """)
-        
+        sidebar_style = StyleManager.get_style("conversation_sidebar")
+        if sidebar_style:
+            self.setStyleSheet(sidebar_style)
+
         self._main_layout = QVBoxLayout(self)
         self._main_layout.setContentsMargins(12, 12, 12, 12)
         self._main_layout.setSpacing(12)
-        
+
         # 顶部按钮区域（新增会话 + 设置）
         top_button_layout = QHBoxLayout()
         top_button_layout.setSpacing(8)
-        
+
         self._new_conversation_button = QPushButton("新增会话")
         self._new_conversation_button.setMinimumHeight(20)
         self._new_conversation_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._new_conversation_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._new_conversation_button.setStyleSheet("""
-            QPushButton {
-                background-color: #2563eb;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-size: 8pt;
-                font-weight: 600;
-                font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
-                padding: 4px 8px;
-            }
-            QPushButton:hover {
-                background-color: #1d4ed8;
-            }
-            QPushButton:pressed {
-                background-color: #1e40af;
-            }
-        """)
+        self._new_conversation_button.setObjectName("skillAgentNewConversationButton")
+        new_btn_style = StyleManager.get_style("conversation_sidebar_new_button")
+        if new_btn_style:
+            self._new_conversation_button.setStyleSheet(new_btn_style)
         self._new_conversation_button.clicked.connect(self._on_new_conversation_clicked)
         top_button_layout.addWidget(self._new_conversation_button)
-        
+
         self._settings_button = QPushButton("设置")
         self._settings_button.setMinimumHeight(20)
         self._settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._settings_button.setStyleSheet("""
-            QPushButton {
-                background-color: #6b7280;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-size: 8pt;
-                font-weight: 600;
-                font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
-                padding: 4px 8px;
-            }
-            QPushButton:hover {
-                background-color: #4b5563;
-            }
-            QPushButton:pressed {
-                background-color: #374151;
-            }
-        """)
+        self._settings_button.setObjectName("skillAgentSettingsButton")
+        settings_btn_style = StyleManager.get_style("conversation_sidebar_settings_button")
+        if settings_btn_style:
+            self._settings_button.setStyleSheet(settings_btn_style)
         self._settings_button.clicked.connect(self._on_settings_clicked)
         top_button_layout.addWidget(self._settings_button)
-        
+
         self._main_layout.addLayout(top_button_layout)
-        
+
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._scroll_area.setFrameShape(QScrollArea.NoFrame)
-        self._scroll_area.setStyleSheet("""
-            QScrollArea {
-                background-color: transparent;
-                border: none;
-            }
-            QScrollBar:vertical {
-                width: 6px;
-                background: transparent;
-            }
-            QScrollBar::handle:vertical {
-                background: #d1d5db;
-                border-radius: 3px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #9ca3af;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
-        
+        self._scroll_area.setObjectName("skillAgentSidebarScrollArea")
+        scroll_area_style = StyleManager.get_style("conversation_sidebar_scrollarea")
+        if scroll_area_style:
+            self._scroll_area.setStyleSheet(scroll_area_style)
+
         self._scroll_container = QWidget()
         self._scroll_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self._scroll_container.setStyleSheet("background-color: transparent;")
+        self._scroll_container.setObjectName("skillAgentSidebarScrollContainer")
+        scroll_container_style = StyleManager.get_style("conversation_sidebar_scroll_container")
+        if scroll_container_style:
+            self._scroll_container.setStyleSheet(scroll_container_style)
         self._list_layout = QVBoxLayout(self._scroll_container)
         self._list_layout.setContentsMargins(0, 0, 0, 0)
         self._list_layout.setSpacing(4)
         self._list_layout.addStretch()
-        
+
         self._scroll_area.setWidget(self._scroll_container)
         self._main_layout.addWidget(self._scroll_area)
         

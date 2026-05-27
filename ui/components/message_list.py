@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.components.message_card import MessageCardWidget, MessageType
+from ui.styles.style_manager import StyleManager
 
 
 class MessageListWidget(QScrollArea):
@@ -22,36 +23,22 @@ class MessageListWidget(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setFrameShape(QScrollArea.NoFrame)
-        self.setStyleSheet("""
-            QScrollArea {
-                background-color: #ffffff;
-                border: none;
-            }
-            QScrollBar:vertical {
-                width: 8px;
-                background: transparent;
-            }
-            QScrollBar::handle:vertical {
-                background: #c1c1c1;
-                border-radius: 4px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #a8a8a8;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
-        
+        self.setObjectName("skillAgentMessageListWidget")
+        widget_style = StyleManager.get_style("message_list_widget")
+        if widget_style:
+            self.setStyleSheet(widget_style)
+
         # 创建内部容器
         self._container = QWidget()
         self._container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self._container.setStyleSheet("background-color: #ffffff;")
+        self._container.setObjectName("skillAgentMessageListContainer")
+        container_style = StyleManager.get_style("message_list_container")
+        if container_style:
+            self._container.setStyleSheet(container_style)
         self._layout = QVBoxLayout(self._container)
         self._layout.setContentsMargins(0, 8, 0, 8)
         self._layout.setSpacing(8)
-        
+
         self.setWidget(self._container)
 
     def add_message(

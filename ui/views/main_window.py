@@ -576,43 +576,16 @@ class SkillAgentMainWindow(QMainWindow):
         btn_layout = QHBoxLayout()
         
         minimize_btn = QPushButton("最小化到托盘")
-        minimize_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2563eb;
-                color: #ffffff;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 22px;
-                font-weight: 600;
-                min-width: 100px;
-            }
-            QPushButton:hover {
-                background-color: #1d4ed8;
-            }
-            QPushButton:pressed {
-                background-color: #1e40af;
-            }
-        """)
-        
+        minimize_btn.setObjectName("skillAgentCloseDialogMinimizeButton")
+        minimize_style = StyleManager.get_style("close_dialog_minimize_button")
+        if minimize_style:
+            minimize_btn.setStyleSheet(minimize_style)
+
         close_btn = QPushButton("直接关闭")
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff;
-                color: #374151;
-                border: 1px solid #e5e7eb;
-                border-radius: 6px;
-                padding: 8px 22px;
-                min-width: 100px;
-            }
-            QPushButton:hover {
-                background-color: #f9fafb;
-                border-color: #d1d5db;
-                color: #2563eb;
-            }
-            QPushButton:pressed {
-                background-color: #f3f4f6;
-            }
-        """)
+        close_btn.setObjectName("skillAgentCloseDialogCloseButton")
+        close_style = StyleManager.get_style("close_dialog_close_button")
+        if close_style:
+            close_btn.setStyleSheet(close_style)
         
         btn_layout.addWidget(minimize_btn)
         btn_layout.addWidget(close_btn)
