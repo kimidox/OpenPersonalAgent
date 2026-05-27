@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QKeyEvent, QIcon, QAction
 from PySide6.QtWidgets import (
     QHBoxLayout, QPlainTextEdit, QMainWindow, QMessageBox,
-    QPushButton, QTabWidget, QVBoxLayout, QWidget, QMenu, QSystemTrayIcon,
+    QPushButton, QVBoxLayout, QWidget, QMenu, QSystemTrayIcon, QSplitter,
 )
 
 import config
@@ -16,8 +16,7 @@ from memory import SqliteMemory
 from skill_agent import SkillAgent, SKILL_AGENT_AWAITING_USER_REPLY
 from resource_path import paths
 
-from ui.components import ChatSessionTab, SettingsDialog
-from ui.components.tab_bar import setup_tab_close_button, refresh_all_tab_close_buttons
+from ui.components import ChatSessionTab, SettingsDialog, ConversationSidebar
 from ui.state import SessionState, StreamState, UIState
 from ui.styles import StyleManager
 from ui.utils import MessageHandler
@@ -70,11 +69,12 @@ class SkillAgentMainWindow(QMainWindow):
         self.session_state = SessionState(self)
         self.stream_state = StreamState(self)
         self.ui_state = UIState(self)
+        self._conversation_tabs: dict[str, ChatSessionTab] = {}
+        self._current_conversation_tab: ChatSessionTab | None = None
         self._init_ui()
         self._init_tray_icon()
         self._connect_signals()
-        self._populate_initial_tabs()
-        refresh_all_tab_close_buttons(self.chat_tabs)
+        self._populate_initial_conversations()
 
     def _init_ui(self) -> None:
         self.setWindowTitle("SkillAgent")
@@ -83,12 +83,32 @@ class SkillAgentMainWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("skillAgentCentral")
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-        self._setup_header(layout)
-        self._setup_chat_tabs(layout)
-        self._setup_input_area(layout)
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # 创建左右分栏
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # 左侧边栏
+        self.sidebar = ConversationSidebar()
+        splitter.addWidget(self.sidebar)
+        
+        # 右侧聊天区域
+        chat_container = QWidget()
+        chat_layout = QVBoxLayout(chat_container)
+        chat_layout.setContentsMargins(10, 10, 10, 10)
+        chat_layout.setSpacing(8)
+        
+        self._setup_header(chat_layout)
+        self._setup_chat_area(chat_layout)
+        self._setup_input_area(chat_layout)
+        
+        splitter.addWidget(chat_container)
+        splitter.setSizes([260, 740])
+        
+        layout.addWidget(splitter)
+        
         style = StyleManager.get_style("main_window_stylesheet")
         if style:
             self.setStyleSheet(style)
@@ -142,11 +162,17 @@ class SkillAgentMainWindow(QMainWindow):
     def _setup_header(self, layout: QVBoxLayout) -> None:
         header = QHBoxLayout()
         header.addStretch(1)
-        self.new_conversation_btn = self._create_toolbar_button("新增会话", self._on_new_conversation)
         self.settings_btn = self._create_toolbar_button("设置", self._open_settings)
-        header.addWidget(self.new_conversation_btn, alignment=Qt.AlignmentFlag.AlignRight)
         header.addWidget(self.settings_btn, alignment=Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header)
+    
+    def _setup_chat_area(self, layout: QVBoxLayout) -> None:
+        # 创建一个容器来容纳当前显示的会话
+        self.chat_area_container = QWidget()
+        self.chat_area_layout = QVBoxLayout(self.chat_area_container)
+        self.chat_area_layout.setContentsMargins(0, 0, 0, 0)
+        self.chat_area_layout.setSpacing(0)
+        layout.addWidget(self.chat_area_container, stretch=1)
 
     def _create_toolbar_button(self, text: str, callback) -> QPushButton:
         btn = QPushButton(text)
@@ -155,18 +181,6 @@ class SkillAgentMainWindow(QMainWindow):
         btn.setFixedHeight(28)
         btn.clicked.connect(callback)
         return btn
-
-    def _setup_chat_tabs(self, layout: QVBoxLayout) -> None:
-        self.chat_tabs = QTabWidget()
-        self.chat_tabs.setDocumentMode(True)
-        self.chat_tabs.setTabsClosable(True)
-        self.chat_tabs.setMovable(True)
-        self.chat_tabs.tabCloseRequested.connect(self._on_tab_close_requested)
-        self.chat_tabs.currentChanged.connect(self._on_current_tab_changed)
-        self.chat_tabs.tabBar().tabBarClicked.connect(self._on_tab_bar_clicked)
-        self.chat_tabs.setMinimumHeight(280)
-        self.chat_tabs.tabBar().setDrawBase(False)
-        layout.addWidget(self.chat_tabs, stretch=1)
 
     def _setup_input_area(self, layout: QVBoxLayout) -> None:
         row = QHBoxLayout()
@@ -196,41 +210,69 @@ class SkillAgentMainWindow(QMainWindow):
         self.message_handler.await_user_message.connect(self._on_await_user_message)
         self.message_handler.skill_content_message.connect(self._on_skill_content_message)
         self.message_handler.tool_call_message.connect(self._on_tool_call_message)
+        # 连接侧边栏信号
+        self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
+        self.sidebar.conversation_selected.connect(self._on_conversation_selected)
+        self.sidebar.conversation_deleted.connect(self._on_conversation_deleted)
 
-    def _populate_initial_tabs(self) -> None:
+    def _populate_initial_conversations(self) -> None:
         sessions = [c for c in self.skill_agent.list_saved_conversations() if (c.conversation_id or "").strip()]
         if not sessions:
-            self._create_new_conversation_tab()
+            self._create_new_conversation()
             return
         for conv in sessions:
-            self._add_conversation_tab((conv.conversation_id or "").strip(), conv.title, pending_db_history=True)
-        self.chat_tabs.setCurrentIndex(0)
+            self._add_conversation((conv.conversation_id or "").strip(), conv.title, pending_db_history=True)
+        self.sidebar.load_conversations(sessions)
         first_cid = (sessions[0].conversation_id or "").strip()
-        self.skill_agent.set_conversation_id(first_cid)
-        self.session_state.set_current_conversation(first_cid)
-        first_tab = self.chat_tabs.widget(0)
-        if isinstance(first_tab, ChatSessionTab):
-            self._ensure_tab_history_loaded(first_tab)
-        self._sync_input_placeholder()
+        self._switch_to_conversation(first_cid)
 
-    def _add_conversation_tab(self, conversation_id: str, title: str | None = None, pending_db_history: bool = False) -> int:
+    def _add_conversation(self, conversation_id: str, title: str | None = None, pending_db_history: bool = False) -> ChatSessionTab:
         tab = ChatSessionTab(conversation_id, pending_db_history=pending_db_history)
         display_title = title or f"新会话 · {conversation_id[:5] if len(conversation_id) >= 5 else conversation_id or '?'}"
-        idx = self.chat_tabs.addTab(tab, display_title)
-        self.chat_tabs.setTabToolTip(idx, conversation_id)
+        self._conversation_tabs[conversation_id] = tab
         self.session_state.add_conversation(conversation_id, title=display_title, pending_db_history=pending_db_history)
-        setup_tab_close_button(self.chat_tabs.tabBar(), idx)
-        return idx
+        return tab
 
-    def _create_new_conversation_tab(self) -> str:
+    def _create_new_conversation(self) -> str:
         cid, title = self.skill_agent.start_new_conversation()
-        self._add_conversation_tab(cid, title, pending_db_history=False)
-        self.skill_agent.set_conversation_id(cid)
+        self._add_conversation(cid, title, pending_db_history=False)
+        # 添加到侧边栏
+        from memory.conversation import Conversation
+        conv = Conversation(cid, title)
+        self.sidebar.add_conversation(conv)
+        # 切换到新会话
+        self._switch_to_conversation(cid)
         return cid
 
     def _active_session_tab(self) -> ChatSessionTab | None:
-        w = self.chat_tabs.currentWidget()
-        return w if isinstance(w, ChatSessionTab) else None
+        return self._current_conversation_tab
+
+    def _switch_to_conversation(self, conversation_id: str) -> None:
+        """切换到指定会话"""
+        # 先隐藏当前会话
+        if self._current_conversation_tab:
+            self._current_conversation_tab.setParent(None)
+        
+        # 获取新会话
+        if conversation_id not in self._conversation_tabs:
+            return
+        
+        new_tab = self._conversation_tabs[conversation_id]
+        
+        # 显示新会话
+        self.chat_area_layout.addWidget(new_tab)
+        self._current_conversation_tab = new_tab
+        
+        # 更新状态
+        self.skill_agent.set_conversation_id(conversation_id)
+        self.session_state.set_current_conversation(conversation_id)
+        self.sidebar.set_selected_conversation(conversation_id)
+        
+        # 确保历史记录已加载
+        self._ensure_tab_history_loaded(new_tab)
+        
+        # 更新输入框提示
+        self._sync_input_placeholder()
 
     def _ensure_tab_history_loaded(self, tab: ChatSessionTab) -> None:
         if not tab.pending_db_history:
@@ -240,7 +282,7 @@ class SkillAgentMainWindow(QMainWindow):
         self._replay_messages(tab, records)
         if SkillAgent.conversation_awaits_user_clarification(self._memory, tab.conversation_id):
             self._restore_await_user_panel(tab, records)
-        if self.chat_tabs.currentWidget() is tab:
+        if self._current_conversation_tab is tab:
             self._sync_input_placeholder()
 
     def _replay_messages(self, tab: ChatSessionTab, records: list) -> None:
@@ -303,14 +345,38 @@ class SkillAgentMainWindow(QMainWindow):
         spec = {"question": str(args.get("question") or "").strip(), "context": str(args.get("context") or "").strip(), "choices": args.get("choices") or []}
         tab.show_await_user_prompt(spec, on_confirm_send=lambda t, st=tab: self._send_user_message(t, session_tab=st))
 
-    def _on_current_tab_changed(self, _index: int) -> None:
-        tab = self._active_session_tab()
-        if tab is not None:
-            self.skill_agent.set_conversation_id(tab.conversation_id)
-            self.session_state.set_current_conversation(tab.conversation_id)
-            if not tab.pending_db_history and SkillAgent.conversation_awaits_user_clarification(self._memory, tab.conversation_id) and not tab.has_active_await_user_prompt():
-                self._restore_await_user_panel(tab, self.skill_agent.message_records_for_conversation(tab.conversation_id))
-        self._sync_input_placeholder()
+    def _on_conversation_selected(self, conversation_id: str) -> None:
+        """侧边栏会话被选中"""
+        self._switch_to_conversation(conversation_id)
+
+    def _on_conversation_deleted(self, conversation_id: str) -> None:
+        """侧边栏会话删除请求"""
+        if self.worker_thread and self.worker_thread.isRunning() and conversation_id == self.worker_thread.conversation_id:
+            QMessageBox.warning(self, "提示", "该会话正在执行中，请结束后再删除。")
+            return
+        
+        # 检查是否只剩一个会话
+        if len(self._conversation_tabs) <= 1:
+            QMessageBox.information(self, "提示", "至少保留一个会话。")
+            return
+        
+        # 删除会话
+        self._memory.clear_conversation(conversation_id)
+        self.session_state.remove_conversation(conversation_id)
+        
+        # 如果删除的是当前会话，切换到另一个会话
+        if self._current_conversation_tab and self._current_conversation_tab.conversation_id == conversation_id:
+            # 找到另一个会话
+            for cid in self._conversation_tabs.keys():
+                if cid != conversation_id:
+                    self._switch_to_conversation(cid)
+                    break
+        
+        # 移除会话标签
+        if conversation_id in self._conversation_tabs:
+            tab = self._conversation_tabs[conversation_id]
+            tab.deleteLater()
+            del self._conversation_tabs[conversation_id]
 
     def _sync_input_placeholder(self) -> None:
         tab = self._active_session_tab()
@@ -319,33 +385,11 @@ class SkillAgentMainWindow(QMainWindow):
         else:
             self.ui_state.set_awaiting_user_mode(SkillAgent.conversation_awaits_user_clarification(self._memory, tab.conversation_id))
 
-    def _on_tab_bar_clicked(self, index: int) -> None:
-        w = self.chat_tabs.widget(index)
-        if isinstance(w, ChatSessionTab):
-            self._ensure_tab_history_loaded(w)
-
-    def _on_tab_close_requested(self, index: int) -> None:
-        if self.chat_tabs.count() <= 1:
-            QMessageBox.information(self, "提示", "至少保留一个会话标签页。")
-            return
-        page = self.chat_tabs.widget(index)
-        if not isinstance(page, ChatSessionTab):
-            return
-        if self.worker_thread and self.worker_thread.isRunning() and page.conversation_id == self.worker_thread.conversation_id:
-            QMessageBox.warning(self, "提示", "该会话正在执行中，请结束后再关闭标签。")
-            return
-        self._memory.clear_conversation(page.conversation_id)
-        self.session_state.remove_conversation(page.conversation_id)
-        self.chat_tabs.removeTab(index)
-        page.deleteLater()
-
     def _on_new_conversation(self) -> None:
         if self.worker_thread and self.worker_thread.isRunning():
             QMessageBox.warning(self, "提示", "当前仍有对话在执行，请结束后再新建会话。")
             return
-        self._create_new_conversation_tab()
-        self.chat_tabs.setCurrentIndex(self.chat_tabs.count() - 1)
-        self._sync_input_placeholder()
+        self._create_new_conversation()
 
     def _open_settings(self) -> None:
         SettingsDialog(self, self.skill_agent).exec()

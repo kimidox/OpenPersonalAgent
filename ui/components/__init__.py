@@ -13,6 +13,8 @@ from ui.components.tab_bar import (
 )
 from ui.components.message_card import MessageCardWidget, MessageType
 from ui.components.message_list import MessageListWidget
+from ui.components.conversation_list_item import ConversationListItem
+from ui.components.conversation_sidebar import ConversationSidebar
 
 __all__ = [
     "ChatBubble",
@@ -27,4 +29,6 @@ __all__ = [
     "MessageCardWidget",
     "MessageType",
     "MessageListWidget",
+    "ConversationListItem",
+    "ConversationSidebar",
 ]
