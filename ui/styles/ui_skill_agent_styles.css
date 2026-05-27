@@ -364,6 +364,37 @@ QWidget#skillAgentCentral QTabBar QToolButton#skillAgentTabCloseButton:pressed {
 #skillAgentSettingsDialog QPushButton#skillAgentSettingsSaveConfigButton:pressed {
   background-color: #1e40af;
 }
+#skillAgentSettingsDialog QTabWidget::pane {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background-color: #ffffff;
+  top: -1px;
+}
+#skillAgentSettingsDialog QTabBar::tab {
+  background: transparent;
+  color: #6b7280;
+  min-height: 32px;
+  padding: 6px 24px 6px 24px;
+  margin-right: 4px;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  font-size: 10pt;
+}
+#skillAgentSettingsDialog QTabBar::tab:selected {
+  background-color: #e8f3ff;
+  color: #2563eb;
+  font-weight: 600;
+  border: 1px solid #bfdbfe;
+  border-bottom-color: #ffffff;
+}
+#skillAgentSettingsDialog QTabBar::tab:hover {
+  background-color: #f3f4f6;
+  color: #374151;
+}
+#skillAgentSettingsDialog QTabBar::tab:selected:hover {
+  background-color: #dbeafe;
+  color: #1d4ed8;
+}
 
 /* -------------------------------------------------------------------------
  * 组件：ChatSessionTab / 会话聊天区 — QTextEdit 控件级样式（Qt Style Sheet）

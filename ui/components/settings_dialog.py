@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStatusBar,
+    QTabWidget,
     QTextEdit,
     QTreeView,
     QVBoxLayout,
@@ -391,9 +392,6 @@ class SettingsDialog(QDialog):
         root.setSpacing(10)
 
         self._setup_main_content(root)
-        self._setup_auto_switch_section(root)
-        self._setup_window_size_section(root)
-        self._setup_status_bar(root)
         self._setup_bottom_buttons(root)
 
         self._apply_style()
@@ -407,10 +405,14 @@ class SettingsDialog(QDialog):
             self.setStyleSheet(style)
 
     def _setup_main_content(self, layout: QVBoxLayout) -> None:
-        # 顶部：配置管理区域（左右分栏）
-        config_section = QGroupBox("大模型配置组管理")
-        config_layout = QVBoxLayout(config_section)
-
+        # 创建 QTabWidget
+        tab_widget = QTabWidget()
+        
+        # 第一个页签：大模型配置组管理
+        config_tab = QWidget()
+        config_tab_layout = QVBoxLayout(config_tab)
+        config_tab_layout.setContentsMargins(0, 0, 0, 0)
+        
         config_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         left_panel = self._create_left_panel()
@@ -420,26 +422,43 @@ class SettingsDialog(QDialog):
         config_splitter.addWidget(right_panel)
 
         config_splitter.setSizes([280, 620])
-        config_layout.addWidget(config_splitter)
-
-        layout.addWidget(config_section)
-
-        # 底部：Skill列表（独立区域，所有配置共用）
-        skills_section = QGroupBox("Skill 管理（所有配置共用）")
-        skills_layout = QVBoxLayout(skills_section)
-
+        config_tab_layout.addWidget(config_splitter)
+        
+        # 添加自动故障切换选项
+        auto_switch_layout = QHBoxLayout()
+        self._auto_switch_check = QCheckBox("启用自动故障切换（当当前配置失败时自动切换到下一组）")
+        self._auto_switch_check.setChecked(is_auto_switch_enabled())
+        self._auto_switch_check.stateChanged.connect(self._on_auto_switch_changed)
+        auto_switch_layout.addWidget(self._auto_switch_check)
+        auto_switch_layout.addStretch()
+        config_tab_layout.addLayout(auto_switch_layout)
+        
+        # 添加状态栏
+        self._status_bar = QStatusBar()
+        self._status_bar.setSizeGripEnabled(False)
+        config_tab_layout.addWidget(self._status_bar)
+        
+        tab_widget.addTab(config_tab, "大模型配置组管理")
+        
+        # 第二个页签：Skill管理
+        skills_tab = QWidget()
+        skills_tab_layout = QVBoxLayout(skills_tab)
+        skills_tab_layout.setContentsMargins(0, 0, 0, 0)
+        
         self._skills_scroll = QScrollArea()
         self._skills_scroll.setWidgetResizable(True)
-        self._skills_scroll.setMinimumHeight(200)
         self._skills_inner = QWidget()
         self._skills_inner.setObjectName("skillAgentSettingsSkillsInner")
         self._skills_layout = QVBoxLayout(self._skills_inner)
         self._skills_layout.setContentsMargins(8, 8, 8, 8)
         self._skills_layout.setSpacing(6)
         self._skills_scroll.setWidget(self._skills_inner)
-        skills_layout.addWidget(self._skills_scroll)
-
-        layout.addWidget(skills_section)
+        skills_tab_layout.addWidget(self._skills_scroll)
+        
+        tab_widget.addTab(skills_tab, "Skill管理")
+        
+        # 将 TabWidget 添加到布局
+        layout.addWidget(tab_widget)
 
     def _create_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -516,58 +535,6 @@ class SettingsDialog(QDialog):
         layout.addWidget(params_group)
 
         return panel
-
-    def _setup_auto_switch_section(self, layout: QVBoxLayout) -> None:
-        auto_switch_layout = QHBoxLayout()
-        self._auto_switch_check = QCheckBox("启用自动故障切换（当当前配置失败时自动切换到下一组）")
-        self._auto_switch_check.setChecked(is_auto_switch_enabled())
-        self._auto_switch_check.stateChanged.connect(self._on_auto_switch_changed)
-        auto_switch_layout.addWidget(self._auto_switch_check)
-        auto_switch_layout.addStretch()
-        layout.addLayout(auto_switch_layout)
-
-    def _setup_window_size_section(self, layout: QVBoxLayout) -> None:
-        window_size_section = QGroupBox("窗口尺寸设置")
-        window_size_layout = QVBoxLayout(window_size_section)
-        
-        # 窗口宽度设置
-        width_layout = QHBoxLayout()
-        width_layout.addWidget(QLabel("窗口宽度："))
-        self._window_width_edit = QLineEdit()
-        self._window_width_edit.setPlaceholderText("780")
-        self._window_width_edit.setFixedWidth(100)
-        width_layout.addWidget(self._window_width_edit)
-        width_hint = QLabel("（最小400，默认780）")
-        width_hint.setStyleSheet("color: #6b7280; font-size: 8pt;")
-        width_layout.addWidget(width_hint)
-        width_layout.addStretch()
-        window_size_layout.addLayout(width_layout)
-        
-        # 窗口高度设置
-        height_layout = QHBoxLayout()
-        height_layout.addWidget(QLabel("窗口高度："))
-        self._window_height_edit = QLineEdit()
-        self._window_height_edit.setPlaceholderText("620")
-        self._window_height_edit.setFixedWidth(100)
-        height_layout.addWidget(self._window_height_edit)
-        height_hint = QLabel("（最小300，默认620）")
-        height_hint.setStyleSheet("color: #6b7280; font-size: 8pt;")
-        height_layout.addWidget(height_hint)
-        height_layout.addStretch()
-        window_size_layout.addLayout(height_layout)
-        
-        # 保存按钮
-        save_window_size_btn = QPushButton("保存窗口尺寸")
-        save_window_size_btn.setObjectName("skillAgentSettingsSaveWindowSizeButton")
-        save_window_size_btn.clicked.connect(self._on_save_window_size)
-        window_size_layout.addWidget(save_window_size_btn)
-        
-        layout.addWidget(window_size_section)
-
-    def _setup_status_bar(self, layout: QVBoxLayout) -> None:
-        self._status_bar = QStatusBar()
-        self._status_bar.setSizeGripEnabled(False)
-        layout.addWidget(self._status_bar)
 
     def _setup_bottom_buttons(self, layout: QVBoxLayout) -> None:
         btn_layout = QHBoxLayout()
@@ -849,40 +816,3 @@ class SettingsDialog(QDialog):
         self._refresh_params()
         self._update_status_bar()
         self._auto_switch_check.setChecked(is_auto_switch_enabled())
-        # 加载窗口尺寸设置
-        self._window_width_edit.setText(str(config.WINDOW_WIDTH))
-        self._window_height_edit.setText(str(config.WINDOW_HEIGHT))
-
-    def _on_save_window_size(self) -> None:
-        """保存窗口尺寸设置"""
-        width_text = self._window_width_edit.text().strip()
-        height_text = self._window_height_edit.text().strip()
-        
-        # 验证和解析宽度
-        try:
-            window_width = int(width_text)
-            if window_width < 400:
-                QMessageBox.warning(self, "警告", "窗口宽度不能小于 400")
-                return
-        except ValueError:
-            QMessageBox.warning(self, "警告", "窗口宽度必须是数字")
-            return
-        
-        # 验证和解析高度
-        try:
-            window_height = int(height_text)
-            if window_height < 300:
-                QMessageBox.warning(self, "警告", "窗口高度不能小于 300")
-                return
-        except ValueError:
-            QMessageBox.warning(self, "警告", "窗口高度必须是数字")
-            return
-        
-        # 保存配置
-        success_width = config.set_config("WINDOW_WIDTH", str(window_width))
-        success_height = config.set_config("WINDOW_HEIGHT", str(window_height))
-        
-        if success_width and success_height:
-            QMessageBox.information(self, "提示", "窗口尺寸已保存，请重启应用后生效")
-        else:
-            QMessageBox.warning(self, "警告", "保存窗口尺寸失败")
