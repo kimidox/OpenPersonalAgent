@@ -720,6 +720,7 @@ class SettingsDialog(QDialog):
         self._task_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._task_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._task_table.setAlternatingRowColors(True)
+        self._task_table.itemSelectionChanged.connect(self._update_task_button_states)
         tasks_tab_layout.addWidget(self._task_table)
 
         task_btn_layout = QHBoxLayout()

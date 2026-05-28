@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 import config
+from logger import get_logger
 from executor import Executor
 from memory import SqliteMemory
 from skill_agent import SkillAgent, SKILL_AGENT_AWAITING_USER_REPLY
@@ -59,6 +60,7 @@ class SkillAgentMainWindow(QMainWindow):
     def __init__(self, background: bool = False) -> None:
         super().__init__()
         self._background = background
+        self._logger = get_logger()
         self.work_dir = config.WORKER_DIR
         self.executor = Executor(self.work_dir)
         self._memory = SqliteMemory(username=config.DEFAULT_SKILL_AGENT_USER)
@@ -170,6 +172,7 @@ class SkillAgentMainWindow(QMainWindow):
             self._show_window()
 
     def _show_window(self) -> None:
+        self._logger.info(f"显示窗口 - 后台模式: {self._background}")
         self.show()
         self.raise_()
         self.activateWindow()
@@ -678,6 +681,7 @@ class SkillAgentMainWindow(QMainWindow):
         layout.addLayout(btn_layout)
         
         minimize_btn.clicked.connect(lambda: (
+            self._logger.info(f"最小化到托盘 - 后台模式: {self._background}"),
             self.hide(),
             dialog.done(1)
         ))
