@@ -757,6 +757,17 @@ class SettingsDialog(QDialog):
         autostart_layout.addWidget(self._autostart_status_label)
         tasks_tab_layout.addWidget(autostart_group)
 
+        # 添加定时任务行为设置
+        task_behavior_group = QGroupBox("定时任务行为设置")
+        task_behavior_layout = QVBoxLayout(task_behavior_group)
+        task_behavior_check_layout = QHBoxLayout()
+        self._scheduled_task_show_window_check = QCheckBox("定时任务触发智能体会话时自动弹出窗口")
+        self._scheduled_task_show_window_check.stateChanged.connect(self._on_scheduled_task_show_window_changed)
+        task_behavior_check_layout.addWidget(self._scheduled_task_show_window_check)
+        task_behavior_check_layout.addStretch()
+        task_behavior_layout.addLayout(task_behavior_check_layout)
+        tasks_tab_layout.addWidget(task_behavior_group)
+
         tab_widget.addTab(self._tasks_tab, "定时任务管理")
 
         self._tab_widget = tab_widget
@@ -1285,6 +1296,34 @@ class SettingsDialog(QDialog):
             self._autostart_check.setChecked(False)
             self._autostart_status_label.setText("状态：未启用开机自启动")
 
+    def _on_scheduled_task_show_window_changed(self, state: int) -> None:
+        """处理定时任务弹出窗口选项变更"""
+        enabled = state == Qt.CheckState.Checked.value
+        try:
+            success = config.set_config("SCHEDULED_TASK_SHOW_WINDOW", "true" if enabled else "false")
+            if success:
+                # 更新内存中的配置值
+                config.SCHEDULED_TASK_SHOW_WINDOW = enabled
+            else:
+                QMessageBox.warning(self, "警告", "保存设置失败")
+                # 恢复原值
+                self._scheduled_task_show_window_check.blockSignals(True)
+                self._scheduled_task_show_window_check.setChecked(not enabled)
+                self._scheduled_task_show_window_check.blockSignals(False)
+        except Exception as e:
+            logger.exception(f"保存定时任务设置失败: {e}")
+            QMessageBox.warning(self, "警告", f"保存设置失败: {e}")
+
+    def _update_scheduled_task_show_window_status(self) -> None:
+        """更新定时任务弹出窗口选项的状态"""
+        try:
+            # 使用 config 模块的函数重新读取配置值
+            _stsw = config.get_config("SCHEDULED_TASK_SHOW_WINDOW")
+            current_value = config._env_bool(_stsw, False)
+            self._scheduled_task_show_window_check.setChecked(current_value)
+        except Exception as e:
+            logger.exception(f"读取定时任务设置失败: {e}")
+
     def showEvent(self, event: Any) -> None:
         super().showEvent(event)
         self._skill_agent.reload_skills()
@@ -1296,3 +1335,4 @@ class SettingsDialog(QDialog):
         self._auto_switch_check.setChecked(is_auto_switch_enabled())
         self._refresh_task_list()
         self._update_autostart_status()
+        self._update_scheduled_task_show_window_status()

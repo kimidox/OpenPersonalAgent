@@ -223,3 +223,8 @@ if _dcc is None or str(_dcc).strip() == "":
     ]
 else:
     DANGEROUS_COMMAND_CONTAINS = [p.strip() for p in str(_dcc).split("\n") if p.strip()]
+
+# ===== 定时任务配置 =====
+# 定时任务触发智能体会话时，是否自动弹出主窗口并打开会话
+_stsw = get_config("SCHEDULED_TASK_SHOW_WINDOW")
+SCHEDULED_TASK_SHOW_WINDOW = _env_bool(_stsw, False)

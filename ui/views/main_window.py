@@ -279,7 +279,8 @@ class SkillAgentMainWindow(QMainWindow):
         if self.worker_thread and self.worker_thread.isRunning():
             return None
         
-        if self.isHidden() or not self.isVisible():
+        # 仅在配置为 true 时才自动弹出窗口
+        if (self.isHidden() or not self.isVisible()) and config.SCHEDULED_TASK_SHOW_WINDOW:
             self._show_window()
         
         cid, _ = self.skill_agent.start_new_conversation()
