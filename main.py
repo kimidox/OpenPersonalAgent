@@ -1,3 +1,4 @@
+import argparse
 import sys
 from pathlib import Path
 
@@ -22,11 +23,24 @@ def mark_fts_reindexed() -> None:
     FTS_REINDEX_FLAG.touch()
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="PersonalWindowGLM - 个人智能助手")
+    parser.add_argument(
+        "--background",
+        action="store_true",
+        help="后台模式启动，仅显示托盘图标，不显示主窗口"
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    
     logger = setup_logger()
     logger.info("=" * 50)
     logger.info("程序启动")
     logger.info(f"打包环境: {getattr(sys, 'frozen', False)}")
+    logger.info(f"后台模式: {args.background}")
     
     install_exception_hook()
     
@@ -45,7 +59,6 @@ def main() -> None:
         except Exception as e:
             logger.exception(f"记忆数据迁移失败: {e}")
     
-    # 检查并执行 FTS 重新索引
     if not is_fts_reindexed():
         try:
             logger.info("开始 FTS 索引重建（jieba分词）...")
@@ -56,7 +69,7 @@ def main() -> None:
             logger.exception(f"FTS 索引重建失败: {e}")
     
     try:
-        main_skill_agent()
+        main_skill_agent(background=args.background)
     except Exception as e:
         logger.exception(f"程序异常退出: {e}")
         raise

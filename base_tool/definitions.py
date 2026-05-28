@@ -236,4 +236,81 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "required": ["content"],
         },
     },
+    {
+        "name": "create_scheduled_task",
+        "description": (
+            "创建定时任务提醒。\n"
+            "使用场景：\n"
+            "- 用户要求设置提醒（如'提醒我明天下午3点开会'）\n"
+            "- 创建一次性或重复性定时任务\n"
+            "- 设置每日、每周或每月的例行提醒\n"
+            "参数：title(必需，任务标题)、trigger_time(必需，ISO格式时间)、content(可选，详细内容)、repeat_type(可选，重复类型)。\n"
+            "时间需先解析为ISO格式（YYYY-MM-DDTHH:MM:SS）。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "任务标题，简短描述任务内容",
+                },
+                "trigger_time": {
+                    "type": "string",
+                    "description": "触发时间，ISO格式字符串（YYYY-MM-DDTHH:MM:SS）",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "任务详细内容（可选）",
+                },
+                "repeat_type": {
+                    "type": "string",
+                    "enum": ["none", "daily", "weekly", "monthly"],
+                    "description": "重复类型：none(不重复)、daily(每天)、weekly(每周)、monthly(每月)，默认none",
+                },
+            },
+            "required": ["title", "trigger_time"],
+        },
+    },
+    {
+        "name": "list_scheduled_tasks",
+        "description": (
+            "列出定时任务。\n"
+            "使用场景：\n"
+            "- 用户询问'我有哪些定时任务'或'查看我的提醒'\n"
+            "- 查看所有任务或特定状态的任务\n"
+            "- 确认任务是否已创建成功\n"
+            "参数：status(可选，筛选状态)。不提供则返回所有任务。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "triggered", "cancelled", "deleted"],
+                    "description": "筛选状态：pending(待触发)、triggered(已触发)、cancelled(已取消)、deleted(已删除)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "delete_scheduled_task",
+        "description": (
+            "删除定时任务。\n"
+            "使用场景：\n"
+            "- 用户要求取消某个提醒或任务\n"
+            "- 删除不再需要的定时任务\n"
+            "参数：task_id(必需，要删除的任务ID)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "要删除的任务ID",
+                },
+            },
+            "required": ["task_id"],
+        },
+    },
 ]

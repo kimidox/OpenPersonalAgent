@@ -117,7 +117,7 @@ class SkillAgent:
             self._conversation_id = cid
         else:
             self._conversation_id = (conversation_id or "").strip()
-        self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor, memory=memory)
+        self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor, memory=memory, user_id=self.username)
         self._recent_commands: list[tuple[str, str]] = []
         self._compactor: ContextCompactor | None = None
         self._token_usage = TokenUsage.empty()

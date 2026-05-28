@@ -62,3 +62,21 @@ class MemorySegment(Base):
 
     def to_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class ScheduledTask(Base):
+    __tablename__ = 'scheduled_tasks'
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String, unique=True, index=True)
+    user_id = Column(String, index=True)
+    title = Column(String)
+    content = Column(Text)
+    trigger_time = Column(TIMESTAMP)
+    repeat_type = Column(String, default='none')
+    notification_type = Column(String, default='system')
+    status = Column(String, default='pending')
+    created_at = Column(TIMESTAMP, default=get_local_time())
+    updated_at = Column(TIMESTAMP, default=get_local_time())
+
+    def to_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}

@@ -24,15 +24,8 @@ from ui.views.worker_thread import SkillAgentWorkerThread
 from ui.styles import initialize_styles
 from resource_path import paths
 
-# warnings.warn(
-#     "ui_skill_agent 模块已废弃，请使用 ui.main 模块。"
-#     "新入口: from ui.main import main; main()",
-#     DeprecationWarning,
-#     stacklevel=2,
-# )
 
-
-def main() -> None:
+def main(background: bool = False) -> None:
     app = QApplication(sys.argv)
     fusion = QStyleFactory.create("Fusion")
     if fusion is not None:
@@ -43,8 +36,11 @@ def main() -> None:
         app.setWindowIcon(QIcon(str(icon_path)))
     
     initialize_styles()
-    window = SkillAgentMainWindow()
-    window.show()
+    window = SkillAgentMainWindow(background=background)
+    
+    if not background:
+        window.show()
+    
     sys.exit(app.exec())
 
 

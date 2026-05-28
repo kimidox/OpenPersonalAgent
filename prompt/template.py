@@ -34,6 +34,7 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户
 4. 使用 `ask_user` 询问关键信息或请求确认。
 5. 使用 `read_memory` 读取长期记忆（跨会话信息），使用 `write_memory` 保存重要信息。
 6. 使用 `load_skill_memory` 加载指定 Skill 的执行经验。
+7. 使用 `create_scheduled_task` 创建定时任务之前，先查询当前系统时间。
 
 【文件操作编码规范】（必须遵守）
 1. 写入或修改文件时，优先使用 Write 或 SearchReplace 工具（原生支持 UTF-8 编码）

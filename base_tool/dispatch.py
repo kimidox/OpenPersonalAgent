@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import config
+import scheduled_tasks as st_module
 from resource_path import paths
 from skill import SkillRegistry
 from skill.loader import load_skill_memory_lazy
@@ -592,12 +594,105 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         if skill is None:
             return f"错误: 未找到 Skill: {skill_id}"
 
-        # 加载技能记忆
         load_skill_memory_lazy(skill, registry, query=query, limit=limit)
 
         if skill.memory_content and skill.memory_content.strip():
             return f"### Skill「{skill_id}」执行经验\n\n{skill.memory_content.strip()}\n\n请参考以上经验，避免重复之前的错误。"
         return f"Skill「{skill_id}」暂无执行经验记录。"
+
+    if name == "create_scheduled_task":
+        title = args.get("title", "")
+        trigger_time_str = args.get("trigger_time", "")
+        content = args.get("content", "")
+        repeat_type = args.get("repeat_type", "none")
+
+        if not title:
+            return "错误: 缺少 title 参数"
+        if not trigger_time_str:
+            return "错误: 缺少 trigger_time 参数"
+
+        try:
+            trigger_time = datetime.fromisoformat(trigger_time_str)
+        except ValueError:
+            return f"错误: trigger_time 格式无效，应为 ISO 格式（YYYY-MM-DDTHH:MM:SS）"
+
+        valid_repeat_types = ["none", "daily", "weekly", "monthly"]
+        if repeat_type not in valid_repeat_types:
+            return f"错误: repeat_type 无效，支持: {', '.join(valid_repeat_types)}"
+
+        user_id = ctx.user_id or "default"
+
+        try:
+            task = st_module.add_task(
+                user_id=user_id,
+                title=title,
+                content=content,
+                trigger_time=trigger_time,
+                repeat_type=repeat_type,
+            )
+            task_info = task.to_dict()
+            result = (
+                f"定时任务创建成功！\n"
+                f"- 任务ID: {task_info['task_id']}\n"
+                f"- 标题: {task_info['title']}\n"
+                f"- 内容: {task_info['content'] or '(无)'}\n"
+                f"- 触发时间: {task_info['trigger_time']}\n"
+                f"- 重复类型: {task_info['repeat_type']}\n"
+                f"- 状态: {task_info['status']}\n\n"
+                f"✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            )
+            return result
+        except Exception as e:
+            return f"错误: 创建定时任务失败: {e}"
+
+    if name == "list_scheduled_tasks":
+        status = args.get("status", None)
+
+        valid_statuses = ["pending", "triggered", "cancelled", "deleted"]
+        if status and status not in valid_statuses:
+            return f"错误: status 无效，支持: {', '.join(valid_statuses)}"
+
+        user_id = ctx.user_id or "default"
+
+        try:
+            tasks = st_module.list_tasks(user_id=user_id, status=status)
+            if not tasks:
+                status_desc = f"状态为「{status}」的" if status else ""
+                return f"当前没有{status_desc}定时任务。\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+
+            task_list = []
+            for task in tasks:
+                task_info = task.to_dict()
+                task_list.append(
+                    f"- ID: {task_info['task_id']}\n"
+                    f"  标题: {task_info['title']}\n"
+                    f"  内容: {task_info['content'] or '(无)'}\n"
+                    f"  触发时间: {task_info['trigger_time']}\n"
+                    f"  重复类型: {task_info['repeat_type']}\n"
+                    f"  状态: {task_info['status']}"
+                )
+
+            status_desc = f"（状态: {status})" if status else ""
+            result = f"定时任务列表{status_desc}：\n\n" + "\n\n".join(task_list)
+            result += "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            return result
+        except Exception as e:
+            return f"错误: 获取定时任务列表失败: {e}"
+
+    if name == "delete_scheduled_task":
+        task_id = args.get("task_id", "")
+
+        if not task_id:
+            return "错误: 缺少 task_id 参数"
+
+        try:
+            success = st_module.delete_task(task_id)
+            if success:
+                return f"定时任务已删除（ID: {task_id}）\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            else:
+                return f"错误: 未找到任务（ID: {task_id}），可能已被删除"
+        except Exception as e:
+            return f"错误: 删除定时任务失败: {e}"
 
     return f"未知原子工具: {name}"
 

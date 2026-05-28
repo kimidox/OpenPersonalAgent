@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 from logger import get_module_logger
@@ -13,6 +14,9 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QCheckBox,
+    QComboBox,
+    QDateEdit,
+    QDateTimeEdit,
     QDialog,
     QDialogButtonBox,
     QFrame,
@@ -29,7 +33,10 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
+    QTimeEdit,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -54,7 +61,10 @@ from llm.llm_config_manager import (
     set_multi_config,
     update_config,
 )
+import autostart
 import config
+import scheduled_tasks
+from scheduled_tasks import NotificationType, RepeatType, ScheduledTask, TaskStatus
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 from ui.styles.style_manager import StyleManager
 
@@ -365,6 +375,148 @@ class ConfigEditPanel(QWidget):
             QMessageBox.warning(self, "警告", "保存配置失败")
 
 
+class TaskEditDialog(QDialog):
+    """添加/编辑定时任务对话框"""
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        task: ScheduledTask | None = None,
+        user_id: str = "default",
+    ) -> None:
+        super().__init__(parent)
+        self._task = task
+        self._user_id = user_id
+        self._result_task: ScheduledTask | None = None
+        self._setup_ui()
+        self._apply_style()
+        if task:
+            self._load_task(task)
+
+    def _apply_style(self) -> None:
+        style = StyleManager.get_style("settings_dialog_stylesheet")
+        if style:
+            self.setStyleSheet(style)
+
+    def _setup_ui(self) -> None:
+        self.setWindowTitle("添加任务" if self._task is None else "编辑任务")
+        self.setModal(True)
+        self.resize(450, 400)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        title_label = QLabel("任务标题：")
+        layout.addWidget(title_label)
+        self._title_edit = QLineEdit()
+        self._title_edit.setPlaceholderText("请输入任务标题")
+        layout.addWidget(self._title_edit)
+
+        content_label = QLabel("任务内容：")
+        layout.addWidget(content_label)
+        self._content_edit = QTextEdit()
+        self._content_edit.setPlaceholderText("请输入任务内容")
+        self._content_edit.setMaximumHeight(80)
+        layout.addWidget(self._content_edit)
+
+        time_layout = QHBoxLayout()
+        time_label = QLabel("触发时间：")
+        time_layout.addWidget(time_label)
+        self._datetime_edit = QDateTimeEdit()
+        self._datetime_edit.setCalendarPopup(True)
+        self._datetime_edit.setDateTime(datetime.now())
+        self._datetime_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        time_layout.addWidget(self._datetime_edit)
+        time_layout.addStretch()
+        layout.addLayout(time_layout)
+
+        repeat_layout = QHBoxLayout()
+        repeat_label = QLabel("重复类型：")
+        repeat_layout.addWidget(repeat_label)
+        self._repeat_combo = QComboBox()
+        self._repeat_combo.addItem("单次", "none")
+        self._repeat_combo.addItem("每日", "daily")
+        self._repeat_combo.addItem("每周", "weekly")
+        self._repeat_combo.addItem("每月", "monthly")
+        repeat_layout.addWidget(self._repeat_combo)
+        repeat_layout.addStretch()
+        layout.addLayout(repeat_layout)
+
+        notify_layout = QHBoxLayout()
+        notify_label = QLabel("通知方式：")
+        notify_layout.addWidget(notify_label)
+        self._notify_combo = QComboBox()
+        self._notify_combo.addItem("系统通知", "system")
+        self._notify_combo.addItem("浮动窗口", "toast")
+        notify_layout.addWidget(self._notify_combo)
+        notify_layout.addStretch()
+        layout.addLayout(notify_layout)
+
+        layout.addStretch()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        save_btn = btn_box.button(QDialogButtonBox.StandardButton.Save)
+        if save_btn:
+            save_btn.setText("保存")
+        cancel_btn = btn_box.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_btn:
+            cancel_btn.setText("取消")
+        btn_box.accepted.connect(self._on_save)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def _load_task(self, task: ScheduledTask) -> None:
+        self._title_edit.setText(task.title)
+        self._content_edit.setPlainText(task.content)
+        self._datetime_edit.setDateTime(task.trigger_time)
+        repeat_idx = self._repeat_combo.findData(task.repeat_type)
+        if repeat_idx >= 0:
+            self._repeat_combo.setCurrentIndex(repeat_idx)
+        notify_idx = self._notify_combo.findData(task.notification_type)
+        if notify_idx >= 0:
+            self._notify_combo.setCurrentIndex(notify_idx)
+
+    def _on_save(self) -> None:
+        title = self._title_edit.text().strip()
+        content = self._content_edit.toPlainText().strip()
+        trigger_time = self._datetime_edit.dateTime().toPython()
+        repeat_type: RepeatType = self._repeat_combo.currentData()
+        notification_type: NotificationType = self._notify_combo.currentData()
+
+        if not title:
+            QMessageBox.warning(self, "警告", "请输入任务标题")
+            return
+
+        try:
+            if self._task:
+                self._result_task = scheduled_tasks.update_task(
+                    self._task.task_id,
+                    title=title,
+                    content=content,
+                    trigger_time=trigger_time,
+                    repeat_type=repeat_type,
+                    notification_type=notification_type,
+                )
+            else:
+                self._result_task = scheduled_tasks.add_task(
+                    user_id=self._user_id,
+                    title=title,
+                    content=content,
+                    trigger_time=trigger_time,
+                    repeat_type=repeat_type,
+                    notification_type=notification_type,
+                )
+            self.accept()
+        except Exception as e:
+            QMessageBox.warning(self, "警告", f"保存任务失败: {e}")
+
+    def get_result(self) -> ScheduledTask | None:
+        return self._result_task
+
+
 class SettingsDialog(QDialog):
     """会话设置：多配置组管理、模型信息、Skill 启用/禁用。"""
 
@@ -384,8 +536,8 @@ class SettingsDialog(QDialog):
         self._on_config_changed = on_config_changed
         self._disabled: set[str] = set(load_disabled_skill_ids())
         self._skill_checks: list[tuple[str, QCheckBox]] = []
-        # 不再使用 QButtonGroup，自己管理互斥性
         self._config_widgets: dict[str, ConfigItemWidget] = {}
+        self._tasks_data: list[ScheduledTask] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -456,8 +608,81 @@ class SettingsDialog(QDialog):
         skills_tab_layout.addWidget(self._skills_scroll)
         
         tab_widget.addTab(skills_tab, "Skill管理")
-        
-        # 将 TabWidget 添加到布局
+
+        self._tasks_tab = QWidget()
+        tasks_tab_layout = QVBoxLayout(self._tasks_tab)
+        tasks_tab_layout.setContentsMargins(8, 8, 8, 8)
+        tasks_tab_layout.setSpacing(8)
+
+        filter_layout = QHBoxLayout()
+        filter_label = QLabel("状态筛选：")
+        filter_label.setFont(QFont("Microsoft YaHei", 9))
+        filter_layout.addWidget(filter_label)
+        self._task_status_filter = QComboBox()
+        self._task_status_filter.addItem("全部", "all")
+        self._task_status_filter.addItem("待触发", "pending")
+        self._task_status_filter.addItem("已触发", "triggered")
+        self._task_status_filter.addItem("已取消", "cancelled")
+        self._task_status_filter.currentIndexChanged.connect(self._on_task_filter_changed)
+        filter_layout.addWidget(self._task_status_filter)
+        filter_layout.addStretch()
+        tasks_tab_layout.addLayout(filter_layout)
+
+        self._task_table = QTableWidget()
+        self._task_table.setColumnCount(7)
+        self._task_table.setHorizontalHeaderLabels([
+            "标题", "内容", "触发时间", "重复类型", "通知方式", "状态", "操作"
+        ])
+        self._task_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self._task_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._task_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        self._task_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        self._task_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        self._task_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
+        self._task_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Interactive)
+        self._task_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._task_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._task_table.setAlternatingRowColors(True)
+        tasks_tab_layout.addWidget(self._task_table)
+
+        task_btn_layout = QHBoxLayout()
+        self._add_task_btn = QPushButton("添加任务")
+        self._add_task_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._add_task_btn.clicked.connect(self._on_add_task)
+        task_btn_layout.addWidget(self._add_task_btn)
+
+        self._edit_task_btn = QPushButton("编辑任务")
+        self._edit_task_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._edit_task_btn.clicked.connect(self._on_edit_task)
+        self._edit_task_btn.setEnabled(False)
+        task_btn_layout.addWidget(self._edit_task_btn)
+
+        self._delete_task_btn = QPushButton("删除任务")
+        self._delete_task_btn.setObjectName("skillAgentSettingsDeleteConfigButton")
+        self._delete_task_btn.clicked.connect(self._on_delete_task)
+        self._delete_task_btn.setEnabled(False)
+        task_btn_layout.addWidget(self._delete_task_btn)
+
+        task_btn_layout.addStretch()
+        tasks_tab_layout.addLayout(task_btn_layout)
+
+        autostart_group = QGroupBox("开机自启动设置")
+        autostart_layout = QVBoxLayout(autostart_group)
+        autostart_check_layout = QHBoxLayout()
+        self._autostart_check = QCheckBox("启用开机自启动")
+        self._autostart_check.stateChanged.connect(self._on_autostart_changed)
+        autostart_check_layout.addWidget(self._autostart_check)
+        autostart_check_layout.addStretch()
+        autostart_layout.addLayout(autostart_check_layout)
+
+        self._autostart_status_label = QLabel()
+        self._autostart_status_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        autostart_layout.addWidget(self._autostart_status_label)
+        tasks_tab_layout.addWidget(autostart_group)
+
+        tab_widget.addTab(self._tasks_tab, "定时任务管理")
+
+        self._tab_widget = tab_widget
         layout.addWidget(tab_widget)
 
     def _create_left_panel(self) -> QWidget:
@@ -807,6 +1032,138 @@ class SettingsDialog(QDialog):
             self._disabled.add(skill_id)
         save_disabled_skill_ids(self._disabled)
 
+    def _refresh_task_list(self) -> None:
+        filter_data = self._task_status_filter.currentData()
+        status: TaskStatus | None = None if filter_data == "all" else filter_data
+        tasks = scheduled_tasks.list_tasks(status=status)
+        self._task_table.setRowCount(len(tasks))
+        self._tasks_data: list[ScheduledTask] = tasks
+
+        repeat_map = {"none": "单次", "daily": "每日", "weekly": "每周", "monthly": "每月"}
+        notify_map = {"system": "系统通知", "toast": "浮动窗口"}
+        status_map = {"pending": "待触发", "triggered": "已触发", "cancelled": "已取消"}
+
+        for row, task in enumerate(tasks):
+            self._task_table.setItem(row, 0, QTableWidgetItem(task.title))
+            content_item = QTableWidgetItem(task.content[:50] + "..." if len(task.content) > 50 else task.content)
+            self._task_table.setItem(row, 1, content_item)
+            time_str = task.trigger_time.strftime("%Y-%m-%d %H:%M")
+            self._task_table.setItem(row, 2, QTableWidgetItem(time_str))
+            self._task_table.setItem(row, 3, QTableWidgetItem(repeat_map.get(task.repeat_type, task.repeat_type)))
+            self._task_table.setItem(row, 4, QTableWidgetItem(notify_map.get(task.notification_type, task.notification_type)))
+            self._task_table.setItem(row, 5, QTableWidgetItem(status_map.get(task.status, task.status)))
+
+            action_widget = QWidget()
+            action_layout = QHBoxLayout(action_widget)
+            action_layout.setContentsMargins(4, 2, 4, 2)
+            action_layout.setSpacing(4)
+
+            edit_btn = QPushButton("编辑")
+            edit_btn.setFixedSize(50, 24)
+            edit_btn.clicked.connect(lambda _, t=task: self._edit_task_direct(t))
+            action_layout.addWidget(edit_btn)
+
+            cancel_btn = QPushButton("取消")
+            cancel_btn.setFixedSize(50, 24)
+            cancel_btn.clicked.connect(lambda _, t=task: self._cancel_task_direct(t))
+            if task.status != "pending":
+                cancel_btn.setEnabled(False)
+            action_layout.addWidget(cancel_btn)
+
+            self._task_table.setCellWidget(row, 6, action_widget)
+
+        self._task_table.resizeColumnsToContents()
+        self._update_task_button_states()
+
+    def _on_task_filter_changed(self) -> None:
+        self._refresh_task_list()
+
+    def _update_task_button_states(self) -> None:
+        selected_rows = self._task_table.selectedItems()
+        has_selection = len(selected_rows) > 0
+        self._edit_task_btn.setEnabled(has_selection)
+        self._delete_task_btn.setEnabled(has_selection)
+
+    def _on_add_task(self) -> None:
+        dialog = TaskEditDialog(self, user_id="default")
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._refresh_task_list()
+            QMessageBox.information(self, "提示", "任务已添加")
+
+    def _on_edit_task(self) -> None:
+        selected_rows = self._task_table.selectedItems()
+        if not selected_rows:
+            return
+        row = selected_rows[0].row()
+        if row < len(self._tasks_data):
+            self._edit_task_direct(self._tasks_data[row])
+
+    def _edit_task_direct(self, task: ScheduledTask) -> None:
+        dialog = TaskEditDialog(self, task=task, user_id="default")
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._refresh_task_list()
+            QMessageBox.information(self, "提示", "任务已更新")
+
+    def _on_delete_task(self) -> None:
+        selected_rows = self._task_table.selectedItems()
+        if not selected_rows:
+            return
+        row = selected_rows[0].row()
+        if row >= len(self._tasks_data):
+            return
+        task = self._tasks_data[row]
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            f"确定要删除任务「{task.title}」吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            if scheduled_tasks.delete_task(task.task_id):
+                self._refresh_task_list()
+                QMessageBox.information(self, "提示", "任务已删除")
+
+    def _cancel_task_direct(self, task: ScheduledTask) -> None:
+        if task.status != "pending":
+            return
+        reply = QMessageBox.question(
+            self,
+            "确认取消",
+            f"确定要取消任务「{task.title}」吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            scheduled_tasks.update_task_status(task.task_id, "cancelled")
+            self._refresh_task_list()
+            QMessageBox.information(self, "提示", "任务已取消")
+
+    def _on_autostart_changed(self, state: int) -> None:
+        enabled = state == Qt.CheckState.Checked.value
+        if enabled:
+            success = autostart.enable_autostart()
+            if success:
+                QMessageBox.information(self, "提示", "开机自启动已启用")
+            else:
+                QMessageBox.warning(self, "警告", "启用开机自启动失败")
+                self._autostart_check.setChecked(False)
+        else:
+            success = autostart.disable_autostart()
+            if success:
+                QMessageBox.information(self, "提示", "开机自启动已禁用")
+            else:
+                QMessageBox.warning(self, "警告", "禁用开机自启动失败")
+                self._autostart_check.setChecked(True)
+        self._update_autostart_status()
+
+    def _update_autostart_status(self) -> None:
+        status = autostart.get_autostart_status()
+        if status["enabled"]:
+            self._autostart_check.setChecked(True)
+            self._autostart_status_label.setText("状态：已启用开机自启动")
+        else:
+            self._autostart_check.setChecked(False)
+            self._autostart_status_label.setText("状态：未启用开机自启动")
+
     def showEvent(self, event: Any) -> None:
         super().showEvent(event)
         self._skill_agent.reload_skills()
@@ -816,3 +1173,5 @@ class SettingsDialog(QDialog):
         self._refresh_params()
         self._update_status_bar()
         self._auto_switch_check.setChecked(is_auto_switch_enabled())
+        self._refresh_task_list()
+        self._update_autostart_status()

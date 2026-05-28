@@ -15,6 +15,7 @@ from executor import Executor
 from memory import SqliteMemory
 from skill_agent import SkillAgent, SKILL_AGENT_AWAITING_USER_REPLY
 from resource_path import paths
+from scheduler import TaskScheduler
 
 from ui.components import ChatSessionTab, SettingsDialog, ConversationSidebar
 from ui.state import SessionState, StreamState, UIState
@@ -54,8 +55,9 @@ class MultiLineInputEdit(QPlainTextEdit):
 
 
 class SkillAgentMainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, background: bool = False) -> None:
         super().__init__()
+        self._background = background
         self.work_dir = config.WORKER_DIR
         self.executor = Executor(self.work_dir)
         self._memory = SqliteMemory(username=config.DEFAULT_SKILL_AGENT_USER)
@@ -73,6 +75,7 @@ class SkillAgentMainWindow(QMainWindow):
         self._current_conversation_tab: ChatSessionTab | None = None
         self._init_ui()
         self._init_tray_icon()
+        self._init_task_scheduler()
         self._connect_signals()
         self._populate_initial_conversations()
 
@@ -136,6 +139,7 @@ class SkillAgentMainWindow(QMainWindow):
     def _init_tray_icon(self) -> None:
         icon_path = paths.get_bundled_resource("application.ico")
         if not icon_path.exists():
+            self.tray_icon = None
             return
 
         icon = QIcon(str(icon_path))
@@ -156,6 +160,10 @@ class SkillAgentMainWindow(QMainWindow):
         self.tray_icon.activated.connect(self._tray_icon_activated)
         self.tray_icon.show()
 
+    def _init_task_scheduler(self) -> None:
+        self.task_scheduler = TaskScheduler(tray_icon=self.tray_icon)
+        self.task_scheduler.start()
+
     def _tray_icon_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._show_window()
@@ -171,6 +179,8 @@ class SkillAgentMainWindow(QMainWindow):
         if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.terminate()
             self.worker_thread.wait(2000)
+        if hasattr(self, 'task_scheduler'):
+            self.task_scheduler.stop()
         from PySide6.QtWidgets import QApplication
         QApplication.instance().quit()
 
@@ -548,7 +558,6 @@ class SkillAgentMainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        # 窗口首次显示后，确保当前标签页滚动到底部
         from PySide6.QtCore import QTimer
         QTimer.singleShot(100, self._ensure_first_tab_layout_correct)
 
@@ -624,5 +633,7 @@ class SkillAgentMainWindow(QMainWindow):
         if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.terminate()
             self.worker_thread.wait(2000)
+        if hasattr(self, 'task_scheduler'):
+            self.task_scheduler.stop()
         from PySide6.QtWidgets import QApplication
         QApplication.instance().quit()

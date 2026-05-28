@@ -15,3 +15,4 @@ class ToolContext:
     work_dir: str
     executor: "Executor | None" = None
     memory: "Memory | None" = None
+    user_id: str = "default"
