@@ -87,6 +87,7 @@ SKILL_AGENT_UI_SHOW_TOOL_CALLS = _env_bool(_show_tools, True)
 
 WORKER_DIR = str(paths.personal_data_dir)
 SKILLS_DIR = str(paths.get_skills_dir())
+BUILTIN_SKILLS_DIR = str(paths.get_builtin_skills_dir())
 
 _auto_load = get_config("SKILL_AGENT_AUTO_LOAD")
 SKILL_AGENT_AUTO_LOAD = _env_bool(_auto_load, True)

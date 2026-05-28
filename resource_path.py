@@ -118,6 +118,14 @@ class PathManager:
         skills_dir.mkdir(parents=True, exist_ok=True)
         return skills_dir
     
+    def get_builtin_skills_dir(self) -> Path:
+        """
+        获取内置Skills目录（只读）
+        开发: 项目根目录/Skills/
+        打包: sys._MEIPASS/Skills/
+        """
+        return self.internal_dir / "Skills"
+    
     def get_venv_dir(self) -> Path:
         """
         获取虚拟环境目录

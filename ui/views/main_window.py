@@ -16,6 +16,7 @@ from memory import SqliteMemory
 from skill_agent import SkillAgent, SKILL_AGENT_AWAITING_USER_REPLY
 from resource_path import paths
 from scheduler import TaskScheduler
+from scheduled_tasks import ScheduledTask
 
 from ui.components import ChatSessionTab, SettingsDialog, ConversationSidebar
 from ui.state import SessionState, StreamState, UIState
@@ -161,7 +162,7 @@ class SkillAgentMainWindow(QMainWindow):
         self.tray_icon.show()
 
     def _init_task_scheduler(self) -> None:
-        self.task_scheduler = TaskScheduler(tray_icon=self.tray_icon)
+        self.task_scheduler = TaskScheduler(tray_icon=self.tray_icon, main_window=self)
         self.task_scheduler.start()
 
     def _tray_icon_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
@@ -259,13 +260,88 @@ class SkillAgentMainWindow(QMainWindow):
     def _create_new_conversation(self) -> str:
         cid, title = self.skill_agent.start_new_conversation()
         self._add_conversation(cid, title, pending_db_history=False)
-        # 添加到侧边栏
         from memory.conversation import Conversation
         conv = Conversation(cid, self.skill_agent.username, title)
         self.sidebar.add_conversation(conv)
-        # 切换到新会话
         self._switch_to_conversation(cid)
         return cid
+
+    def create_conversation_for_scheduled_task(self, task: ScheduledTask) -> str | None:
+        """
+        为定时任务创建新会话并自动执行。
+        
+        Args:
+            task: 定时任务对象，包含 title、skill_ids、execution_chain 等信息
+            
+        Returns:
+            新会话的 conversation_id，如果创建失败则返回 None
+        """
+        if self.worker_thread and self.worker_thread.isRunning():
+            return None
+        
+        if self.isHidden() or not self.isVisible():
+            self._show_window()
+        
+        cid, _ = self.skill_agent.start_new_conversation()
+        self.skill_agent.set_conversation_id(cid)
+        
+        self._memory.ensure_conversation(cid, title=task.title)
+        
+        if task.skill_ids:
+            self._memory.set_active_skills(cid, task.skill_ids)
+        
+        tab = self._add_conversation(cid, task.title, pending_db_history=False)
+        
+        from memory.conversation import Conversation
+        conv = Conversation(cid, self.skill_agent.username, task.title)
+        self.sidebar.add_conversation(conv)
+        
+        self._switch_to_conversation(cid)
+        
+        user_message = self._build_execution_chain_message(task)
+        
+        self._send_user_message(user_message, session_tab=tab)
+        
+        return cid
+
+    def _build_execution_chain_message(self, task: ScheduledTask) -> str:
+        """
+        从定时任务的 execution_chain 构建用户消息。
+        
+        Args:
+            task: 定时任务对象
+            
+        Returns:
+            格式化后的用户消息文本
+        """
+        if not task.execution_chain:
+            return f"请执行以下任务：{task.title}"
+        
+        try:
+            chain_data = json.loads(task.execution_chain)
+        except json.JSONDecodeError:
+            return f"请执行以下任务：{task.title}\n\n{task.content}"
+        
+        goal = chain_data.get("goal", task.title)
+        skills = chain_data.get("skills", [])
+        steps = chain_data.get("steps", [])
+        
+        message_parts = [f"请执行以下任务："]
+        message_parts.append(f"目标：{goal}")
+        
+        if skills:
+            skills_str = "、".join(skills)
+            message_parts.append(f"相关技能：{skills_str}")
+        
+        if steps:
+            message_parts.append("执行步骤：")
+            for i, step in enumerate(steps, 1):
+                message_parts.append(f"{i}. {step}")
+        
+        # if task.content and task.content.strip():
+        #     message_parts.append(f"\n补充说明：{task.content}")
+        
+        return "\n".join(message_parts)
 
     def _active_session_tab(self) -> ChatSessionTab | None:
         return self._current_conversation_tab

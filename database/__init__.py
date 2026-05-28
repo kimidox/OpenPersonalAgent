@@ -59,9 +59,43 @@ def _create_fts_tables():
         conn.commit()
 
 
+def _migrate_scheduled_tasks():
+    """
+    为 scheduled_tasks 表添加缺失的列
+    """
+    with engine.connect() as conn:
+        # 检查列是否已存在，不存在则添加
+        # 1. execution_type 列
+        try:
+            conn.execute(text("SELECT execution_type FROM scheduled_tasks LIMIT 1"))
+        except Exception:
+            conn.execute(text("ALTER TABLE scheduled_tasks ADD COLUMN execution_type TEXT DEFAULT 'notification'"))
+        
+        # 2. execution_chain 列
+        try:
+            conn.execute(text("SELECT execution_chain FROM scheduled_tasks LIMIT 1"))
+        except Exception:
+            conn.execute(text("ALTER TABLE scheduled_tasks ADD COLUMN execution_chain TEXT"))
+        
+        # 3. source_conversation_id 列
+        try:
+            conn.execute(text("SELECT source_conversation_id FROM scheduled_tasks LIMIT 1"))
+        except Exception:
+            conn.execute(text("ALTER TABLE scheduled_tasks ADD COLUMN source_conversation_id TEXT"))
+        
+        # 4. skill_ids 列
+        try:
+            conn.execute(text("SELECT skill_ids FROM scheduled_tasks LIMIT 1"))
+        except Exception:
+            conn.execute(text("ALTER TABLE scheduled_tasks ADD COLUMN skill_ids TEXT"))
+        
+        conn.commit()
+
+
 def init_db():
     Base.metadata.create_all(engine)
     _create_fts_tables()
+    _migrate_scheduled_tasks()
 
 
 if __name__ == '__main__':

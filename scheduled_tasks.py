@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
@@ -12,6 +12,7 @@ from database.models import ScheduledTask as ScheduledTaskModel
 RepeatType = Literal["none", "daily", "weekly", "monthly"]
 NotificationType = Literal["system", "toast"]
 TaskStatus = Literal["pending", "triggered", "cancelled", "deleted"]
+ExecutionType = Literal["notification", "agent_conversation"]
 
 
 @dataclass
@@ -24,6 +25,10 @@ class ScheduledTask:
     repeat_type: RepeatType
     notification_type: NotificationType
     status: TaskStatus
+    execution_type: ExecutionType = "notification"
+    execution_chain: str | None = None
+    source_conversation_id: str | None = None
+    skill_ids: list[str] = field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -38,6 +43,10 @@ class ScheduledTask:
             repeat_type=str(row.repeat_type) if row.repeat_type else "none",
             notification_type=str(row.notification_type) if row.notification_type else "system",
             status=str(row.status) if row.status else "pending",
+            execution_type=str(row.execution_type) if row.execution_type else "notification",
+            execution_chain=str(row.execution_chain) if row.execution_chain else None,
+            source_conversation_id=str(row.source_conversation_id) if row.source_conversation_id else None,
+            skill_ids=list(row.skill_ids) if row.skill_ids else [],
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -52,6 +61,10 @@ class ScheduledTask:
             "repeat_type": self.repeat_type,
             "notification_type": self.notification_type,
             "status": self.status,
+            "execution_type": self.execution_type,
+            "execution_chain": self.execution_chain,
+            "source_conversation_id": self.source_conversation_id,
+            "skill_ids": self.skill_ids,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -68,6 +81,10 @@ def add_task(
     trigger_time: datetime,
     repeat_type: RepeatType = "none",
     notification_type: NotificationType = "system",
+    execution_type: ExecutionType = "notification",
+    execution_chain: str | None = None,
+    source_conversation_id: str | None = None,
+    skill_ids: list[str] | None = None,
 ) -> ScheduledTask:
     task_id = str(uuid.uuid4())
     with get_session() as db:
@@ -80,6 +97,10 @@ def add_task(
             repeat_type=repeat_type,
             notification_type=notification_type,
             status="pending",
+            execution_type=execution_type,
+            execution_chain=execution_chain,
+            source_conversation_id=source_conversation_id,
+            skill_ids=skill_ids or [],
         )
         db.add(task)
         db.commit()
@@ -88,7 +109,18 @@ def add_task(
 
 
 def update_task(task_id: str, **kwargs) -> ScheduledTask:
-    valid_fields = {"title", "content", "trigger_time", "repeat_type", "notification_type", "status"}
+    valid_fields = {
+        "title",
+        "content",
+        "trigger_time",
+        "repeat_type",
+        "notification_type",
+        "status",
+        "execution_type",
+        "execution_chain",
+        "source_conversation_id",
+        "skill_ids",
+    }
     update_fields = {k: v for k, v in kwargs.items() if k in valid_fields and v is not None}
 
     if not update_fields:

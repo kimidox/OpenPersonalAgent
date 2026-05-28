@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
+
+SkillType = Literal["user", "builtin"]
 
 
 @dataclass
@@ -16,3 +19,4 @@ class SkillDefinition:
     extra_meta: dict[str, str] = field(default_factory=dict)
     memory_content: str | None = None
     memory_loaded: bool = False
+    skill_type: str = "user"

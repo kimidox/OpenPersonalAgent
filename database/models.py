@@ -75,6 +75,10 @@ class ScheduledTask(Base):
     repeat_type = Column(String, default='none')
     notification_type = Column(String, default='system')
     status = Column(String, default='pending')
+    execution_type = Column(String, default='notification')
+    execution_chain = Column(Text, nullable=True)
+    source_conversation_id = Column(String, nullable=True)
+    skill_ids = Column(JSON, default=list)
     created_at = Column(TIMESTAMP, default=get_local_time())
     updated_at = Column(TIMESTAMP, default=get_local_time())
 

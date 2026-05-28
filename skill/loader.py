@@ -200,3 +200,21 @@ def discover_skill_files(skills_dir: Path) -> list[Path]:
 
 def load_all_skills(skills_dir: Path) -> list[SkillDefinition]:
     return [load_skill_from_path(p) for p in discover_skill_files(skills_dir)]
+
+
+def load_builtin_skills(builtin_dir: Path) -> list[SkillDefinition]:
+    """
+    加载内置 Skill 目录下的所有 Skill。
+
+    参数：
+        builtin_dir: 内置 Skill 的根目录路径
+
+    返回：
+        加载的 SkillDefinition 列表，每个 Skill 的 skill_type 被标记为 "builtin"
+    """
+    skills = []
+    for skill_path in discover_skill_files(builtin_dir):
+        skill = load_skill_from_path(skill_path)
+        skill.skill_type = "builtin"
+        skills.append(skill)
+    return skills

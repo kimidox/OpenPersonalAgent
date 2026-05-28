@@ -14,9 +14,10 @@ logger = get_module_logger("scheduler")
 class TaskScheduler(QObject):
     CHECK_INTERVAL_MS: int = 5000
 
-    def __init__(self, tray_icon=None):
+    def __init__(self, tray_icon=None, main_window=None):
         super().__init__()
         self._tray_icon = tray_icon
+        self._main_window = main_window
         self._timer: QTimer | None = None
         self._running: bool = False
         logger.info("TaskScheduler 初始化完成")
@@ -75,16 +76,12 @@ class TaskScheduler(QObject):
     def _trigger_task(self, task: ScheduledTask) -> None:
         logger.info(f"触发任务: {task.task_id} - {task.title}")
 
-        try:
-            send_notification(
-                notification_type=task.notification_type,
-                title=task.title,
-                message=task.content,
-                tray_icon=self._tray_icon,
-            )
-            logger.debug(f"任务 {task.task_id} 通知已发送")
-        except Exception as e:
-            logger.error(f"发送任务 {task.task_id} 通知失败: {e}")
+        execution_type = getattr(task, 'execution_type', 'notification')
+
+        if execution_type == 'agent_conversation':
+            self._trigger_agent_conversation(task)
+        else:
+            self._trigger_notification(task)
 
         if task.repeat_type == "none":
             update_task_status(task.task_id, "triggered")
@@ -97,6 +94,29 @@ class TaskScheduler(QObject):
             else:
                 update_task_status(task.task_id, "triggered")
                 logger.warning(f"重复任务 {task.task_id} 无法计算下次触发时间，已标记为 triggered")
+
+    def _trigger_notification(self, task: ScheduledTask) -> None:
+        try:
+            send_notification(
+                notification_type=task.notification_type,
+                title=task.title,
+                message=task.content,
+                tray_icon=self._tray_icon,
+            )
+            logger.debug(f"任务 {task.task_id} 通知已发送")
+        except Exception as e:
+            logger.error(f"发送任务 {task.task_id} 通知失败: {e}")
+
+    def _trigger_agent_conversation(self, task: ScheduledTask) -> None:
+        if self._main_window is None:
+            logger.error(f"无法触发 agent_conversation 任务 {task.task_id}: 主窗口引用未设置")
+            return
+
+        try:
+            self._main_window.create_conversation_for_scheduled_task(task)
+            logger.info(f"任务 {task.task_id} agent_conversation 已触发")
+        except Exception as e:
+            logger.exception(f"触发任务 {task.task_id} agent_conversation 失败: {e}")
 
     def _calculate_next_trigger_time(self, task: ScheduledTask) -> datetime | None:
         current_trigger = task.trigger_time

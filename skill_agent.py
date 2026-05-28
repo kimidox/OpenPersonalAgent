@@ -107,7 +107,8 @@ class SkillAgent:
     ) -> None:
         self.work_dir = str(Path(work_dir).resolve())
         sd = skills_dir if skills_dir is not None else config.SKILLS_DIR
-        self.registry = SkillRegistry(sd)
+        builtin_sd = config.BUILTIN_SKILLS_DIR
+        self.registry = SkillRegistry(sd, builtin_sd)
         self.max_steps = int(max_steps if max_steps is not None else config.SKILL_AGENT_MAX_STEPS)
         self.executor = executor
         self.memory = memory

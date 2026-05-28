@@ -11,8 +11,10 @@ def normalize_skill_id(skill_id: str) -> str:
 
 def summarize_skill(s: SkillDefinition) -> str:
     desc = s.description or "(无描述)"
+    type_tag = "[系统内置]" if s.skill_type == "builtin" else "[用户]"
     res=f"""
 <Skill>
+<type>{type_tag}</type>
 <id>{s.skill_id}</id>
 <name>{s.name}</name>
 <desc>{desc}</desc>

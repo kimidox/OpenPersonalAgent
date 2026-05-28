@@ -392,6 +392,9 @@ class TaskEditDialog(QDialog):
         self._apply_style()
         if task:
             self._load_task(task)
+        else:
+            self._update_datetime_display()
+            self._on_execution_type_changed()
 
     def _apply_style(self) -> None:
         style = StyleManager.get_style("settings_dialog_stylesheet")
@@ -401,7 +404,7 @@ class TaskEditDialog(QDialog):
     def _setup_ui(self) -> None:
         self.setWindowTitle("添加任务" if self._task is None else "编辑任务")
         self.setModal(True)
-        self.resize(450, 400)
+        self.resize(480, 500)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -439,9 +442,21 @@ class TaskEditDialog(QDialog):
         self._repeat_combo.addItem("每日", "daily")
         self._repeat_combo.addItem("每周", "weekly")
         self._repeat_combo.addItem("每月", "monthly")
+        self._repeat_combo.currentIndexChanged.connect(self._on_repeat_type_changed)
         repeat_layout.addWidget(self._repeat_combo)
         repeat_layout.addStretch()
         layout.addLayout(repeat_layout)
+
+        exec_layout = QHBoxLayout()
+        exec_label = QLabel("执行方式：")
+        exec_layout.addWidget(exec_label)
+        self._execution_combo = QComboBox()
+        self._execution_combo.addItem("通知弹窗", "notification")
+        self._execution_combo.addItem("智能体会话", "agent_conversation")
+        self._execution_combo.currentIndexChanged.connect(self._on_execution_type_changed)
+        exec_layout.addWidget(self._execution_combo)
+        exec_layout.addStretch()
+        layout.addLayout(exec_layout)
 
         notify_layout = QHBoxLayout()
         notify_label = QLabel("通知方式：")
@@ -451,7 +466,20 @@ class TaskEditDialog(QDialog):
         self._notify_combo.addItem("浮动窗口", "toast")
         notify_layout.addWidget(self._notify_combo)
         notify_layout.addStretch()
-        layout.addLayout(notify_layout)
+        self._notify_group = QWidget()
+        self._notify_group.setLayout(notify_layout)
+        layout.addWidget(self._notify_group)
+
+        chain_label = QLabel("执行链路（JSON格式，可选）：")
+        self._chain_group = QWidget()
+        chain_layout = QVBoxLayout(self._chain_group)
+        chain_layout.setContentsMargins(0, 0, 0, 0)
+        chain_layout.addWidget(chain_label)
+        self._chain_edit = QTextEdit()
+        self._chain_edit.setPlaceholderText('{\n  "goal": "任务目标",\n  "skills": [],\n  "steps": []\n}')
+        self._chain_edit.setMaximumHeight(120)
+        chain_layout.addWidget(self._chain_edit)
+        layout.addWidget(self._chain_group)
 
         layout.addStretch()
 
@@ -468,6 +496,15 @@ class TaskEditDialog(QDialog):
         btn_box.rejected.connect(self.reject)
         layout.addWidget(btn_box)
 
+    def _on_execution_type_changed(self) -> None:
+        exec_type = self._execution_combo.currentData()
+        if exec_type == "notification":
+            self._notify_group.setVisible(True)
+            self._chain_group.setVisible(False)
+        else:
+            self._notify_group.setVisible(False)
+            self._chain_group.setVisible(True)
+
     def _load_task(self, task: ScheduledTask) -> None:
         self._title_edit.setText(task.title)
         self._content_edit.setPlainText(task.content)
@@ -475,9 +512,32 @@ class TaskEditDialog(QDialog):
         repeat_idx = self._repeat_combo.findData(task.repeat_type)
         if repeat_idx >= 0:
             self._repeat_combo.setCurrentIndex(repeat_idx)
+        
+        exec_idx = self._execution_combo.findData(task.execution_type)
+        if exec_idx >= 0:
+            self._execution_combo.setCurrentIndex(exec_idx)
+        
         notify_idx = self._notify_combo.findData(task.notification_type)
         if notify_idx >= 0:
             self._notify_combo.setCurrentIndex(notify_idx)
+        
+        if task.execution_chain:
+            self._chain_edit.setPlainText(task.execution_chain)
+        
+        self._update_datetime_display()
+        self._on_execution_type_changed()
+
+    def _on_repeat_type_changed(self) -> None:
+        self._update_datetime_display()
+
+    def _update_datetime_display(self) -> None:
+        repeat_type = self._repeat_combo.currentData()
+        if repeat_type == "none":
+            self._datetime_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+            self._datetime_edit.setCalendarPopup(True)
+        else:
+            self._datetime_edit.setDisplayFormat("HH:mm")
+            self._datetime_edit.setCalendarPopup(False)
 
     def _on_save(self) -> None:
         title = self._title_edit.text().strip()
@@ -485,6 +545,19 @@ class TaskEditDialog(QDialog):
         trigger_time = self._datetime_edit.dateTime().toPython()
         repeat_type: RepeatType = self._repeat_combo.currentData()
         notification_type: NotificationType = self._notify_combo.currentData()
+        execution_type: ExecutionType = self._execution_combo.currentData()
+        
+        execution_chain = None
+        if execution_type == "agent_conversation":
+            chain_text = self._chain_edit.toPlainText().strip()
+            if chain_text:
+                try:
+                    import json
+                    json.loads(chain_text)
+                    execution_chain = chain_text
+                except Exception as e:
+                    QMessageBox.warning(self, "警告", f"执行链路JSON格式错误: {e}")
+                    return
 
         if not title:
             QMessageBox.warning(self, "警告", "请输入任务标题")
@@ -499,6 +572,8 @@ class TaskEditDialog(QDialog):
                     trigger_time=trigger_time,
                     repeat_type=repeat_type,
                     notification_type=notification_type,
+                    execution_type=execution_type,
+                    execution_chain=execution_chain,
                 )
             else:
                 self._result_task = scheduled_tasks.add_task(
@@ -508,6 +583,8 @@ class TaskEditDialog(QDialog):
                     trigger_time=trigger_time,
                     repeat_type=repeat_type,
                     notification_type=notification_type,
+                    execution_type=execution_type,
+                    execution_chain=execution_chain,
                 )
             self.accept()
         except Exception as e:
@@ -629,9 +706,9 @@ class SettingsDialog(QDialog):
         tasks_tab_layout.addLayout(filter_layout)
 
         self._task_table = QTableWidget()
-        self._task_table.setColumnCount(7)
+        self._task_table.setColumnCount(8)
         self._task_table.setHorizontalHeaderLabels([
-            "标题", "内容", "触发时间", "重复类型", "通知方式", "状态", "操作"
+            "标题", "内容", "触发时间", "重复类型", "执行方式", "通知方式", "状态", "操作"
         ])
         self._task_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self._task_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -1018,12 +1095,51 @@ class SettingsDialog(QDialog):
             cb.stateChanged.connect(lambda _st, _sid=sid, _cb=cb: self._on_skill_toggled(_sid, _cb))
             row = QHBoxLayout()
             row.addWidget(cb)
-            name_lab = QLabel(f"{sid} · {s.name or ''}")
+            
+            skill_type = getattr(s, 'skill_type', 'user')
+            type_indicator = ""
+            if skill_type == "builtin":
+                type_indicator = " [内置]"
+            
+            name_lab = QLabel(f"{sid} · {s.name or ''}{type_indicator}")
             name_lab.setWordWrap(True)
             row.addWidget(name_lab, stretch=1)
+            
+            if skill_type != "builtin":
+                delete_btn = QPushButton("删除")
+                delete_btn.setFixedSize(50, 24)
+                delete_btn.clicked.connect(lambda _, _sid=sid, _s=s: self._on_delete_skill(_sid, _s))
+                row.addWidget(delete_btn)
+            
             self._skills_layout.addLayout(row)
             self._skill_checks.append((sid, cb))
         self._skills_layout.addStretch(1)
+
+    def _on_delete_skill(self, skill_id: str, skill: Any) -> None:
+        skill_type = getattr(skill, 'skill_type', 'user')
+        if skill_type == "builtin":
+            QMessageBox.warning(self, "警告", "系统内置 Skill 不可移除")
+            return
+        
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            f"确定要删除 Skill「{skill_id}」吗？\n\n这将删除该 Skill 的文件夹及其所有内容。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                success = self._skill_agent.registry.delete_skill(skill_id)
+                if success:
+                    self._disabled.discard(skill_id)
+                    save_disabled_skill_ids(self._disabled)
+                    self._repopulate_skill_rows()
+                    QMessageBox.information(self, "提示", f"Skill「{skill_id}」已删除")
+                else:
+                    QMessageBox.warning(self, "警告", f"删除 Skill「{skill_id}」失败")
+            except Exception as e:
+                QMessageBox.warning(self, "警告", f"删除 Skill 时发生错误: {e}")
 
     def _on_skill_toggled(self, skill_id: str, cb: QCheckBox) -> None:
         if cb.isChecked():
@@ -1041,17 +1157,22 @@ class SettingsDialog(QDialog):
 
         repeat_map = {"none": "单次", "daily": "每日", "weekly": "每周", "monthly": "每月"}
         notify_map = {"system": "系统通知", "toast": "浮动窗口"}
+        exec_map = {"notification": "通知弹窗", "agent_conversation": "智能体会话"}
         status_map = {"pending": "待触发", "triggered": "已触发", "cancelled": "已取消"}
 
         for row, task in enumerate(tasks):
             self._task_table.setItem(row, 0, QTableWidgetItem(task.title))
             content_item = QTableWidgetItem(task.content[:50] + "..." if len(task.content) > 50 else task.content)
             self._task_table.setItem(row, 1, content_item)
-            time_str = task.trigger_time.strftime("%Y-%m-%d %H:%M")
+            if task.repeat_type == "none":
+                time_str = task.trigger_time.strftime("%Y-%m-%d %H:%M")
+            else:
+                time_str = task.trigger_time.strftime("%H:%M")
             self._task_table.setItem(row, 2, QTableWidgetItem(time_str))
             self._task_table.setItem(row, 3, QTableWidgetItem(repeat_map.get(task.repeat_type, task.repeat_type)))
-            self._task_table.setItem(row, 4, QTableWidgetItem(notify_map.get(task.notification_type, task.notification_type)))
-            self._task_table.setItem(row, 5, QTableWidgetItem(status_map.get(task.status, task.status)))
+            self._task_table.setItem(row, 4, QTableWidgetItem(exec_map.get(task.execution_type, task.execution_type)))
+            self._task_table.setItem(row, 5, QTableWidgetItem(notify_map.get(task.notification_type, task.notification_type)))
+            self._task_table.setItem(row, 6, QTableWidgetItem(status_map.get(task.status, task.status)))
 
             action_widget = QWidget()
             action_layout = QHBoxLayout(action_widget)
@@ -1070,7 +1191,7 @@ class SettingsDialog(QDialog):
                 cancel_btn.setEnabled(False)
             action_layout.addWidget(cancel_btn)
 
-            self._task_table.setCellWidget(row, 6, action_widget)
+            self._task_table.setCellWidget(row, 7, action_widget)
 
         self._task_table.resizeColumnsToContents()
         self._update_task_button_states()

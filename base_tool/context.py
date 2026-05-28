@@ -16,3 +16,4 @@ class ToolContext:
     executor: "Executor | None" = None
     memory: "Memory | None" = None
     user_id: str = "default"
+    conversation_id: str | None = None

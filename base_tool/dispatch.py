@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -605,6 +606,9 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         trigger_time_str = args.get("trigger_time", "")
         content = args.get("content", "")
         repeat_type = args.get("repeat_type", "none")
+        execution_type = args.get("execution_type", "notification")
+        execution_chain = args.get("execution_chain", None)
+        skill_ids_raw = args.get("skill_ids", None)
 
         if not title:
             return "错误: 缺少 title 参数"
@@ -620,7 +624,26 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         if repeat_type not in valid_repeat_types:
             return f"错误: repeat_type 无效，支持: {', '.join(valid_repeat_types)}"
 
+        valid_execution_types = ["notification", "agent_conversation"]
+        if execution_type not in valid_execution_types:
+            return f"错误: execution_type 无效，支持: {', '.join(valid_execution_types)}"
+
+        skill_ids = None
+        if skill_ids_raw is not None:
+            if isinstance(skill_ids_raw, str):
+                try:
+                    skill_ids = json.loads(skill_ids_raw)
+                    if not isinstance(skill_ids, list):
+                        return "错误: skill_ids 必须是字符串列表"
+                except json.JSONDecodeError:
+                    return "错误: skill_ids JSON 解析失败"
+            elif isinstance(skill_ids_raw, list):
+                skill_ids = skill_ids_raw
+            else:
+                return "错误: skill_ids 必须是字符串或列表"
+
         user_id = ctx.user_id or "default"
+        source_conversation_id = getattr(ctx, "conversation_id", None)
 
         try:
             task = st_module.add_task(
@@ -629,6 +652,10 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 content=content,
                 trigger_time=trigger_time,
                 repeat_type=repeat_type,
+                execution_type=execution_type,
+                execution_chain=execution_chain,
+                source_conversation_id=source_conversation_id,
+                skill_ids=skill_ids,
             )
             task_info = task.to_dict()
             result = (
@@ -638,9 +665,18 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 f"- 内容: {task_info['content'] or '(无)'}\n"
                 f"- 触发时间: {task_info['trigger_time']}\n"
                 f"- 重复类型: {task_info['repeat_type']}\n"
-                f"- 状态: {task_info['status']}\n\n"
-                f"✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                f"- 执行类型: {task_info['execution_type']}\n"
             )
+            if execution_type == "agent_conversation":
+                if task_info.get("skill_ids"):
+                    result += f"- 关联技能: {', '.join(task_info['skill_ids'])}\n"
+                if task_info.get("execution_chain"):
+                    chain_preview = task_info["execution_chain"][:100]
+                    if len(task_info["execution_chain"]) > 100:
+                        chain_preview += "..."
+                    result += f"- 执行链路: {chain_preview}\n"
+            result += f"- 状态: {task_info['status']}\n\n"
+            result += "✓ 操作成功。如果任务已完成，请调用 finish 结束。"
             return result
         except Exception as e:
             return f"错误: 创建定时任务失败: {e}"

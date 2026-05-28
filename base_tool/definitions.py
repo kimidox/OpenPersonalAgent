@@ -240,11 +240,15 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
         "name": "create_scheduled_task",
         "description": (
             "创建定时任务提醒。\n"
+            "执行类型：\n"
+            "- notification: 通知弹窗提醒，到时间弹出通知窗口\n"
+            "- agent_conversation: 智能体会话触发，自动创建会话并执行任务链路\n"
             "使用场景：\n"
             "- 用户要求设置提醒（如'提醒我明天下午3点开会'）\n"
             "- 创建一次性或重复性定时任务\n"
             "- 设置每日、每周或每月的例行提醒\n"
-            "参数：title(必需，任务标题)、trigger_time(必需，ISO格式时间)、content(可选，详细内容)、repeat_type(可选，重复类型)。\n"
+            "- 定时触发智能体执行特定任务链路\n"
+            "参数：title(必需)、trigger_time(必需，ISO格式)、content(可选)、repeat_type(可选)、execution_type(可选，默认notification)、execution_chain(可选，仅agent_conversation类型)、skill_ids(可选，仅agent_conversation类型)。\n"
             "时间需先解析为ISO格式（YYYY-MM-DDTHH:MM:SS）。"
         ),
         "parameters": {
@@ -266,6 +270,20 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                     "type": "string",
                     "enum": ["none", "daily", "weekly", "monthly"],
                     "description": "重复类型：none(不重复)、daily(每天)、weekly(每周)、monthly(每月)，默认none",
+                },
+                "execution_type": {
+                    "type": "string",
+                    "enum": ["notification", "agent_conversation"],
+                    "description": "执行类型。notification为通知弹窗提醒，agent_conversation为智能体会话触发（自动创建会话并执行任务链路）。默认notification。",
+                },
+                "execution_chain": {
+                    "type": "string",
+                    "description": "执行链路JSON字符串（仅agent_conversation类型需要）。包含goal、skills、steps等字段。",
+                },
+                "skill_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "需要加载的Skill ID列表（仅agent_conversation类型需要）。",
                 },
             },
             "required": ["title", "trigger_time"],
