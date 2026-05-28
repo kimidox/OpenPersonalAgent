@@ -228,3 +228,27 @@ else:
 # 定时任务触发智能体会话时，是否自动弹出主窗口并打开会话
 _stsw = get_config("SCHEDULED_TASK_SHOW_WINDOW")
 SCHEDULED_TASK_SHOW_WINDOW = _env_bool(_stsw, False)
+
+# ===== 内存优化配置 =====
+
+# 是否启用内存优化
+_moe = get_config("MEMORY_OPTIMIZATION_ENABLED")
+MEMORY_OPTIMIZATION_ENABLED = _env_bool(_moe, True)
+
+# 内存优化延迟秒数
+_mods = get_config("MEMORY_OPTIMIZATION_DELAY_SECONDS")
+try:
+    MEMORY_OPTIMIZATION_DELAY_SECONDS = int(_mods) if _mods not in (None, "") else 30
+except (TypeError, ValueError):
+    MEMORY_OPTIMIZATION_DELAY_SECONDS = 30
+if MEMORY_OPTIMIZATION_DELAY_SECONDS < 1:
+    MEMORY_OPTIMIZATION_DELAY_SECONDS = 30
+
+# 后台模式保留的消息数量
+_bkmc = get_config("BACKGROUND_KEEP_MESSAGES_COUNT")
+try:
+    BACKGROUND_KEEP_MESSAGES_COUNT = int(_bkmc) if _bkmc not in (None, "") else 50
+except (TypeError, ValueError):
+    BACKGROUND_KEEP_MESSAGES_COUNT = 50
+if BACKGROUND_KEEP_MESSAGES_COUNT < 1:
+    BACKGROUND_KEEP_MESSAGES_COUNT = 50

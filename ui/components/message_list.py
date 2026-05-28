@@ -15,6 +15,7 @@ class MessageListWidget(QScrollArea):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._message_cards = []
+        self._released_cache_data: dict = {}
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -132,3 +133,83 @@ class MessageListWidget(QScrollArea):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.update_all_cards_width()
+
+    def release_cache(self, keep_count: int = 50) -> dict:
+        total_count = len(self._message_cards)
+        released_count = max(0, total_count - keep_count)
+        
+        metadata_list = []
+        for i, card in enumerate(self._message_cards):
+            card_meta = {
+                "index": i,
+                "msg_type": card.get_message_type(),
+                "content": card.get_content(),
+                "is_finalized": card.is_finalized(),
+            }
+            metadata_list.append(card_meta)
+        
+        self._released_cache_data = {
+            "total_count": total_count,
+            "released_count": released_count,
+            "keep_count": keep_count,
+            "metadata": metadata_list[-keep_count:] if keep_count > 0 else [],
+            "last_message_type": self._message_cards[-1].get_message_type() if self._message_cards else None,
+        }
+        
+        for card in self._message_cards:
+            card.setParent(None)
+        self._message_cards.clear()
+        
+        while self._layout.count() > 0:
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+        
+        return self._released_cache_data
+
+    def restore_from_db(self, skill_agent, conversation_id: str) -> None:
+        if skill_agent is None or not conversation_id:
+            return
+        
+        records = skill_agent.message_records_for_conversation(conversation_id)
+        if not records:
+            return
+        
+        import config
+        from llm.llm_config_manager import get_current_config
+        current_config = get_current_config()
+        show_thinking = current_config.enable_thinking
+        show_tool = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
+        
+        for m in records:
+            role = str(m.get("role") or "")
+            content = str(m.get("content") or "")
+            meta = m.get("metadata") or {}
+            
+            if role == "user":
+                msg_type = "user"
+            elif role == "assistant":
+                msg_type = meta.get("type")
+                if msg_type == "think":
+                    if not show_thinking:
+                        continue
+                    msg_type = "think"
+                elif msg_type == "tool_call":
+                    msg_type = "tool_call"
+                else:
+                    msg_type = "assistant"
+            elif role == "tool" and show_tool:
+                msg_type = "tool"
+            else:
+                continue
+            
+            self.add_message(msg_type, content)
+        
+        def finalize_all_cards():
+            self.update_all_cards_width()
+            for card in self._message_cards:
+                if not card.is_finalized():
+                    card.finalize_content()
+            self.scroll_to_bottom()
+        
+        QTimer.singleShot(50, finalize_all_cards)

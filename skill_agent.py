@@ -286,6 +286,12 @@ class SkillAgent:
     def clear_conversation_constraints(self) -> None:
         self._conversation_constraints = ""
 
+    def clear_runtime_cache(self) -> None:
+        """清理运行时缓存，释放内存"""
+        self._recent_tool_calls.clear()
+        self._recent_commands.clear()
+        self._dynamic_prompt.clear_all_placeholders()
+
     def get_conversation_constraints(self) -> str:
         return self._conversation_constraints
 

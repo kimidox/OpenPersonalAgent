@@ -14,6 +14,7 @@ class ChatSessionTab(QWidget):
         super().__init__(parent)
         self.conversation_id = conversation_id
         self.pending_db_history: bool = pending_db_history
+        self.is_cache_released: bool = False
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -51,3 +52,12 @@ class ChatSessionTab(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.message_list.update_all_cards_width()
+
+    def release_ui_cache(self, keep_count: int = 50) -> dict:
+        released_metadata = self.message_list.release_cache(keep_count)
+        self.is_cache_released = True
+        return released_metadata
+
+    def restore_ui_cache(self, skill_agent) -> None:
+        self.message_list.restore_from_db(skill_agent, self.conversation_id)
+        self.is_cache_released = False

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import gc
 import json
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QKeyEvent, QIcon, QAction
 from PySide6.QtWidgets import (
     QHBoxLayout, QPlainTextEdit, QMainWindow, QMessageBox,
@@ -60,6 +61,8 @@ class SkillAgentMainWindow(QMainWindow):
     def __init__(self, background: bool = False) -> None:
         super().__init__()
         self._background = background
+        self._is_background_mode: bool = False
+        self._memory_optimization_timer: QTimer | None = None
         self._logger = get_logger()
         self.work_dir = config.WORKER_DIR
         self.executor = Executor(self.work_dir)
@@ -171,11 +174,51 @@ class SkillAgentMainWindow(QMainWindow):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._show_window()
 
+    def _enter_background_mode(self) -> None:
+        self._is_background_mode = True
+        delay_ms = config.MEMORY_OPTIMIZATION_DELAY_SECONDS * 1000
+        self._memory_optimization_timer = QTimer()
+        self._memory_optimization_timer.setSingleShot(True)
+        self._memory_optimization_timer.timeout.connect(self._optimize_memory_for_background)
+        self._memory_optimization_timer.start(delay_ms)
+        self._logger.info(f"进入后台模式，将在 {config.MEMORY_OPTIMIZATION_DELAY_SECONDS} 秒后执行内存优化")
+
+    def _exit_background_mode(self) -> None:
+        self._is_background_mode = False
+        if self._memory_optimization_timer is not None:
+            self._memory_optimization_timer.stop()
+            self._memory_optimization_timer.deleteLater()
+            self._memory_optimization_timer = None
+        tab = self._active_session_tab()
+        if tab is not None:
+            tab.restore_ui_cache(self.skill_agent)
+        self._logger.info("退出后台模式，已恢复 UI 缓存")
+
+    def _optimize_memory_for_background(self) -> None:
+        if not config.MEMORY_OPTIMIZATION_ENABLED:
+            return
+        if not self._is_background_mode:
+            return
+        if self.worker_thread is not None and self.worker_thread.isRunning():
+            return
+        released_count = 0
+        active_tab = self._active_session_tab()
+        for cid, tab in self._conversation_tabs.items():
+            if tab is not active_tab:
+                tab.release_ui_cache()
+                released_count += 1
+        if active_tab is not None:
+            active_tab.release_ui_cache()
+        self.skill_agent.clear_runtime_cache()
+        gc.collect()
+        self._logger.info(f"后台模式内存优化完成，释放了 {released_count} 个会话标签页缓存")
+
     def _show_window(self) -> None:
         self._logger.info(f"显示窗口 - 后台模式: {self._background}")
         self.show()
         self.raise_()
         self.activateWindow()
+        self._exit_background_mode()
 
     def _quit_application(self) -> None:
         if self.stream_renderer.is_active():
@@ -683,6 +726,7 @@ class SkillAgentMainWindow(QMainWindow):
         minimize_btn.clicked.connect(lambda: (
             self._logger.info(f"最小化到托盘 - 后台模式: {self._background}"),
             self.hide(),
+            self._enter_background_mode(),
             dialog.done(1)
         ))
         
