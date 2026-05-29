@@ -504,10 +504,6 @@ class SkillAgentMainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "至少保留一个会话。")
             return
         
-        # 删除会话
-        self._memory.clear_conversation(conversation_id)
-        self.session_state.remove_conversation(conversation_id)
-        
         # 如果删除的是当前会话，切换到另一个会话
         if self._current_conversation_tab and self._current_conversation_tab.conversation_id == conversation_id:
             # 找到另一个会话
@@ -515,6 +511,13 @@ class SkillAgentMainWindow(QMainWindow):
                 if cid != conversation_id:
                     self._switch_to_conversation(cid)
                     break
+        
+        # 更新UI - 先删除侧边栏中的会话项
+        self.sidebar.remove_conversation(conversation_id)
+        
+        # 删除会话
+        self._memory.clear_conversation(conversation_id)
+        self.session_state.remove_conversation(conversation_id)
         
         # 移除会话标签
         if conversation_id in self._conversation_tabs:

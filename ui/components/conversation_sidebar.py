@@ -146,5 +146,4 @@ class ConversationSidebar(QWidget):
         
     def _on_conversation_deleted(self, conversation_id: str) -> None:
         """会话删除请求事件"""
-        self.remove_conversation(conversation_id)
         self.conversation_deleted.emit(conversation_id)

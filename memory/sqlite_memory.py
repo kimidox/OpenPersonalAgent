@@ -159,7 +159,7 @@ class SqliteMemory(Memory):
             rows = (
                 db.query(Conversations)
                 .filter(Conversations.user_id == str(user.uuid))
-                .order_by(Conversations.updated_at.desc())
+                .order_by(Conversations.created_at.desc())
                 .all()
             )
         return [Conversation.from_orm(r) for r in rows]
