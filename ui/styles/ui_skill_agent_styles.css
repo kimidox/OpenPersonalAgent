@@ -165,6 +165,80 @@ QPushButton#skillAgentToggleButton:hover {
 QPushButton#skillAgentToggleButton:pressed {
   background-color: rgba(37, 99, 235, 0.12);
 }
+/* 输入区域外层容器样式 */
+QWidget#skillAgentInputContainer {
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 8px;
+}
+/* 输入框样式（在容器内） */
+QWidget#skillAgentInputContainer MultiLineInputEdit {
+  background-color: transparent;
+  border: none;
+  color: #374151;
+}
+QWidget#skillAgentInputContainer MultiLineInputEdit:focus {
+  border: none;
+}
+/* 漩涡按钮样式 */
+QPushButton#skillAgentVortexButton {
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 13px;
+  font-size: 14px;
+  font-weight: bold;
+  padding: 0;
+}
+QPushButton#skillAgentVortexButton:hover {
+  background-color: #f9fafb;
+  border-color: #d1d5db;
+  color: #2563eb;
+}
+QPushButton#skillAgentVortexButton:pressed {
+  background-color: #f3f4f6;
+}
+/* 发送按钮 - 圆形样式 */
+QPushButton#skillAgentSendButton {
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 13px;
+  font-size: 16px;
+  font-weight: bold;
+  padding: 0;
+}
+QPushButton#skillAgentSendButton:hover {
+  background-color: #1d4ed8;
+}
+QPushButton#skillAgentSendButton:pressed {
+  background-color: #1e40af;
+}
+QPushButton#skillAgentSendButton:disabled {
+  background-color: #93c5fd;
+  color: #e5e7eb;
+}
+/* 停止按钮 - 圆形样式 */
+QPushButton#skillAgentStopButton {
+  background-color: #ef4444;
+  color: #ffffff;
+  border: none;
+  border-radius: 13px;
+  font-size: 14px;
+  font-weight: bold;
+  padding: 0;
+}
+QPushButton#skillAgentStopButton:hover {
+  background-color: #dc2626;
+}
+QPushButton#skillAgentStopButton:pressed {
+  background-color: #b91c1c;
+}
+QPushButton#skillAgentStopButton:disabled {
+  background-color: #fca5a5;
+  color: #fecaca;
+}
 
 /* -------------------------------------------------------------------------
  * 组件：SkillAgentSettingsDialog — 会话与模型设置（与主窗口同一色板 / Fusion）

@@ -252,22 +252,37 @@ class SkillAgentMainWindow(QMainWindow):
         return btn
 
     def _setup_input_area(self, layout: QVBoxLayout) -> None:
-        row = QHBoxLayout()
+        # 创建外层容器
+        input_container = QWidget()
+        input_container.setObjectName("skillAgentInputContainer")
+        container_layout = QHBoxLayout(input_container)
+        container_layout.setContentsMargins(8, 8, 8, 8)
+        container_layout.setSpacing(8)
+        
+        # 输入框
         self.input_edit = MultiLineInputEdit()
         self.input_edit.setPlaceholderText(UIState.PLACEHOLDER_DEFAULT)
         self.input_edit.setFont(QFont("Microsoft YaHei", 10))
         self.input_edit.setMinimumHeight(36)
         self.input_edit.setMaximumHeight(120)
         self.input_edit.set_send_callback(self._on_send)
-        self.send_btn = QPushButton("发送")
+        
+        # 漩涡按钮
+        self.vortex_btn = QPushButton("🌀")
+        self.vortex_btn.setObjectName("skillAgentVortexButton")
+        self.vortex_btn.setFixedSize(26, 26)
+        # 事件绑定先空着
+        
+        # 发送按钮 - 圆形箭头样式
+        self.send_btn = QPushButton("↑")
         self.send_btn.setObjectName("skillAgentSendButton")
-        self.send_btn.setFont(QFont("Microsoft YaHei", 10))
-        self.send_btn.setMinimumHeight(36)
-        self.send_btn.setMinimumWidth(88)
+        self.send_btn.setFixedSize(26, 26)
         self.send_btn.clicked.connect(self._on_send)
-        row.addWidget(self.input_edit, stretch=1)
-        row.addWidget(self.send_btn)
-        layout.addLayout(row)
+        
+        container_layout.addWidget(self.input_edit, stretch=1)
+        container_layout.addWidget(self.vortex_btn)
+        container_layout.addWidget(self.send_btn)
+        layout.addWidget(input_container)
 
     def _connect_signals(self) -> None:
         self.ui_state.send_button_changed.connect(self.send_btn.setEnabled)
@@ -555,7 +570,7 @@ class SkillAgentMainWindow(QMainWindow):
             except RuntimeError:
                 pass
             self.send_btn.setObjectName("skillAgentStopButton")
-            self.send_btn.setText("停止")
+            self.send_btn.setText("⏹")
             self.send_btn.clicked.connect(self._on_stop)
             self.send_btn.setEnabled(True)
         else:
@@ -564,7 +579,7 @@ class SkillAgentMainWindow(QMainWindow):
             except RuntimeError:
                 pass
             self.send_btn.setObjectName("skillAgentSendButton")
-            self.send_btn.setText("发送")
+            self.send_btn.setText("↑")
             self.send_btn.clicked.connect(self._on_send)
 
     def _on_stop(self) -> None:
