@@ -79,7 +79,14 @@ CONTROL_TOOL_DEFINITIONS: list[dict] = [
         "description": (
             "加载指定的 Skill 文档，获取完整的操作指南。\n"
             "参数：skill_id（必需），要加载的 Skill 的 ID。\n"
-            "可多次调用加载多个 Skill，已加载的不会重复追加。"
+            "可多次调用加载多个 Skill，已加载的不会重复追加。\n"
+            "【Skill 加载铁律】（不可跳过）\n"
+            "1. 完整阅读主文档全部内容\n"
+            "2. 逐行扫描文档，提取所有反引号包裹的文件路径\n"
+            "3. 对每个文件路径，**必须**调用 run_command 读取内容（必须指定 skill_id）\n"
+            "4. 若文档要求运行 scripts/ 下的 .py 脚本，**必须**执行\n"
+            "5. 将所有内容完整合并为最终上下文\n"
+            "6. 若发现新的 Skill 引用，递归加载直到无新文件"
         ),
         "parameters": {
             "type": "object",
@@ -167,7 +174,18 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "- 安装依赖: pip install package\n"
             "- 运行测试: pytest\n"
             "- Git 操作: git status\n"
-            "参数：command(必需)、cwd(可选)、skill_id(可选)、timeout_sec(可选，默认60秒)。"
+            "参数：command(必需)、cwd(可选)、skill_id(可选)、timeout_sec(可选，默认60秒)。\n\n"
+            "【文件操作编码规范】（必须遵守）\n"
+            "1. 写入或修改文件时，优先使用 Write 或 SearchReplace 工具（原生支持 UTF-8 编码）\n"
+            "2. 若必须使用 run_command 进行文件写入，必须显式指定 UTF-8 编码：\n"
+            "   - PowerShell: 使用 -Encoding UTF8 参数（如 Set-Content -Path file.txt -Value \"内容\" -Encoding UTF8）\n"
+            "   - 禁止使用裸重定向 > 或不带编码参数的 Set-Content、Out-File 等命令\n"
+            "3. 违反编码规范会导致文件乱码，影响后续处理\n\n"
+            "【错误处理规范】执行后如果满足以下任一条件，必须立即调用 load_skill_memory：\n"
+            "- exit_code ≠ 0（命令执行失败）\n"
+            "- 返回 stderr 有错误信息\n"
+            "- 文件未找到或路径错误\n"
+            "- 连续失败次数 ≥ 1 次"
         ),
         "parameters": {
             "type": "object",
