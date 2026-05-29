@@ -279,6 +279,7 @@ class SkillAgentMainWindow(QMainWindow):
         self.message_handler.await_user_message.connect(self._on_await_user_message)
         self.message_handler.skill_content_message.connect(self._on_skill_content_message)
         self.message_handler.tool_call_message.connect(self._on_tool_call_message)
+        self.message_handler.token_usage_message.connect(self._on_token_usage_message)
         # 连接侧边栏信号
         self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
         self.sidebar.conversation_selected.connect(self._on_conversation_selected)
@@ -433,7 +434,6 @@ class SkillAgentMainWindow(QMainWindow):
 
     def _replay_messages(self, tab: ChatSessionTab, records: list) -> None:
         show_tool = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
-        # 获取当前的 enable_thinking 设置
         from llm.llm_config_manager import get_current_config
         current_config = get_current_config()
         show_thinking = current_config.enable_thinking
@@ -445,7 +445,6 @@ class SkillAgentMainWindow(QMainWindow):
             elif role == "assistant":
                 msg_type = meta.get("type")
                 if msg_type == "think":
-                    # 只有当启用思考模式时才显示思考消息
                     if not show_thinking:
                         continue
                     msg_type = "think"
@@ -457,11 +456,10 @@ class SkillAgentMainWindow(QMainWindow):
                 msg_type = "tool"
             else:
                 continue
-                
-            # 先添加消息
-            card = tab.message_list.add_message(msg_type, content)
             
-        # 批量加载完成后，先更新所有卡片的宽度，再逐个 finalize
+            token_usage = meta.get("token_usage") if msg_type == "assistant" else None
+            card = tab.message_list.add_message(msg_type, content, token_usage=token_usage)
+            
         from PySide6.QtCore import QTimer
         
         def finalize_all_cards():
@@ -645,6 +643,13 @@ class SkillAgentMainWindow(QMainWindow):
                 self.stream_renderer.complete()
         session_tab.add_message("user", message)
 
+    def _on_token_usage_message(self, token_usage: dict, session_tab: ChatSessionTab) -> None:
+        """处理token_usage消息，将token用量信息传递给stream_renderer"""
+        if self.stream_renderer.is_active():
+            conv_id = self.stream_renderer.get_conversation_id()
+            if conv_id == session_tab.conversation_id:
+                self.stream_renderer.complete(token_usage)
+
     def _on_await_user_message(self, spec: dict, session_tab: ChatSessionTab) -> None:
         if self.stream_renderer.is_active():
             conv_id = self.stream_renderer.get_conversation_id()
@@ -667,8 +672,8 @@ class SkillAgentMainWindow(QMainWindow):
                 session_tab.clear_await_user_ui()
                 # 检查是否需要添加最终结果
                 if result and result.strip():
-                    # 如果流式渲染没有内容或者内容只有"(完成)"这类提示
-                    has_stream_content = stream_text.strip() and "(完成)" not in stream_text
+                    # 如果流式渲染没有内容或者内容只有"(完成)"这类提示，或者已经通过token_usage完成了渲染
+                    has_stream_content = (stream_text.strip() and "(完成)" not in stream_text) or self.stream_renderer.has_completed_with_token_usage()
                     if not has_stream_content:
                         session_tab.add_message("assistant", result)
         self._sync_input_placeholder()

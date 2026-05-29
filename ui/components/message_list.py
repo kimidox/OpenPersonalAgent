@@ -203,7 +203,10 @@ class MessageListWidget(QScrollArea):
             else:
                 continue
             
-            self.add_message(msg_type, content)
+            # 获取token_usage信息
+            token_usage = meta.get("token_usage") if msg_type == "assistant" else None
+            
+            self.add_message(msg_type, content, token_usage=token_usage)
         
         def finalize_all_cards():
             self.update_all_cards_width()
@@ -212,4 +215,5 @@ class MessageListWidget(QScrollArea):
                     card.finalize_content()
             self.scroll_to_bottom()
         
+        from PySide6.QtCore import QTimer
         QTimer.singleShot(50, finalize_all_cards)

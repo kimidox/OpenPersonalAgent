@@ -13,6 +13,7 @@ class SimpleStreamRenderer(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._state: dict[str, Any] | None = None
+        self._has_completed_with_token_usage: bool = False
         
     def start(
         self, 
@@ -22,6 +23,8 @@ class SimpleStreamRenderer(QObject):
         conversation_id: str
     ) -> None:
         """开始流式渲染"""
+        self._has_completed_with_token_usage = False
+        
         # 检查是否已经有同类型同会话的渲染
         if self._state is not None:
             # 只有三个条件全部匹配才追加：同会话、同类型、同 message_list
@@ -65,8 +68,14 @@ class SimpleStreamRenderer(QObject):
         message_list = self._state["message_list"]
         full_text = self._state["full_text"]
         message_list.finalize_last_message(token_usage)
+        if token_usage:
+            self._has_completed_with_token_usage = True
         self._state = None
         return full_text
+    
+    def has_completed_with_token_usage(self) -> bool:
+        """检查是否已通过token_usage完成了流式渲染"""
+        return self._has_completed_with_token_usage
         
     def _update_display(self) -> None:
         """更新显示"""

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -834,7 +835,8 @@ class SkillAgent:
                                                         err_msg = f"依赖安装失败: {msg}"
                                                         if log_callback:
                                                             log_callback(err_msg, "assistant")
-                                                        self.memory.append_message(self._conversation_id, "assistant", err_msg)
+                                                        metadata = {"token_usage": asdict(self._token_usage)}
+                                                        self.memory.append_message(self._conversation_id, "assistant", err_msg, metadata=metadata)
                                                         _emit_token_usage()
                                                         print(f"[DEBUG-exec] 📤 返回 (依赖安装失败): {err_msg}")
                                                         return err_msg
@@ -864,7 +866,8 @@ class SkillAgent:
                                 if log_callback:
                                     log_callback(cancel_msg, "assistant")
                                 if self.memory is not None:
-                                    self.memory.append_message(self._conversation_id, "assistant", cancel_msg)
+                                    metadata = {"token_usage": asdict(self._token_usage)}
+                                    self.memory.append_message(self._conversation_id, "assistant", cancel_msg, metadata=metadata)
                                 _emit_token_usage()
                                 print(f"[DEBUG-exec] 📤 返回 (操作已取消)")
                                 return cancel_msg
@@ -883,7 +886,8 @@ class SkillAgent:
                     if log_callback:
                         log_callback(stop_msg, "assistant")
                     if self.memory is not None:
-                        self.memory.append_message(self._conversation_id, "assistant", stop_msg)
+                        metadata = {"token_usage": asdict(self._token_usage)}
+                        self.memory.append_message(self._conversation_id, "assistant", stop_msg, metadata=metadata)
                     self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     _emit_token_usage()
                     print(f"[DEBUG-exec] 📤 用户停止推理，退出循环")
@@ -962,13 +966,15 @@ class SkillAgent:
                         if log_callback:
                             log_callback(err, "assistant")
                         if self.memory is not None:
-                            self.memory.append_message(self._conversation_id, "assistant", err)
+                            metadata = {"token_usage": asdict(self._token_usage)}
+                            self.memory.append_message(self._conversation_id, "assistant", err, metadata=metadata)
                         self._start_summary_in_background(self._conversation_id, active_skill_ids)
                         _emit_token_usage()
                         return err
 
                     if self.memory is not None:
-                        self.memory.append_message(self._conversation_id, "assistant", final_text)
+                        metadata = {"token_usage": asdict(self._token_usage)}
+                        self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
                     self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     _emit_token_usage()
                     print(f"[DEBUG-exec] 📤 返回文本内容 (长度: {len(final_text)})")
@@ -1163,7 +1169,8 @@ class SkillAgent:
                             if log_callback:
                                 log_callback(auto_finish_msg, "assistant")
                             if self.memory is not None:
-                                self.memory.append_message(self._conversation_id, "assistant", auto_finish_msg)
+                                metadata = {"token_usage": asdict(self._token_usage)}
+                                self.memory.append_message(self._conversation_id, "assistant", auto_finish_msg, metadata=metadata)
                             self._start_summary_in_background(self._conversation_id, active_skill_ids)
                             _emit_token_usage()
                             return auto_finish_msg
@@ -1256,7 +1263,8 @@ class SkillAgent:
                         if auto_end_msg:
                             print(f"[DEBUG-write] 检测到重复写入，自动结束: {auto_end_msg}")
                             log_callback(auto_end_msg, "assistant")
-                            self.memory.append_message(self._conversation_id, "assistant", auto_end_msg)
+                            metadata = {"token_usage": asdict(self._token_usage)}
+                            self.memory.append_message(self._conversation_id, "assistant", auto_end_msg, metadata=metadata)
                             self._start_summary_in_background(self._conversation_id, active_skill_ids)
                             _emit_token_usage()
                             return auto_end_msg
@@ -1266,7 +1274,8 @@ class SkillAgent:
                     if self.memory is not None:
                         cid = self._conversation_id
                         self.memory.append_message(cid, "tool", str(result), metadata={"name": fname})
-                        self.memory.append_message(cid, "assistant", str(final))
+                        metadata = {"token_usage": asdict(self._token_usage)}
+                        self.memory.append_message(cid, "assistant", str(final), metadata=metadata)
                     self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     if log_callback:
                         log_callback(str(final), "assistant")
@@ -1311,7 +1320,8 @@ class SkillAgent:
             if log_callback:
                 log_callback(tail, "assistant")
             if self.memory is not None:
-                self.memory.append_message(self._conversation_id, "assistant", tail)
+                metadata = {"token_usage": asdict(self._token_usage)}
+                self.memory.append_message(self._conversation_id, "assistant", tail, metadata=metadata)
             self._start_summary_in_background(self._conversation_id, active_skill_ids)
             _emit_token_usage()
             print(f"[DEBUG-exec] 📤 正常退出循环，返回 tail 消息")
@@ -1326,7 +1336,8 @@ class SkillAgent:
                 log_callback(err_msg, "assistant")
                 log_callback(f"详细错误日志已记录，如需排查请查看终端输出。", "info")
             if self.memory is not None:
-                self.memory.append_message(self._conversation_id, "assistant", err_msg)
+                metadata = {"token_usage": asdict(self._token_usage)}
+                self.memory.append_message(self._conversation_id, "assistant", err_msg, metadata=metadata)
             
             try:
                 self._start_summary_in_background(self._conversation_id, active_skill_ids)

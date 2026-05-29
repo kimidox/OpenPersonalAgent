@@ -789,6 +789,13 @@ QToolButton#skillAgentCopyButton:pressed {
   background-color: #e5e7eb;
 }
 
+/* === section:message_card_token_usage === */
+QLabel#skillAgentTokenUsageLabel {
+  color: #9ca3af;
+  font-size: 9pt;
+  padding-top: 6px;
+}
+
 /* -------------------------------------------------------------------------
  * 组件：MessageListWidget — 消息列表
  * ------------------------------------------------------------------------- */

@@ -23,6 +23,7 @@ class MessageCardWidget(QWidget):
         self._msg_type = msg_type
         self._raw_content = content
         self._is_finalized = False
+        self._token_usage: dict[str, Any] | None = None
         self._setup_ui()
         if content:
             self.update_content(content)
@@ -97,6 +98,13 @@ class MessageCardWidget(QWidget):
         self._apply_content_style()
         self._bubble_layout.addWidget(self._content_label)
 
+        # Token用量标签 - 仅在助手类型消息上可能显示
+        self._token_usage_label = QLabel()
+        self._token_usage_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self._apply_token_usage_style()
+        self._token_usage_label.hide()
+        self._bubble_layout.addWidget(self._token_usage_label)
+
         import config
         self._copy_button = None
         if self._msg_type in config.COPY_BUTTON_ENABLED_TYPES:
@@ -148,6 +156,12 @@ class MessageCardWidget(QWidget):
         }
         return captions.get(self._msg_type, "消息")
 
+    def _get_object_name_suffix(self) -> str:
+        """将消息类型转换为 objectName 后缀（驼峰命名）"""
+        if self._msg_type == "tool_call":
+            return "ToolCall"
+        return self._msg_type.capitalize()
+
     def _apply_bubble_style(self) -> None:
         style_map = {
             "user": "message_card_bubble_user",
@@ -158,7 +172,7 @@ class MessageCardWidget(QWidget):
         }
         style_name = style_map.get(self._msg_type, style_map["assistant"])
         style = StyleManager.get_style(style_name)
-        self._bubble_frame.setObjectName(f"skillAgentMessageBubble{self._msg_type.capitalize()}")
+        self._bubble_frame.setObjectName(f"skillAgentMessageBubble{self._get_object_name_suffix()}")
         if style:
             self._bubble_frame.setStyleSheet(style)
 
@@ -172,7 +186,7 @@ class MessageCardWidget(QWidget):
         }
         style_name = style_map.get(self._msg_type, style_map["assistant"])
         style = StyleManager.get_style(style_name)
-        self._caption_label.setObjectName(f"skillAgentMessageCaption{self._msg_type.capitalize()}")
+        self._caption_label.setObjectName(f"skillAgentMessageCaption{self._get_object_name_suffix()}")
         if style:
             self._caption_label.setStyleSheet(style)
         
@@ -192,9 +206,17 @@ class MessageCardWidget(QWidget):
         }
         style_name = style_map.get(self._msg_type, style_map["assistant"])
         style = StyleManager.get_style(style_name)
-        self._content_label.setObjectName(f"skillAgentMessageContent{self._msg_type.capitalize()}")
+        self._content_label.setObjectName(f"skillAgentMessageContent{self._get_object_name_suffix()}")
         if style:
             self._content_label.setStyleSheet(style)
+
+    def _apply_token_usage_style(self) -> None:
+        self._token_usage_label.setObjectName("skillAgentTokenUsageLabel")
+        style = StyleManager.get_style("message_card_token_usage")
+        if style:
+            self._token_usage_label.setStyleSheet(style)
+        else:
+            self._token_usage_label.setStyleSheet("QLabel#skillAgentTokenUsageLabel { color: #9ca3af; font-size: 9pt; padding-top: 6px; }")
 
     def update_content(self, text: str) -> None:
         # 去除文本前后的空白行和空格
@@ -217,17 +239,20 @@ class MessageCardWidget(QWidget):
         if self._is_finalized:
             return
         self._is_finalized = True
+        if token_usage is not None:
+            self._token_usage = token_usage
         
         html = markdown_to_html_fragment(self._raw_content)
+        self._content_label.setText(html)
         
-        if token_usage:
+        if self._token_usage and self._msg_type == "assistant":
             import config
             if config.TOKEN_USAGE_SHOW_IN_UI:
-                total = token_usage.get("total_tokens")
-                if total is not None:
-                    html += f'<div style="color:#9ca3af;font-size:9pt;margin-top:8px;">Token: {total}</div>'
-        
-        self._content_label.setText(html)
+                prompt_tokens = self._token_usage.get("prompt_tokens", 0)
+                completion_tokens = self._token_usage.get("completion_tokens", 0)
+                total_tokens = self._token_usage.get("total_tokens", prompt_tokens + completion_tokens)
+                self._token_usage_label.setText(f"提示词: {prompt_tokens} | 完成: {completion_tokens} | 总计: {total_tokens}")
+                self._token_usage_label.show()
 
     def get_content(self) -> str:
         return self._raw_content
