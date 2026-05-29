@@ -11,12 +11,14 @@ class PlaceholderName(str, Enum):
     CONVERSATION_CONSTRAINTS = "CONVERSATION_CONSTRAINTS"
     RECENT_MEMORY_SUMMARY = "RECENT_MEMORY_SUMMARY"
     TOOL_CATALOG = "TOOL_CATALOG"
+    BASE_INFO = "BASE_INFO"
 
 
 PLACEHOLDER_NAMES: Final[set[str]] = {p.value for p in PlaceholderName}
 
 
 DEFAULT_SYSTEM_PROMPT_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户的业务提问，从下列 Skill 中选择并执行合适流程。
+{BASE_INFO}
 
 {SKILL_CATALOG}
 
@@ -39,6 +41,7 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户
 4. 分析返回结果，决定下一步操作
 
 【刚性约束】
+- 用户的问题都要考虑是否能调用工具完成
 - 未完成全部文件读取前，禁止回答用户问题
 - 必须显性调用工具，禁止脑补文件内容
 - 任务完成后必须调用 finish 工具
@@ -79,4 +82,5 @@ EMPTY_PLACEHOLDER_VALUES: Final[dict[str, str]] = {
     PlaceholderName.RECENT_MEMORY_SUMMARY.value: "",
     PlaceholderName.CONVERSATION_CONSTRAINTS.value: "",
     PlaceholderName.TOOL_CATALOG.value: "",
+    PlaceholderName.BASE_INFO.value: "",
 }

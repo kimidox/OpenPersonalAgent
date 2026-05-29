@@ -570,9 +570,13 @@ class SkillAgentMainWindow(QMainWindow):
             except RuntimeError:
                 pass
             self.send_btn.setObjectName("skillAgentStopButton")
-            self.send_btn.setText("⏹")
+            self.send_btn.setText("")
             self.send_btn.clicked.connect(self._on_stop)
             self.send_btn.setEnabled(True)
+            self.send_btn.setFixedSize(18, 18)
+            self.send_btn.style().unpolish(self.send_btn)
+            self.send_btn.style().polish(self.send_btn)
+            self.send_btn.update()
         else:
             try:
                 self.send_btn.clicked.disconnect(self._on_stop)
@@ -581,6 +585,10 @@ class SkillAgentMainWindow(QMainWindow):
             self.send_btn.setObjectName("skillAgentSendButton")
             self.send_btn.setText("↑")
             self.send_btn.clicked.connect(self._on_send)
+            self.send_btn.setFixedSize(26, 26)
+            self.send_btn.style().unpolish(self.send_btn)
+            self.send_btn.style().polish(self.send_btn)
+            self.send_btn.update()
 
     def _on_stop(self) -> None:
         if self.worker_thread and self.worker_thread.isRunning():
@@ -588,7 +596,7 @@ class SkillAgentMainWindow(QMainWindow):
         if self.stream_renderer.is_active():
             self.stream_renderer.complete()
         self.send_btn.setEnabled(False)
-        self.send_btn.setText("停止中…")
+        self.send_btn.setText("")
 
     def _send_user_message(self, text: str, *, session_tab: ChatSessionTab | None = None) -> None:
         text = (text or "").strip()

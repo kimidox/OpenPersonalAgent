@@ -4,6 +4,7 @@ import json
 import threading
 import uuid
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -245,6 +246,10 @@ class SkillAgent:
             lines.append(f"- **{name}**: {brief}")
         return "\n".join(lines)
 
+    def get_base_info(self) -> str:
+        base_info = f"用户名：{self.username}\n"
+        base_info+=f"当前系统时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        return base_info
     def _build_dynamic_system_prompt(
         self,
         catalog: str,
@@ -254,6 +259,8 @@ class SkillAgent:
         tool_catalog: str | None = None,
     ) -> str:
         self._dynamic_prompt.clear_all_placeholders()
+        base_info=self.get_base_info()
+        self._dynamic_prompt.update_base_info(base_info)
         self._dynamic_prompt.update_skill_catalog(catalog)
         if tool_catalog:
             self._dynamic_prompt.update_tool_catalog(tool_catalog)

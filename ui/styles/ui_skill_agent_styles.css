@@ -201,43 +201,45 @@ QPushButton#skillAgentVortexButton:pressed {
 }
 /* 发送按钮 - 圆形样式 */
 QPushButton#skillAgentSendButton {
-  background-color: #2563eb;
-  color: #ffffff;
+  background-color: transparent;
+  color: #2563eb;
   border: none;
   border-radius: 13px;
-  font-size: 16px;
-  font-weight: bold;
+  font-size: 24px;
+  font-weight: 900;
   padding: 0;
 }
 QPushButton#skillAgentSendButton:hover {
-  background-color: #1d4ed8;
+  background-color: transparent;
+  color: #1d4ed8;
 }
 QPushButton#skillAgentSendButton:pressed {
-  background-color: #1e40af;
+  background-color: transparent;
+  color: #1e40af;
 }
 QPushButton#skillAgentSendButton:disabled {
-  background-color: #93c5fd;
-  color: #e5e7eb;
+  background-color: transparent;
+  color: #93c5fd;
 }
-/* 停止按钮 - 圆形样式 */
+/* 停止按钮 - 正方块样式 */
 QPushButton#skillAgentStopButton {
-  background-color: #ef4444;
+  background-color: #2563eb;
   color: #ffffff;
   border: none;
-  border-radius: 13px;
+  border-radius: 0px;
   font-size: 14px;
   font-weight: bold;
   padding: 0;
 }
 QPushButton#skillAgentStopButton:hover {
-  background-color: #dc2626;
+  background-color: #1d4ed8;
 }
 QPushButton#skillAgentStopButton:pressed {
-  background-color: #b91c1c;
+  background-color: #1e40af;
 }
 QPushButton#skillAgentStopButton:disabled {
-  background-color: #fca5a5;
-  color: #fecaca;
+  background-color: #93c5fd;
+  color: #ffffff;
 }
 
 /* -------------------------------------------------------------------------

@@ -60,7 +60,8 @@ class DynamicSystemPrompt:
             raise ValueError(f"Unknown placeholder name: {name}. Valid names: {PLACEHOLDER_NAMES}")
         with self._lock:
             return self._placeholders.get(name)
-
+    def update_base_info(self, base_info: str) -> None:
+        self.update_placeholder(PlaceholderName.BASE_INFO.value, base_info)
     def update_skill_catalog(self, catalog: str) -> None:
         self.update_placeholder(PlaceholderName.SKILL_CATALOG.value, catalog)
 
