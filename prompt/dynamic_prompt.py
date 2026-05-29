@@ -76,6 +76,9 @@ class DynamicSystemPrompt:
     def update_recent_memory_summary(self, summary: str) -> None:
         self.update_placeholder(PlaceholderName.RECENT_MEMORY_SUMMARY.value, summary)
 
+    def update_tool_catalog(self, catalog: str) -> None:
+        self.update_placeholder(PlaceholderName.TOOL_CATALOG.value, catalog)
+
     def clear_active_skills(self) -> None:
         self.clear_placeholder(PlaceholderName.ACTIVE_SKILLS.value)
 

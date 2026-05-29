@@ -234,15 +234,29 @@ class SkillAgent:
         except Exception:
             return ""
 
+    def _build_tool_catalog_text(self, tool_catalog: list[dict]) -> str:
+        if not tool_catalog:
+            return ""
+        lines = ["## 可用工具目录（简要描述）\n"]
+        lines.append("以下是可用工具的简要描述。如需使用某个工具，请先调用 `request_tool_details` 获取完整参数定义。\n")
+        for tool in tool_catalog:
+            name = tool.get("name", "")
+            brief = tool.get("brief", "")
+            lines.append(f"- **{name}**: {brief}")
+        return "\n".join(lines)
+
     def _build_dynamic_system_prompt(
         self,
         catalog: str,
         active_skill_text: list[str] | None = None,
         active_skill_ids: list[str] | None = None,
         user_query: str | None = None,
+        tool_catalog: str | None = None,
     ) -> str:
         self._dynamic_prompt.clear_all_placeholders()
         self._dynamic_prompt.update_skill_catalog(catalog)
+        if tool_catalog:
+            self._dynamic_prompt.update_tool_catalog(tool_catalog)
         if active_skill_text and active_skill_ids:
             active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
             if active_skills_section:
@@ -756,9 +770,20 @@ class SkillAgent:
             disabled = self._disabled_skill_ids_frozen()
             skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
             catalog = build_skills_catalog_text(skills_visible)
-            system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query)
+            
+            tool_catalog = model.build_tool_catalog()
+            tool_catalog_text = self._build_tool_catalog_text(tool_catalog)
+            system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query, tool_catalog=tool_catalog_text)
             print(f"[DEBUG-exec] 初始系统提示词：{system_prompt}")
-            tools = model.build_skill_agent_tools()
+            
+            tools = model.build_skill_agent_tools_initial()
+            self._supplied_tool_definitions: dict[str, dict] = {}
+            
+            print(f"[DEBUG-tool-catalog] ===== 目录+补发 渐进披露机制初始化 =====")
+            print(f"[DEBUG-tool-catalog] 工具目录已构建，包含 {len(tool_catalog)} 个工具的简要描述")
+            print(f"[DEBUG-tool-catalog] 初始工具集已准备，包含 request_tool_details + CONTROL 工具")
+            print(f"[DEBUG-tool-catalog] 原子工具将按需通过 request_tool_details 获取")
+            
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_query.strip()},
@@ -995,6 +1020,72 @@ class SkillAgent:
                         full_thinking,
                         metadata={"type": "think"},
                     )
+
+                if fname == "request_tool_details":
+                    tool_names = args.get("tool_names", [])
+                    if not isinstance(tool_names, list):
+                        tool_names = [str(tool_names)]
+                    
+                    print(f"[DEBUG-exec] request_tool_details: 请求工具定义 {tool_names}")
+                    print(f"[DEBUG-tool-catalog] ===== 目录+补发 渐进披露机制 - 补发阶段 =====")
+                    print(f"[DEBUG-tool-catalog] LLM 请求获取工具的完整定义: {tool_names}")
+                    
+                    definitions_found = []
+                    definitions_missing = []
+                    
+                    for tool_name in tool_names:
+                        tool_def = model.get_tool_full_definition(tool_name)
+                        if tool_def:
+                            definitions_found.append(tool_def)
+                            self._supplied_tool_definitions[tool_name] = tool_def
+                            print(f"[DEBUG-exec]   ✓ 找到工具定义: {tool_name}")
+                            print(f"[DEBUG-tool-catalog]   工具定义已缓存到 _supplied_tool_definitions")
+                        else:
+                            definitions_missing.append(tool_name)
+                            print(f"[DEBUG-exec]   ✗ 未找到工具定义: {tool_name}")
+                    
+                    result_parts = []
+                    if definitions_found:
+                        result_parts.append("以下工具的完整定义已获取：\n")
+                        for def_item in definitions_found:
+                            def_json = json.dumps(def_item, ensure_ascii=False, indent=2)
+                            result_parts.append(f"### {def_item.get('name', 'unknown')}\n```json\n{def_json}\n```\n")
+                    
+                    if definitions_missing:
+                        result_parts.append(f"\n⚠️ 以下工具未找到定义：{', '.join(definitions_missing)}")
+                    
+                    result = "\n".join(result_parts)
+                    
+                    for tool_name, tool_def in self._supplied_tool_definitions.items():
+                        tool_schema = {
+                            "type": "function",
+                            "function": tool_def
+                        }
+                        already_in_tools = any(
+                            t.get("function", {}).get("name") == tool_name
+                            for t in tools
+                        )
+                        if not already_in_tools:
+                            tools.append(tool_schema)
+                            print(f"[DEBUG-exec] 添加工具到 tools 列表: {tool_name}")
+                            print(f"[DEBUG-tool-catalog]   工具 [{tool_name}] 已动态添加到可用工具集")
+                            print(f"[DEBUG-tool-catalog]   当前 tools 列表大小: {len(tools)}")
+                    
+                    if self.memory is not None:
+                        self.memory.append_message(
+                            self._conversation_id,
+                            "tool",
+                            str(result),
+                            metadata={"type": "tool_definition", "name": fname, "args": arg_str},
+                        )
+                    messages.append({"role": "tool", "name": fname, "content": str(result)})
+                    
+                    if log_callback:
+                        found_names = [d.get("name", "") for d in definitions_found]
+                        log_callback(f"获取工具定义: {', '.join(found_names)}", "tool")
+                        log_callback(str(result), "base_tool")
+                    
+                    continue
 
                 if log_callback:
                     try:

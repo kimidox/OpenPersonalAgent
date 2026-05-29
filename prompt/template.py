@@ -10,6 +10,7 @@ class PlaceholderName(str, Enum):
     USER_MEMORY = "USER_MEMORY"
     CONVERSATION_CONSTRAINTS = "CONVERSATION_CONSTRAINTS"
     RECENT_MEMORY_SUMMARY = "RECENT_MEMORY_SUMMARY"
+    TOOL_CATALOG = "TOOL_CATALOG"
 
 
 PLACEHOLDER_NAMES: Final[set[str]] = {p.value for p in PlaceholderName}
@@ -18,6 +19,8 @@ PLACEHOLDER_NAMES: Final[set[str]] = {p.value for p in PlaceholderName}
 DEFAULT_SYSTEM_PROMPT_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户的业务提问，从下列 Skill 中选择并执行合适流程。
 
 {SKILL_CATALOG}
+
+{TOOL_CATALOG}
 
 {ACTIVE_SKILLS}
 
@@ -29,13 +32,20 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户
 
 ## 工具使用约定
 1. 使用 `select_skill` 加载 Skill 全文（可加载多个）。若有冲突，以更具体或后加载的说明为准。
-2. 使用 `run_command` 执行 Windows 命令完成文件操作、脚本执行等。
-3. 使用 `finish` 结束对话（在 message 中给出完整答复），禁止未调用 finish 就结束对话。
-4. 使用 `ask_user` 询问关键信息或请求确认。
-5. 使用 `read_memory` 读取长期记忆（跨会话信息），使用 `write_memory` 保存重要信息。
-6. 使用 `load_skill_memory` 加载指定 Skill 的执行经验。
-7. 使用 `create_scheduled_task` 创建定时任务之前，先查询当前系统时间。
-8. 创建定时任务时，使用 `select_skill` 加载 `scheduled_task_guide` Skill 获取详细指南。
+2. 使用 `request_tool_details` 获取工具的完整参数定义（在调用工具前必须先获取定义）。
+3. 使用 `run_command` 执行 Windows 命令完成文件操作、脚本执行等。
+4. 使用 `finish` 结束对话（在 message 中给出完整答复），禁止未调用 finish 就结束对话。
+5. 使用 `ask_user` 询问关键信息或请求确认。
+6. 使用 `read_memory` 读取长期记忆（跨会话信息），使用 `write_memory` 保存重要信息。
+7. 使用 `load_skill_memory` 加载指定 Skill 的执行经验。
+8. 使用 `create_scheduled_task` 创建定时任务之前，先查询当前系统时间。
+9. 创建定时任务时，使用 `select_skill` 加载 `scheduled_task_guide` Skill 获取详细指南。
+
+【工具调用流程】（必须遵守）
+1. 查看工具目录，确定需要使用的工具
+2. 调用 `request_tool_details` 获取工具的完整参数定义
+3. 根据完整定义正确构造参数，调用工具
+4. 分析返回结果，决定下一步操作
 
 【文件操作编码规范】（必须遵守）
 1. 写入或修改文件时，优先使用 Write 或 SearchReplace 工具（原生支持 UTF-8 编码）
@@ -98,4 +108,5 @@ EMPTY_PLACEHOLDER_VALUES: Final[dict[str, str]] = {
     PlaceholderName.USER_MEMORY.value: "（暂无用户长期记忆）",
     PlaceholderName.RECENT_MEMORY_SUMMARY.value: "",
     PlaceholderName.CONVERSATION_CONSTRAINTS.value: "",
+    PlaceholderName.TOOL_CATALOG.value: "",
 }

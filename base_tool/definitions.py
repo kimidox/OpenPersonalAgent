@@ -1,5 +1,78 @@
 from __future__ import annotations
 
+"""
+【目录+补发 渐进披露机制 - 工具定义模块】
+
+本模块定义了三类工具定义：
+
+1. REQUEST_TOOL_DETAILS_DEFINITION（补发工具）
+   - 用于 LLM 按需获取原子工具的完整定义
+   - 是"目录+补发"机制的核心工具
+   - 初始化时直接提供给 LLM
+
+2. TOOL_CATALOG（工具目录）
+   - 提供所有原子工具的简要描述
+   - 用于系统提示词中，让 LLM 快速了解可用工具
+   - 不包含完整参数定义，减少 token 消耗
+
+3. ATOMIC_TOOL_DEFINITIONS（原子工具完整定义）
+   - 包含所有原子工具的完整参数 schema
+   - 通过 request_tool_details 按需获取
+   - 不在初始化时直接提供
+
+工作流程：
+┌────────────────────────────────────────────────────────────────────┐
+│  1. 初始化阶段                                                       │
+│     ├─ 系统提示词包含 TOOL_CATALOG（简要描述）                         │
+│     ├─ tools 列表包含 REQUEST_TOOL_DETAILS_DEFINITION               │
+│     └─ tools 列表包含 CONTROL_TOOL_DEFINITIONS                      │
+└────────────────────────────────────────────────────────────────────┘
+                    ↓
+┌────────────────────────────────────────────────────────────────────┐
+│  2. 补发阶段（运行时）                                                │
+│     ├─ LLM 调用 request_tool_details 获取需要的工具                  │
+│     ├─ 从 ATOMIC_TOOL_DEFINITIONS 中查找完整定义                     │
+│     └─ 完整定义动态添加到 tools 列表                                  │
+└────────────────────────────────────────────────────────────────────┘
+                    ↓
+┌────────────────────────────────────────────────────────────────────┐
+│  3. 执行阶段                                                         │
+│     ├─ LLM 使用获取到的工具执行任务                                   │
+│     └─ 工具调用结果返回给 LLM                                         │
+└────────────────────────────────────────────────────────────────────┘
+"""
+
+REQUEST_TOOL_DETAILS_DEFINITION = {
+    "name": "request_tool_details",
+    "description": (
+        "请求获取指定工具的完整定义（包括参数 schema）。\n"
+        "使用场景：当你需要使用某个工具但不确定其参数要求时。\n"
+        "参数：tool_names（必需），要请求的工具名称列表。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "tool_names": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "要请求完整定义的工具名称列表"
+            }
+        },
+        "required": ["tool_names"]
+    }
+}
+
+TOOL_CATALOG = {
+    "run_command": "执行命令行程序或脚本。",
+    "file_operation": "文件操作工具。支持四种操作：",
+    "edit": "精确编辑文件。在文件中搜索指定内容并替换。",
+    "read_memory": "读取长期记忆。从数据库中读取已保存的信息。",
+    "write_memory": "写入长期记忆。将内容保存到数据库中。",
+    "create_scheduled_task": "创建定时任务提醒。",
+    "list_scheduled_tasks": "列出定时任务。",
+    "delete_scheduled_task": "删除定时任务。",
+}
+
 CONTROL_TOOL_DEFINITIONS: list[dict] = [
     {
         "name": "select_skill",

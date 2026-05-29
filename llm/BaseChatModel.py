@@ -9,7 +9,7 @@ from openai import OpenAI, APIError, BadRequestError, AuthenticationError, RateL
 
 import config
 from executor import Executor
-from base_tool import ATOMIC_TOOL_DEFINITIONS, CONTROL_TOOL_DEFINITIONS
+from base_tool import ATOMIC_TOOL_DEFINITIONS, CONTROL_TOOL_DEFINITIONS, REQUEST_TOOL_DETAILS_DEFINITION
 from llm.token_usage import TokenUsage
 
 
@@ -65,6 +65,107 @@ class BaseChatModel(ABC):
                 "function": tool_def
             })
         return tools
+
+    def build_tool_catalog(self) -> list[dict]:
+        """
+        构建工具目录（简要描述）。
+        
+        【目录+补发 渐进披露机制 - 第一阶段】
+        
+        工作原理：
+        1. 从 ATOMIC_TOOL_DEFINITIONS 中提取每个工具的名称和简要描述（第一行）
+        2. 简要描述用于让 LLM 快速了解工具用途，无需完整参数定义
+        3. 当 LLM 需要使用某个工具时，调用 request_tool_details 获取完整定义
+        
+        优势：
+        - 减少 token 消耗：初始只提供简要描述，完整定义按需获取
+        - 提高响应效率：避免一次性传递大量工具定义
+        - 按需披露：LLM 只获取实际需要的工具定义
+        
+        返回格式示例：
+        [{"name": "run_command", "brief": "执行命令行程序或脚本。"}, ...]
+        """
+        catalog = []
+        for tool_def in ATOMIC_TOOL_DEFINITIONS:
+            catalog.append({
+                "name": tool_def["name"],
+                "brief": tool_def["description"].split('\n')[0]
+            })
+        return catalog
+
+    def build_skill_agent_tools_initial(self) -> list[dict]:
+        """
+        返回初始工具集（目录 + request_tool_details + CONTROL 工具）。
+        
+        【目录+补发 渐进披露机制 - 初始化阶段】
+        
+        工作原理：
+        1. 只提供两类工具：
+           - request_tool_details：用于按需获取原子工具的完整定义
+           - CONTROL_TOOL_DEFINITIONS：控制类工具（select_skill, finish, ask_user, load_skill_memory）
+        2. 原子工具（run_command, file_operation 等）不直接提供，需通过 request_tool_details 获取
+        
+        流程说明：
+        ┌─────────────────────────────────────────────────────────────┐
+        │  初始化阶段                                                    │
+        │  ├─ 提供 request_tool_details（补发工具）                      │
+        │  ├─ 提供 CONTROL 工具（控制流程）                              │
+        │  └─ 不提供 ATOMIC 工具（按需获取）                              │
+        └─────────────────────────────────────────────────────────────┘
+                          ↓
+        ┌─────────────────────────────────────────────────────────────┐
+        │  运行阶段                                                      │
+        │  ├─ LLM 调用 request_tool_details 获取需要的工具定义           │
+        │  ├─ 工具定义动态添加到 tools 列表                              │
+        │  └─ LLM 使用获取到的工具执行任务                                │
+        └─────────────────────────────────────────────────────────────┘
+        
+        返回格式：
+        [{"type": "function", "function": REQUEST_TOOL_DETAILS_DEFINITION},
+         {"type": "function", "function": select_skill 定义},
+         {"type": "function", "function": finish 定义},
+         ...]
+        """
+        tools: list[dict] = []
+
+        tools.append({
+            "type": "function",
+            "function": REQUEST_TOOL_DETAILS_DEFINITION
+        })
+
+        for tool_def in CONTROL_TOOL_DEFINITIONS:
+            tools.append({
+                "type": "function",
+                "function": tool_def
+            })
+
+        return tools
+
+    def get_tool_full_definition(self, tool_name: str) -> Optional[dict]:
+        """
+        获取指定工具的完整定义。
+        
+        【目录+补发 渐进披露机制 - 补发阶段】
+        
+        工作原理：
+        1. 当 LLM 调用 request_tool_details 时，此方法查找对应工具的完整定义
+        2. 完整定义包含：name, description, parameters（含完整 schema）
+        3. 找到的定义会被动态添加到 tools 列表，供后续调用
+        
+        参数：
+        - tool_name: 工具名称（如 "run_command", "file_operation"）
+        
+        返回：
+        - 找到：完整工具定义 dict
+        - 未找到：None
+        
+        注意：此方法只处理 ATOMIC_TOOL_DEFINITIONS 中的工具，
+              CONTROL 工具在初始化时已直接提供。
+        """
+        for tool_def in ATOMIC_TOOL_DEFINITIONS:
+            if tool_def["name"] == tool_name:
+                return tool_def
+        return None
 
     def encode_image(self, image_path: str) -> str:
         with open(image_path, "rb") as image_file:

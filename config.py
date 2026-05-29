@@ -229,6 +229,14 @@ else:
 _stsw = get_config("SCHEDULED_TASK_SHOW_WINDOW")
 SCHEDULED_TASK_SHOW_WINDOW = _env_bool(_stsw, False)
 
+# ===== 目录+补发 渐进披露机制配置 =====
+
+# 是否启用工具目录机制（目录+补发）
+# 启用后：初始只提供工具简要描述，完整定义按需获取
+# 禁用后：初始提供所有工具的完整定义（传统方式）
+_use_tc = get_config("USE_TOOL_CATALOG")
+USE_TOOL_CATALOG = _env_bool(_use_tc, True)
+
 # ===== 内存优化配置 =====
 
 # 是否启用内存优化
