@@ -1064,12 +1064,9 @@ class SkillAgent:
                     result = "\n".join(result_parts)
                     
                     for tool_name, tool_def in self._supplied_tool_definitions.items():
-                        tool_schema = {
-                            "type": "function",
-                            "function": tool_def
-                        }
+                        tool_schema = model.format_tool_for_request(tool_def)
                         already_in_tools = any(
-                            t.get("function", {}).get("name") == tool_name
+                            model.get_tool_name_from_formatted(t) == tool_name
                             for t in tools
                         )
                         if not already_in_tools:
