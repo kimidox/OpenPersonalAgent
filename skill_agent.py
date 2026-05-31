@@ -138,6 +138,7 @@ class SkillAgent:
         self._recent_tool_calls: list[dict] = []
         self._consecutive_repeat_count: int = 0
         self._uploaded_files_content: str = ""
+        self._enable_thinking: bool = False
 
     def set_file_upload_controller(self, controller: Any) -> None:
         self._tool_ctx.file_upload_controller = controller
@@ -148,7 +149,7 @@ class SkillAgent:
     @property
     def _get_compactor(self) -> ContextCompactor | None:
         if self._compactor is None and self.memory is not None:
-            model = get_chat_model()
+            model = get_chat_model(enable_thinking=self._enable_thinking)
             self._compactor = ContextCompactor(self.memory, model)
         return self._compactor
 
@@ -311,6 +312,9 @@ class SkillAgent:
 
     def set_conversation_id(self, conversation_id: str) -> None:
         self._conversation_id = (conversation_id or "").strip()
+
+    def set_enable_thinking(self, enabled: bool) -> None:
+        self._enable_thinking = enabled
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -789,7 +793,7 @@ class SkillAgent:
             # 保存当前用户查询，用于后续更新系统提示词时的语义检索
             self._last_user_query = user_query
             
-            model = get_chat_model()
+            model = get_chat_model(enable_thinking=self._enable_thinking)
             disabled = self._disabled_skill_ids_frozen()
             skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
             catalog = build_skills_catalog_text(skills_visible)
@@ -944,10 +948,7 @@ class SkillAgent:
                 thinking_parts: list[str] = []
                 content_parts: list[str] = []
                 
-                # 获取当前的 enable_thinking 设置
-                from llm.llm_config_manager import get_current_config
-                current_config = get_current_config()
-                show_thinking = current_config.enable_thinking
+                show_thinking = self._enable_thinking
 
                 def _stream_callback(content: str, msg_type: str) -> None:
                     if log_callback:

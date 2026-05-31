@@ -262,9 +262,6 @@ class ConfigEditPanel(QWidget):
         freq_layout.addStretch()
         form_layout.addLayout(freq_layout)
 
-        self._enable_thinking_check = QCheckBox("启用深度思考模式")
-        form_layout.addWidget(self._enable_thinking_check)
-
         layout.addLayout(form_layout)
 
         save_btn = QPushButton("保存参数")
@@ -284,7 +281,6 @@ class ConfigEditPanel(QWidget):
             self._temperature_edit.clear()
             self._top_p_edit.clear()
             self._frequency_penalty_edit.clear()
-            self._enable_thinking_check.setChecked(True)
             self.setEnabled(False)
             return
 
@@ -296,7 +292,6 @@ class ConfigEditPanel(QWidget):
         self._temperature_edit.setText(str(config_item.temperature))
         self._top_p_edit.setText(str(config_item.top_p))
         self._frequency_penalty_edit.setText(str(config_item.frequency_penalty))
-        self._enable_thinking_check.setChecked(config_item.enable_thinking)
         self.setEnabled(True)
 
     def _on_save(self) -> None:
@@ -354,8 +349,6 @@ class ConfigEditPanel(QWidget):
             QMessageBox.warning(self, "警告", "频率惩罚必须是数字")
             return
 
-        enable_thinking = self._enable_thinking_check.isChecked()
-
         updated_config = LLMConfigItem(
             id=self._current_config_id,
             name=config_name,
@@ -365,7 +358,7 @@ class ConfigEditPanel(QWidget):
             temperature=temperature,
             top_p=top_p,
             frequency_penalty=frequency_penalty,
-            enable_thinking=enable_thinking,
+            enable_thinking=True,
         )
 
         if update_config(self._current_config_id, updated_config):

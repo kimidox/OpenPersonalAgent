@@ -23,6 +23,7 @@ class SkillAgentWorkerThread(QThread):
         *,
         conversation_id: str,
         session_tab: "ChatSessionTab",
+        enable_thinking: bool = False,
     ) -> None:
         super().__init__()
         self.agent = agent
@@ -30,6 +31,7 @@ class SkillAgentWorkerThread(QThread):
         self.conversation_id = conversation_id
         self.session_tab = session_tab
         self._stop_event = threading.Event()
+        self._enable_thinking = enable_thinking
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -41,6 +43,7 @@ class SkillAgentWorkerThread(QThread):
     def run(self) -> None:
         self._stop_event.clear()
         self.agent.set_conversation_id(self.conversation_id)
+        self.agent.set_enable_thinking(self._enable_thinking)
         result = self.agent.run(self.query, self._log_callback, stop_check_callback=self.is_stop_requested)
         self.finished_signal.emit(result, self.session_tab)
 

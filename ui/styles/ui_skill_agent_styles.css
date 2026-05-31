@@ -181,10 +181,10 @@ QWidget#skillAgentInputContainer MultiLineInputEdit {
 QWidget#skillAgentInputContainer MultiLineInputEdit:focus {
   border: none;
 }
-/* 漩涡按钮样式 */
+/* 漩涡按钮样式 - 默认关闭状态（浅灰色） */
 QPushButton#skillAgentVortexButton {
   background-color: #ffffff;
-  color: #374151;
+  color: #9ca3af;
   border: 1px solid #e5e7eb;
   border-radius: 13px;
   font-size: 14px;
@@ -194,10 +194,28 @@ QPushButton#skillAgentVortexButton {
 QPushButton#skillAgentVortexButton:hover {
   background-color: #f9fafb;
   border-color: #d1d5db;
-  color: #2563eb;
+  color: #6b7280;
 }
 QPushButton#skillAgentVortexButton:pressed {
   background-color: #f3f4f6;
+}
+/* 漩涡按钮样式 - 开启状态（蓝色） */
+QPushButton#skillAgentVortexButton[thinking="true"] {
+  background-color: #e8f3ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+  border-radius: 13px;
+  font-size: 14px;
+  font-weight: bold;
+  padding: 0;
+}
+QPushButton#skillAgentVortexButton[thinking="true"]:hover {
+  background-color: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+QPushButton#skillAgentVortexButton[thinking="true"]:pressed {
+  background-color: #bfdbfe;
 }
 /* 发送按钮 - 圆形样式 */
 QPushButton#skillAgentSendButton {

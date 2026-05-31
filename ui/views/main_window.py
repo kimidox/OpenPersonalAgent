@@ -276,6 +276,8 @@ class SkillAgentMainWindow(QMainWindow):
         self.vortex_btn = QPushButton("🌀")
         self.vortex_btn.setObjectName("skillAgentVortexButton")
         self.vortex_btn.setFixedSize(26, 26)
+        self.vortex_btn.setProperty("thinking", "false")
+        self.vortex_btn.clicked.connect(self._on_vortex_clicked)
         
         self.send_btn = QPushButton("↑")
         self.send_btn.setObjectName("skillAgentSendButton")
@@ -564,6 +566,13 @@ class SkillAgentMainWindow(QMainWindow):
             return
         self._send_user_message(text)
 
+    def _on_vortex_clicked(self) -> None:
+        enabled = self.ui_state.toggle_enable_thinking()
+        self.vortex_btn.setProperty("thinking", "true" if enabled else "false")
+        self.vortex_btn.style().unpolish(self.vortex_btn)
+        self.vortex_btn.style().polish(self.vortex_btn)
+        self.vortex_btn.update()
+
     def _on_stop_button_changed(self, show_stop: bool) -> None:
         if show_stop:
             try:
@@ -618,7 +627,11 @@ class SkillAgentMainWindow(QMainWindow):
         tab.clear_await_user_ui()
         self.input_edit.clear()
         self.ui_state.set_task_running(True)
-        self.worker_thread = SkillAgentWorkerThread(self.skill_agent, text, conversation_id=tab.conversation_id, session_tab=tab)
+        enable_thinking = self.ui_state.get_enable_thinking()
+        self.worker_thread = SkillAgentWorkerThread(
+            self.skill_agent, text, conversation_id=tab.conversation_id, 
+            session_tab=tab, enable_thinking=enable_thinking
+        )
         self.worker_thread.log_signal.connect(self._on_log)
         self.worker_thread.finished_signal.connect(self._on_worker_finished)
         self.worker_thread.start()

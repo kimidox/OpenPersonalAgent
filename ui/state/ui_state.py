@@ -28,6 +28,7 @@ class UIState(QObject):
     input_state_changed = Signal(str)
     input_placeholder_changed = Signal(str)
     ui_reset = Signal()
+    enable_thinking_changed = Signal(bool)
 
     PLACEHOLDER_DEFAULT = "输入业务问题后发送…"
     PLACEHOLDER_AWAITING_USER = "Agent 正在等待你的补充回复…"
@@ -37,6 +38,7 @@ class UIState(QObject):
         self._button_states: ButtonStates = ButtonStates()
         self._input_state: InputState = InputState.ENABLED
         self._input_placeholder: str = self.PLACEHOLDER_DEFAULT
+        self._enable_thinking: bool = False
 
     def get_send_button_enabled(self) -> bool:
         return self._button_states.send_enabled
@@ -124,3 +126,17 @@ class UIState(QObject):
 
     def is_task_running(self) -> bool:
         return self._button_states.stop_enabled and not self._button_states.send_enabled
+
+    def get_enable_thinking(self) -> bool:
+        return self._enable_thinking
+
+    def set_enable_thinking(self, enabled: bool) -> None:
+        if self._enable_thinking == enabled:
+            return
+        self._enable_thinking = enabled
+        self.enable_thinking_changed.emit(enabled)
+
+    def toggle_enable_thinking(self) -> bool:
+        self._enable_thinking = not self._enable_thinking
+        self.enable_thinking_changed.emit(self._enable_thinking)
+        return self._enable_thinking
