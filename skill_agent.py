@@ -106,6 +106,7 @@ class SkillAgent:
         memory: Memory | None = None,
         conversation_id: str | None = None,
         username: str ,
+        file_upload_controller: Any = None,
     ) -> None:
         self.work_dir = str(Path(work_dir).resolve())
         sd = skills_dir if skills_dir is not None else config.SKILLS_DIR
@@ -120,7 +121,13 @@ class SkillAgent:
             self._conversation_id = cid
         else:
             self._conversation_id = (conversation_id or "").strip()
-        self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor, memory=memory, user_id=self.username)
+        self._tool_ctx = ToolContext(
+            work_dir=self.work_dir,
+            executor=executor,
+            memory=memory,
+            user_id=self.username,
+            file_upload_controller=file_upload_controller,
+        )
         self._recent_commands: list[tuple[str, str]] = []
         self._compactor: ContextCompactor | None = None
         self._token_usage = TokenUsage.empty()
@@ -130,6 +137,13 @@ class SkillAgent:
         self._stop_event = threading.Event()
         self._recent_tool_calls: list[dict] = []
         self._consecutive_repeat_count: int = 0
+        self._uploaded_files_content: str = ""
+
+    def set_file_upload_controller(self, controller: Any) -> None:
+        self._tool_ctx.file_upload_controller = controller
+
+    def set_uploaded_files_content(self, content: str) -> None:
+        self._uploaded_files_content = content or ""
 
     @property
     def _get_compactor(self) -> ContextCompactor | None:
@@ -276,6 +290,8 @@ class SkillAgent:
             self._dynamic_prompt.update_recent_memory_summary(recent_summary_section)
         if self._conversation_constraints:
             self._dynamic_prompt.update_conversation_constraints(self._conversation_constraints)
+        if self._uploaded_files_content:
+            self._dynamic_prompt.update_uploaded_files(self._uploaded_files_content)
         return self._dynamic_prompt.build()
 
     @property
@@ -1443,4 +1459,5 @@ class SkillAgent:
             print(f"[DEBUG-exec] 📤 异常退出，返回 err_msg")
             return err_msg
         finally:
+            self._uploaded_files_content = ""
             print(f"[DEBUG-exec] ===== run() 结束执行 =====")

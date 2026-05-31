@@ -71,6 +71,7 @@ TOOL_CATALOG = {
     "create_scheduled_task": "创建定时任务提醒。",
     "list_scheduled_tasks": "列出定时任务。",
     "delete_scheduled_task": "删除定时任务。",
+    "uploaded_files": "管理已上传文件。支持三种操作：list(列出文件)、get_content(获取内容)、get_metadata(获取元信息)。",
 }
 
 CONTROL_TOOL_DEFINITIONS: list[dict] = [
@@ -421,6 +422,36 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 },
             },
             "required": ["task_id"],
+        },
+    },
+    {
+        "name": "uploaded_files",
+        "description": (
+            "管理当前会话中用户上传的文件。\n"
+            "支持三种操作：\n"
+            "- list: 列出所有已上传文件的概览信息\n"
+            "- get_content: 获取指定文件的完整解析内容\n"
+            "- get_metadata: 获取指定文件的元信息（大小、类型、上传时间等）\n"
+            "使用场景：\n"
+            "- 用户上传了文件并要求分析、处理或提取信息\n"
+            "- 需要查看用户上传了哪些文件\n"
+            "- 需要获取文件的具体内容进行操作\n"
+            "参数：action(必需，list/get_content/get_metadata)、file_name(可选，仅get_content和get_metadata需要)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "get_content", "get_metadata"],
+                    "description": "操作类型：list列出所有文件、get_content获取文件内容、get_metadata获取文件元信息"
+                },
+                "file_name": {
+                    "type": "string",
+                    "description": "文件名称（仅 action=get_content 或 get_metadata 时需要）"
+                }
+            },
+            "required": ["action"]
         },
     },
 ]

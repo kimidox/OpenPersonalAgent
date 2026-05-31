@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from executor import Executor
     from memory.memory import Memory
+    from ui.utils.file_upload_controller import FileUploadController
 
 
 @dataclass
@@ -17,3 +18,4 @@ class ToolContext:
     memory: "Memory | None" = None
     user_id: str = "default"
     conversation_id: str | None = None
+    file_upload_controller: "FileUploadController | None" = None

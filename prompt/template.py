@@ -12,6 +12,7 @@ class PlaceholderName(str, Enum):
     RECENT_MEMORY_SUMMARY = "RECENT_MEMORY_SUMMARY"
     TOOL_CATALOG = "TOOL_CATALOG"
     BASE_INFO = "BASE_INFO"
+    UPLOADED_FILES = "UPLOADED_FILES"
 
 
 PLACEHOLDER_NAMES: Final[set[str]] = {p.value for p in PlaceholderName}
@@ -25,6 +26,8 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户
 {TOOL_CATALOG}
 
 {ACTIVE_SKILLS}
+
+{UPLOADED_FILES}
 
 {USER_MEMORY}
 
@@ -66,13 +69,21 @@ ACTIVE_SKILLS_SECTION_TEMPLATE: Final[str] = """## 当前已加载的 Skill
 {skills}"""
 
 USER_MEMORY_SECTION_TEMPLATE: Final[str] = """## 用户长期记忆
-{memory}"""
+<user_memory>
+{memory}
+</user_memory>"""
 
 RECENT_MEMORY_SUMMARY_SECTION_TEMPLATE: Final[str] = """## 近期记忆摘要
-{summary}"""
+<recent_memory_summary>
+{summary}
+</recent_memory_summary>"""
 
 CONVERSATION_CONSTRAINTS_SECTION_TEMPLATE: Final[str] = """## 本次对话约束
 {constraints}"""
+
+UPLOADED_FILES_SECTION_TEMPLATE: Final[str] = """## 用户上传的文件
+以下是用户上传的文件内容，请基于这些内容回答用户问题：
+{files_content}"""
 
 
 EMPTY_PLACEHOLDER_VALUES: Final[dict[str, str]] = {
@@ -83,4 +94,5 @@ EMPTY_PLACEHOLDER_VALUES: Final[dict[str, str]] = {
     PlaceholderName.CONVERSATION_CONSTRAINTS.value: "",
     PlaceholderName.TOOL_CATALOG.value: "",
     PlaceholderName.BASE_INFO.value: "",
+    PlaceholderName.UPLOADED_FILES.value: "",
 }

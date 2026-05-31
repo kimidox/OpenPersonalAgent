@@ -20,11 +20,12 @@ from resource_path import paths
 from scheduler import TaskScheduler
 from scheduled_tasks import ScheduledTask
 
-from ui.components import ChatSessionTab, SettingsDialog, ConversationSidebar
+from ui.components import ChatSessionTab, SettingsDialog, ConversationSidebar, FileUploadArea
 from ui.state import SessionState, StreamState, UIState
 from ui.styles import StyleManager
 from ui.utils import MessageHandler
 from ui.utils.simple_stream_renderer import SimpleStreamRenderer
+from ui.utils.file_upload_controller import FileUploadController
 from ui.views.worker_thread import SkillAgentWorkerThread
 
 if TYPE_CHECKING:
@@ -77,6 +78,8 @@ class SkillAgentMainWindow(QMainWindow):
         self.session_state = SessionState(self)
         self.stream_state = StreamState(self)
         self.ui_state = UIState(self)
+        self.file_upload_controller = FileUploadController(self)
+        self.skill_agent.set_file_upload_controller(self.file_upload_controller)
         self._conversation_tabs: dict[str, ChatSessionTab] = {}
         self._current_conversation_tab: ChatSessionTab | None = None
         self._init_ui()
@@ -252,14 +255,15 @@ class SkillAgentMainWindow(QMainWindow):
         return btn
 
     def _setup_input_area(self, layout: QVBoxLayout) -> None:
-        # 创建外层容器
+        self._file_upload_area = FileUploadArea(self.file_upload_controller, self)
+        layout.addWidget(self._file_upload_area)
+        
         input_container = QWidget()
         input_container.setObjectName("skillAgentInputContainer")
         container_layout = QHBoxLayout(input_container)
         container_layout.setContentsMargins(8, 8, 8, 8)
         container_layout.setSpacing(8)
         
-        # 输入框
         self.input_edit = MultiLineInputEdit()
         self.input_edit.setPlaceholderText(UIState.PLACEHOLDER_DEFAULT)
         self.input_edit.setFont(QFont("Microsoft YaHei", 10))
@@ -267,19 +271,19 @@ class SkillAgentMainWindow(QMainWindow):
         self.input_edit.setMaximumHeight(120)
         self.input_edit.set_send_callback(self._on_send)
         
-        # 漩涡按钮
+        self._file_upload_btn = self._file_upload_area.create_upload_button()
+        
         self.vortex_btn = QPushButton("🌀")
         self.vortex_btn.setObjectName("skillAgentVortexButton")
         self.vortex_btn.setFixedSize(26, 26)
-        # 事件绑定先空着
         
-        # 发送按钮 - 圆形箭头样式
         self.send_btn = QPushButton("↑")
         self.send_btn.setObjectName("skillAgentSendButton")
         self.send_btn.setFixedSize(26, 26)
         self.send_btn.clicked.connect(self._on_send)
         
         container_layout.addWidget(self.input_edit, stretch=1)
+        container_layout.addWidget(self._file_upload_btn)
         container_layout.addWidget(self.vortex_btn)
         container_layout.addWidget(self.send_btn)
         layout.addWidget(input_container)
@@ -411,26 +415,23 @@ class SkillAgentMainWindow(QMainWindow):
 
     def _switch_to_conversation(self, conversation_id: str) -> None:
         """切换到指定会话"""
-        # 先隐藏当前会话
         if self._current_conversation_tab:
             self._current_conversation_tab.setParent(None)
         
-        # 获取新会话
         if conversation_id not in self._conversation_tabs:
             return
         
         new_tab = self._conversation_tabs[conversation_id]
         
-        # 显示新会话
         self.chat_area_layout.addWidget(new_tab)
         self._current_conversation_tab = new_tab
         
-        # 更新状态
         self.skill_agent.set_conversation_id(conversation_id)
         self.session_state.set_current_conversation(conversation_id)
         self.sidebar.set_selected_conversation(conversation_id)
         
-        # 确保历史记录已加载
+        self.file_upload_controller.clear_all_files()
+        
         self._ensure_tab_history_loaded(new_tab)
         
         # 更新输入框提示
@@ -605,6 +606,13 @@ class SkillAgentMainWindow(QMainWindow):
         tab = session_tab or self._active_session_tab()
         if tab is None:
             return
+        
+        uploaded_files_content = ""
+        if self.file_upload_controller.has_files():
+            uploaded_files_content = self.file_upload_controller.generate_combined_full_content()
+            self.file_upload_controller.clear_all_files()
+        
+        self.skill_agent.set_uploaded_files_content(uploaded_files_content)
         self.skill_agent.set_conversation_id(tab.conversation_id)
         tab.add_message("user", text)
         tab.clear_await_user_ui()

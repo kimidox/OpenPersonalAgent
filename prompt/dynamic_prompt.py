@@ -10,6 +10,7 @@ from .template import (
     EMPTY_PLACEHOLDER_VALUES,
     PLACEHOLDER_NAMES,
     PlaceholderName,
+    UPLOADED_FILES_SECTION_TEMPLATE,
 )
 
 
@@ -79,6 +80,16 @@ class DynamicSystemPrompt:
 
     def update_tool_catalog(self, catalog: str) -> None:
         self.update_placeholder(PlaceholderName.TOOL_CATALOG.value, catalog)
+
+    def update_uploaded_files(self, files_content: str) -> None:
+        if files_content and files_content.strip():
+            section = UPLOADED_FILES_SECTION_TEMPLATE.format(files_content=files_content)
+            self.update_placeholder(PlaceholderName.UPLOADED_FILES.value, section)
+        else:
+            self.clear_placeholder(PlaceholderName.UPLOADED_FILES.value)
+
+    def clear_uploaded_files(self) -> None:
+        self.clear_placeholder(PlaceholderName.UPLOADED_FILES.value)
 
     def clear_active_skills(self) -> None:
         self.clear_placeholder(PlaceholderName.ACTIVE_SKILLS.value)

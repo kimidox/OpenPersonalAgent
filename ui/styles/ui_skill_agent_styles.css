@@ -939,3 +939,77 @@ QPushButton#skillAgentCloseDialogCloseButton:hover {
 QPushButton#skillAgentCloseDialogCloseButton:pressed {
   background-color: #f3f4f6;
 }
+
+/* -------------------------------------------------------------------------
+ * 组件：FileUploadArea — 文件上传区域
+ * ------------------------------------------------------------------------- */
+/* === section:file_upload_area === */
+QWidget#skillAgentFileUploadArea {
+  background-color: transparent;
+}
+
+/* === section:file_upload_button === */
+QToolButton#skillAgentFileUploadButton {
+  background-color: transparent;
+  color: #6b7280;
+  border: none;
+  border-radius: 13px;
+  font-size: 16px;
+  padding: 0;
+}
+QToolButton#skillAgentFileUploadButton:hover {
+  background-color: #f3f4f6;
+  color: #2563eb;
+}
+QToolButton#skillAgentFileUploadButton:pressed {
+  background-color: #e5e7eb;
+}
+QToolButton#skillAgentFileUploadButton:disabled {
+  color: #9ca3af;
+}
+
+/* -------------------------------------------------------------------------
+ * 组件：FilePreviewCard — 文件预览卡片
+ * ------------------------------------------------------------------------- */
+/* === section:file_preview_card === */
+QFrame#skillAgentFilePreviewCard {
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+}
+QFrame#skillAgentFilePreviewCard:hover {
+  background-color: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+/* === section:file_preview_remove_button === */
+QPushButton#skillAgentFileRemoveButton {
+  background-color: transparent;
+  color: #9ca3af;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: bold;
+}
+QPushButton#skillAgentFileRemoveButton:hover {
+  background-color: #fee2e2;
+  color: #ef4444;
+}
+QPushButton#skillAgentFileRemoveButton:pressed {
+  background-color: #fecaca;
+}
+
+/* -------------------------------------------------------------------------
+ * 组件：FileParseProgress — 文件解析进度条
+ * ------------------------------------------------------------------------- */
+/* === section:file_parse_progress_bar === */
+QProgressBar#skillAgentFileParseProgress {
+  background-color: #e5e7eb;
+  border: none;
+  border-radius: 2px;
+}
+QProgressBar#skillAgentFileParseProgress::chunk {
+  background-color: #2563eb;
+  border-radius: 2px;
+}

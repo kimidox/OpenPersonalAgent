@@ -5,6 +5,8 @@ from .text_utils import escape_html, plain_block_html
 from .html_utils import generate_bubble_html, generate_row_html, insert_row
 from .stream_renderer import StreamRenderer
 from .message_handler import MessageHandler
+from .file_upload_manager import UploadedFileInfo, SUPPORTED_EXTENSIONS
+from .file_upload_controller import FileUploadController
 
 __all__ = [
     "normalize_newlines",
@@ -16,4 +18,7 @@ __all__ = [
     "insert_row",
     "StreamRenderer",
     "MessageHandler",
+    "UploadedFileInfo",
+    "SUPPORTED_EXTENSIONS",
+    "FileUploadController",
 ]

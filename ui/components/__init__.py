@@ -15,6 +15,8 @@ from ui.components.message_card import MessageCardWidget, MessageType
 from ui.components.message_list import MessageListWidget
 from ui.components.conversation_list_item import ConversationListItem
 from ui.components.conversation_sidebar import ConversationSidebar
+from ui.components.file_preview_card import FilePreviewCard, FilePreviewList
+from ui.components.file_upload_area import FileUploadArea
 
 __all__ = [
     "ChatBubble",
@@ -31,4 +33,7 @@ __all__ = [
     "MessageListWidget",
     "ConversationListItem",
     "ConversationSidebar",
+    "FilePreviewCard",
+    "FilePreviewList",
+    "FileUploadArea",
 ]
