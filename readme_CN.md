@@ -13,6 +13,15 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 - 🤖 **多模型支持**：支持 GLM、Qwen、Gemma 等多种大语言模型
 - 🏗️ **虚拟环境隔离**：自动创建和管理 venv，安全处理依赖
 - 📝 **长期记忆系统**：使用 jieba 中文分词的持久化用户记忆和语义搜索
+- 📄 **文档解析**：支持解析多种文件格式（PDF、Word、Excel、Markdown、文本、JSON）
+- 📅 **定时任务**：创建和管理定时任务，支持通知或触发智能体对话
+- 🔔 **通知系统**：系统托盘通知和浮动提示窗口
+- 🚀 **Windows自启动**：启用/禁用Windows登录时自动启动
+- ⚙️ **多配置组管理**：管理多个LLM配置组，支持自动故障转移
+- 📎 **文件上传与预览**：在聊天界面中直接上传和解析文档
+- 🎨 **后台模式**：在后台运行，仅显示系统托盘图标
+- 🛠️ **工具目录渐进式披露**：按需加载工具定义以节省token
+- 💾 **内存优化**：智能内存管理，支持可配置的消息保留
 
 ---
 
@@ -86,6 +95,69 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 - ✅ **模块日志记录器**：每模块的日志适配器，更好的组织性
 - ✅ **异常钩子**：全局异常处理和记录
 
+### 9. 文档解析器
+
+- ✅ **多种格式**：PDF、Word (DOCX)、Excel (XLSX)、Markdown、文本、JSON
+- ✅ **工厂模式**：根据文件扩展名动态选择解析器
+- ✅ **文件验证**：解析前验证文件
+- ✅ **统一接口**：所有格式统一的 `ParseResult` 格式
+
+### 10. 定时任务
+
+- ✅ **灵活调度**：单次或重复（每天、每周、每月）
+- ✅ **双执行模式**：仅通知或触发智能体对话
+- ✅ **智能定时**：指定精确的触发时间
+- ✅ **重复类型**：无、每天、每周、每月
+- ✅ **历史追踪**：追踪已触发/待触发/已取消的任务状态
+
+### 11. 通知系统
+
+- ✅ **系统托盘通知**：原生 Windows 托盘通知
+- ✅ **浮动提示窗口**：带有淡出动画的精美浮动提示
+- ✅ **可配置时长**：自定义显示时长
+- ✅ **点击关闭**：可提前关闭提示窗口
+- ✅ **多种类型**：系统通知或浮动提示显示选项
+
+### 12. 多配置组管理
+
+- ✅ **多个配置组**：管理多个 LLM 配置组（模型、API Key、基础 URL 等）
+- ✅ **自动故障转移**：失败时自动切换到下一配置
+- ✅ **切换追踪**：配置切换事件历史记录
+- ✅ **顺序调整**：上下移动配置组顺序
+- ✅ **添加/删除**：创建新配置或删除未使用的配置
+- ✅ **参数编辑**：编辑单个配置设置
+- ✅ **重置默认**：从 .env 恢复默认配置
+
+### 13. 文件上传与预览
+
+- ✅ **拖放区域**：文件上传区域
+- ✅ **多文件上传**：一次上传多个文件
+- ✅ **进度条**：实时解析进度
+- ✅ **文件预览**：快速预览已解析内容
+- ✅ **数量限制**：可配置的最大上传文件数
+- ✅ **解析器集成**：与文档解析器直接集成
+- ✅ **错误处理**：解析错误显示和处理
+
+### 14. 后台模式
+
+- ✅ **托盘图标**：后台时显示系统托盘图标
+- ✅ **自启动**：Windows 自启动使用后台模式
+- ✅ **任务调度**：后台模式下定时任务仍然工作
+- ✅ **窗口大小**：可配置的默认窗口尺寸
+
+### 15. 内存优化
+
+- ✅ **渐进式披露**：按需工具目录
+- ✅ **后台保留**：后台模式下可配置的消息保留数量
+- ✅ **延迟优化**：激活优化前的延迟
+- ✅ **Token 经济**：仅加载必要工具，减少 token 消耗
+
+### 16. Windows 自启动
+
+- ✅ **基于注册表**：Windows 注册表自启动
+- ✅ **启用/禁用**：在设置中切换自启动
+- ✅ **命令行支持**：自启动时使用 --background 参数
+
 ---
 
 ## 📁 内置Skill示例
@@ -151,6 +223,10 @@ PersonalWindowGLM/
 ├── logger.py                   # 日志系统
 ├── resource_path.py            # 统一路径管理器（开发/打包）
 ├── skill_agent_preferences.py  # Skill可见性/禁用状态管理
+├── scheduled_tasks.py          # 定时任务数据模型和管理
+├── scheduler.py                # 任务调度引擎
+├── notification.py             # 通知系统（系统托盘、浮动提示）
+├── autostart.py                # Windows自启动管理
 ├── PersonalWindowGLM.spec      # PyInstaller spec
 ├── PersonalWindowGLM_onefile.spec  # 单文件spec
 ├── build.bat                   # 构建脚本
@@ -170,7 +246,7 @@ PersonalWindowGLM/
 │   ├── glm_chat_model.py       # GLM模型实现
 │   ├── qwen_chat_model.py      # Qwen模型实现
 │   ├── gemma_chat_model.py     # Gemma模型实现
-│   ├── llm_config_manager.py   # 模型配置管理
+│   ├── llm_config_manager.py   # 多LLM配置管理器，支持故障转移
 │   └── token_usage.py          # Token使用量追踪
 ├── memory/                     # 会话持久化
 │   ├── memory.py               # 内存管理接口
@@ -184,13 +260,31 @@ PersonalWindowGLM/
 ├── prompt/                     # 动态提示词管理
 │   ├── dynamic_prompt.py       # 动态系统提示词构建
 │   └── template.py             # 提示词模板定义
+├── document_parser/            # 文档解析模块
+│   ├── __init__.py             # 解析器导出和注册
+│   ├── base_parser.py          # 抽象基解析器类
+│   ├── models.py               # ParseResult数据模型
+│   ├── parser_factory.py       # 解析器工厂，用于动态选择
+│   ├── file_storage.py         # 文件存储工具
+│   └── parsers/                # 格式特定解析器
+│       ├── pdf_parser.py       # PDF文档解析器
+│       ├── word_parser.py      # Word (DOCX) 解析器
+│       ├── excel_parser.py     # Excel (XLSX) 解析器
+│       ├── markdown_parser.py  # Markdown 解析器
+│       ├── text_parser.py      # 纯文本解析器
+│       └── json_parser.py      # JSON 解析器
 ├── ui/                         # 模块化前端
 │   ├── components/             # 可复用UI组件
 │   │   ├── chat_bubble.py      # 聊天气泡组件
 │   │   ├── message_card.py     # 消息卡片组件
 │   │   ├── chat_session_tab.py # 会话标签页
 │   │   ├── await_user_card.py  # 等待用户确认卡片
-│   │   └── settings_dialog.py  # 设置对话框
+│   │   ├── settings_dialog.py  # 设置对话框（含多配置组和任务）
+│   │   ├── file_upload_area.py # 文件上传区域
+│   │   ├── file_preview_card.py# 文件预览组件
+│   │   ├── conversation_sidebar.py # 会话侧边栏
+│   │   ├── conversation_list_item.py # 会话列表项
+│   │   └── tab_bar.py          # 标签栏组件
 │   ├── views/                  # 页面视图
 │   │   ├── main_window.py      # 主窗口
 │   │   └── worker_thread.py    # 工作线程
@@ -207,10 +301,12 @@ PersonalWindowGLM/
 │       ├── message_handler.py  # 消息处理
 │       ├── simple_stream_renderer.py # 简单流式渲染器
 │       ├── text_utils.py       # 文本工具
-│       └── stream_renderer.py  # 流式渲染
+│       ├── stream_renderer.py  # 流式渲染
+│       ├── file_upload_manager.py # 文件上传管理器
+│       └── file_upload_controller.py # 文件上传控制器
 ├── database/                   # 数据库层（SQLAlchemy）
 │   ├── __init__.py             # DB设置
-│   └── models.py               # SQLAlchemy模型（Conversations, Messages, User）
+│   └── models.py               # SQLAlchemy模型（Conversations, Messages, User, ScheduledTask）
 └── PersonalData/               # 用户数据目录（gitignore）
     ├── Skills/                 # Skill文档目录
     │   ├── DuckDuckGoSearch/
@@ -431,6 +527,21 @@ REPEAT_DETECTION_WINDOW_SIZE=10      # 重复检测窗口大小
 DANGEROUS_COMMAND_CHECK_ENABLED=true # 启用危险命令检测
 DANGEROUS_COMMAND_PREFIXES=del ,erase ,rmdir ,rd ,copy ,move ,ren ,rename ,mkdir ,md
 DANGEROUS_COMMAND_CONTAINS= > , >> , >, >>, set-content , set-content-, add-content , add-content-, out-file , out-file-, new-item , new-item-, remove-item , remove-item-, rm
+
+# ===== 窗口大小配置 =====
+WINDOW_WIDTH=780                    # 默认窗口宽度
+WINDOW_HEIGHT=620                   # 默认窗口高度
+
+# ===== 定时任务配置 =====
+SCHEDULED_TASK_SHOW_WINDOW=false    # 任务触发智能体对话时显示主窗口
+
+# ===== 工具目录渐进式披露 =====
+USE_TOOL_CATALOG=true               # 启用工具目录（渐进式披露）
+
+# ===== 内存优化 =====
+MEMORY_OPTIMIZATION_ENABLED=true    # 启用内存优化
+MEMORY_OPTIMIZATION_DELAY_SECONDS=30 # 激活优化前的延迟（秒）
+BACKGROUND_KEEP_MESSAGES_COUNT=50   # 后台模式下保留的消息数量
 ```
 
 ---

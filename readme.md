@@ -13,6 +13,15 @@ OpenPersonalAgent is an **intelligent agent system (SkillAgent) based on LLM too
 - 🤖 **Multi-Model Support**: Supports GLM, Qwen, Gemma, and other LLM backends
 - 🏗️ **Virtual Environment Isolation**: Automatic venv creation and management for secure dependency handling
 - 📝 **Long-term Memory System**: Persistent user memory with semantic search using jieba Chinese segmentation
+- 📄 **Document Parsing**: Support for parsing multiple file formats (PDF, Word, Excel, Markdown, Text, JSON)
+- 📅 **Scheduled Tasks**: Create and manage timed tasks with notification or agent conversation execution
+- 🔔 **Notification System**: System tray notifications and floating toast windows
+- 🚀 **Windows Auto-Start**: Enable/disable automatic startup on Windows login
+- ⚙️ **Multi-Config Management**: Manage multiple LLM configuration groups with automatic failover
+- 📎 **File Upload & Preview**: Upload and parse documents directly in chat interface
+- 🎨 **Background Mode**: Run in background with system tray icon
+- 🛠️ **Tool Catalog Progressive Disclosure**: On-demand tool definition loading for token efficiency
+- 💾 **Memory Optimization**: Smart memory management with configurable retention
 
 ---
 
@@ -86,6 +95,69 @@ The project supports multiple LLM backends:
 - ✅ **Module Loggers**: Per-module log adapters for better organization
 - ✅ **Exception Hook**: Global exception handling and logging
 
+### 9. Document Parser
+
+- ✅ **Multiple Formats**: PDF, Word (DOCX), Excel (XLSX), Markdown, Text, JSON
+- ✅ **Factory Pattern**: Dynamic parser selection based on file extension
+- ✅ **Validation**: File validation before parsing
+- ✅ **Unified Interface**: Consistent `ParseResult` format for all formats
+
+### 10. Scheduled Tasks
+
+- ✅ **Flexible Scheduling**: One-time or recurring (daily, weekly, monthly)
+- ✅ **Dual Execution Modes**: Notification only or trigger agent conversation
+- ✅ **Smart Timing**: Specify exact trigger time
+- ✅ **Repeat Types**: none, daily, weekly, monthly
+- ✅ **History Tracking**: Track triggered/pending/canceled task status
+
+### 11. Notification System
+
+- ✅ **System Tray Notifications**: Native Windows tray notifications
+- ✅ **Floating Toast Windows**: Beautiful floating toast with fade animations
+- ✅ **Configurable Duration**: Customizable display duration
+- ✅ **Click-to-dismiss**: Toast windows can be dismissed early
+- ✅ **Multiple Types**: System notification or toast display options
+
+### 12. Multi-Configuration Management
+
+- ✅ **Multiple Groups**: Manage multiple LLM configuration sets (model, API key, base URL, etc.)
+- ✅ **Auto-Failover**: Automatic switch to next config on failure
+- ✅ **Switch Tracking**: History of config switch events
+- ✅ **Reorder Support**: Move configs up/down
+- ✅ **Add/Delete**: Create new configs or delete unused ones
+- ✅ **Parameter Editor**: Edit individual config settings
+- ✅ **Default Reset**: Restore default config from .env
+
+### 13. File Upload & Preview
+
+- ✅ **Drag & Drop**: File upload area
+- ✅ **Multiple Files**: Upload multiple files at once
+- ✅ **Progress Bar**: Real-time parsing progress
+- ✅ **File Preview**: Quick preview of parsed content
+- ✅ **Max Limit**: Configurable maximum number of uploaded files
+- ✅ **Parser Integration**: Direct integration with document parser
+- ✅ **Error Handling**: Parse error display and handling
+
+### 14. Background Mode
+
+- ✅ **Tray Icon**: System tray icon in background
+- ✅ **Auto-Start**: Windows auto-start in background mode
+- ✅ **Task Scheduler**: Scheduled tasks still work in background
+- ✅ **Window Size**: Configurable default window dimensions
+
+### 15. Memory Optimization
+
+- ✅ **Progressive Disclosure**: On-demand tool catalog
+- ✅ **Background Retention**: Configurable number of messages to keep in background mode
+- ✅ **Delay Optimization**: Delay before activating optimization
+- ✅ **Token Economy**: Reduces token usage by loading only necessary tools
+
+### 16. Windows Auto-Start
+
+- ✅ **Registry-based**: Windows registry-based auto-start
+- ✅ **Enable/Disable**: Toggle auto-start in settings
+- ✅ **Command-line Support**: Auto-start with --background flag
+
 ---
 
 ## 📁 Built-in Skill Examples
@@ -151,6 +223,10 @@ PersonalWindowGLM/
 ├── logger.py                   # Logging system
 ├── resource_path.py            # Unified path manager (dev/bundled)
 ├── skill_agent_preferences.py  # Skill visibility/disabled state management
+├── scheduled_tasks.py          # Scheduled task data model and management
+├── scheduler.py                # Task scheduler engine
+├── notification.py             # Notification system (system tray, toast)
+├── autostart.py              # Windows auto-start management
 ├── PersonalWindowGLM.spec      # PyInstaller spec
 ├── PersonalWindowGLM_onefile.spec  # Single-file spec
 ├── build.bat                   # Build script
@@ -170,7 +246,7 @@ PersonalWindowGLM/
 │   ├── glm_chat_model.py       # GLM model implementation
 │   ├── qwen_chat_model.py      # Qwen model implementation
 │   ├── gemma_chat_model.py     # Gemma model implementation
-│   ├── llm_config_manager.py   # Model configuration management
+│   ├── llm_config_manager.py   # Multi-LLM configuration manager with failover
 │   └── token_usage.py          # Token usage tracking
 ├── memory/                     # Session persistence
 │   ├── memory.py               # Memory management interface
@@ -184,13 +260,31 @@ PersonalWindowGLM/
 ├── prompt/                     # Dynamic prompt management
 │   ├── dynamic_prompt.py       # Dynamic system prompt builder
 │   └── template.py             # Prompt template definitions
+├── document_parser/            # Document parsing module
+│   ├── __init__.py             # Parser exports and registration
+│   ├── base_parser.py          # Abstract base parser class
+│   ├── models.py               # ParseResult data model
+│   ├── parser_factory.py       # Parser factory for dynamic selection
+│   ├── file_storage.py         # File storage utilities
+│   └── parsers/                # Format-specific parsers
+│       ├── pdf_parser.py       # PDF document parser
+│       ├── word_parser.py      # Word (DOCX) parser
+│       ├── excel_parser.py     # Excel (XLSX) parser
+│       ├── markdown_parser.py  # Markdown parser
+│       ├── text_parser.py      # Plain text parser
+│       └── json_parser.py      # JSON parser
 ├── ui/                         # Modular frontend
 │   ├── components/             # Reusable UI components
 │   │   ├── chat_bubble.py      # Chat bubble component
 │   │   ├── message_card.py     # Message card component
 │   │   ├── chat_session_tab.py # Chat session tab
 │   │   ├── await_user_card.py  # Await user confirmation card
-│   │   └── settings_dialog.py  # Settings dialog
+│   │   ├── settings_dialog.py  # Settings dialog with multi-config & tasks
+│   │   ├── file_upload_area.py # File upload area
+│   │   ├── file_preview_card.py# File preview component
+│   │   ├── conversation_sidebar.py # Conversation sidebar
+│   │   ├── conversation_list_item.py # Conversation list item
+│   │   └── tab_bar.py          # Tab bar component
 │   ├── views/                  # Page views
 │   │   ├── main_window.py      # Main window
 │   │   └── worker_thread.py    # Worker thread
@@ -207,10 +301,12 @@ PersonalWindowGLM/
 │       ├── message_handler.py  # Message handling
 │       ├── simple_stream_renderer.py # Simple stream renderer
 │       ├── text_utils.py       # Text utilities
-│       └── stream_renderer.py  # Stream rendering
+│       ├── stream_renderer.py  # Stream rendering
+│       ├── file_upload_manager.py # File upload manager
+│       └── file_upload_controller.py # File upload controller
 ├── database/                   # Database layer (SQLAlchemy)
 │   ├── __init__.py             # DB setup
-│   └── models.py               # SQLAlchemy models (Conversations, Messages, User)
+│   └── models.py               # SQLAlchemy models (Conversations, Messages, User, ScheduledTask)
 └── PersonalData/               # User data directory (gitignored)
     ├── Skills/                 # Skill document directory
     │   ├── DuckDuckGoSearch/
@@ -431,6 +527,21 @@ REPEAT_DETECTION_WINDOW_SIZE=10      # Window size for repeat detection
 DANGEROUS_COMMAND_CHECK_ENABLED=true # Enable dangerous command detection
 DANGEROUS_COMMAND_PREFIXES=del ,erase ,rmdir ,rd ,copy ,move ,ren ,rename ,mkdir ,md
 DANGEROUS_COMMAND_CONTAINS= > , >> , >, >>, set-content , set-content-, add-content , add-content-, out-file , out-file-, new-item , new-item-, remove-item , remove-item-, rm
+
+# ===== Window Size Configuration =====
+WINDOW_WIDTH=780                    # Default window width
+WINDOW_HEIGHT=620                   # Default window height
+
+# ===== Scheduled Task Configuration =====
+SCHEDULED_TASK_SHOW_WINDOW=false    # Show main window when task triggers agent conversation
+
+# ===== Tool Catalog Progressive Disclosure =====
+USE_TOOL_CATALOG=true               # Enable tool catalog (progressive disclosure)
+
+# ===== Memory Optimization =====
+MEMORY_OPTIMIZATION_ENABLED=true    # Enable memory optimization
+MEMORY_OPTIMIZATION_DELAY_SECONDS=30 # Delay before activating optimization (seconds)
+BACKGROUND_KEEP_MESSAGES_COUNT=50   # Number of messages to keep in background mode
 ```
 
 ---

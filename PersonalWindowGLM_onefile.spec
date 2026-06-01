@@ -13,6 +13,7 @@ a = Analysis(
         ('application.ico', '.'),
         ('PersonalData', 'PersonalData'),
         ('.env', '.'),
+        ('Skills','Skills')
     ],
     hiddenimports=[
         'resource_path',
@@ -24,6 +25,12 @@ a = Analysis(
         'skill_agent_preferences',
         'ui',
         'ui_skill_agent',
+        'scheduled_tasks',
+        'scheduler',
+        'notification',
+        'autostart',
+        'prompt',
+        'document_parser',
         'base_tool',
         'base_tool.context',
         'base_tool.definitions',
