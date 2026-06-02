@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication, QStyleFactory
 from PySide6.QtGui import QIcon
 
 from ui.views.main_window import SkillAgentMainWindow
+from ui.views.floating_ball import FloatingBall
 from ui.views.worker_thread import SkillAgentWorkerThread
 from ui.styles import initialize_styles
 from resource_path import paths
@@ -38,8 +39,16 @@ def main(background: bool = False) -> None:
     initialize_styles()
     window = SkillAgentMainWindow(background=background)
     
+    # 创建悬浮球（默认隐藏）
+    floating_ball = FloatingBall()
+    floating_ball.show_main_window.connect(window._show_window)
+    floating_ball.quit_application.connect(window._quit_application)
+    window.set_floating_ball(floating_ball)
+    
     if not background:
         window.show()
+    else:
+        floating_ball.show()
     
     sys.exit(app.exec())
 

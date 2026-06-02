@@ -27,6 +27,7 @@ class Conversations(Base):
     user_id = Column(String, index=True)
     title = Column(String)
     active_skill_ids = Column(JSON, default=list)
+    type = Column(String, default='agent_conversation')
     created_at = Column(TIMESTAMP, default=get_local_time())
     updated_at = Column(TIMESTAMP, default=get_local_time())
     

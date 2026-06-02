@@ -1031,3 +1031,24 @@ QProgressBar#skillAgentFileParseProgress::chunk {
   background-color: #2563eb;
   border-radius: 2px;
 }
+
+/* -------------------------------------------------------------------------
+ * 组件：FloatingBall — 悬浮球
+ * ------------------------------------------------------------------------- */
+/* === section:floating_ball_stylesheet === */
+QPushButton#floatingBallButton {
+  background-color: rgba(255, 182, 193, 0.7);
+  color: transparent;
+  border: none;
+  border-radius: 15px;
+  font-size: 1px;
+  box-shadow: 0 2px 8px rgba(255, 182, 193, 0.35);
+}
+QPushButton#floatingBallButton:hover {
+  background-color: rgba(255, 182, 193, 0.85);
+  box-shadow: 0 3px 10px rgba(255, 182, 193, 0.4);
+}
+QPushButton#floatingBallButton:pressed {
+  background-color: rgba(255, 182, 193, 0.8);
+  box-shadow: 0 1px 5px rgba(255, 182, 193, 0.3);
+}

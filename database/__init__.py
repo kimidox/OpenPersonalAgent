@@ -92,10 +92,23 @@ def _migrate_scheduled_tasks():
         conn.commit()
 
 
+def _migrate_conversations_type():
+    """
+    为 conversations 表添加 type 列
+    """
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("SELECT type FROM conversations LIMIT 1"))
+        except Exception:
+            conn.execute(text("ALTER TABLE conversations ADD COLUMN type TEXT DEFAULT 'agent_conversation'"))
+        conn.commit()
+
+
 def init_db():
     Base.metadata.create_all(engine)
     _create_fts_tables()
     _migrate_scheduled_tasks()
+    _migrate_conversations_type()
 
 
 if __name__ == '__main__':

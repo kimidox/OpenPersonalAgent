@@ -82,11 +82,24 @@ class SkillAgentMainWindow(QMainWindow):
         self.skill_agent.set_file_upload_controller(self.file_upload_controller)
         self._conversation_tabs: dict[str, ChatSessionTab] = {}
         self._current_conversation_tab: ChatSessionTab | None = None
+        self._floating_ball = None
         self._init_ui()
         self._init_tray_icon()
         self._init_task_scheduler()
         self._connect_signals()
         self._populate_initial_conversations()
+    
+    def set_floating_ball(self, floating_ball):
+        """设置悬浮球引用"""
+        self._floating_ball = floating_ball
+        self._logger.info(f"MainWindow.set_floating_ball() 调用，当前 isVisible() = {self.isVisible()}")
+        # 不在这里设置显示/隐藏，让 showEvent/hideEvent 来处理
+    
+    def _on_floating_ball_send_message(self, text: str):
+        """处理来自悬浮球的消息发送请求"""
+        if self._floating_ball:
+            self._floating_ball.add_message("user", text)
+        self._send_user_message(text)
 
     def _init_ui(self) -> None:
         self.setWindowTitle("SkillAgent")
@@ -308,14 +321,19 @@ class SkillAgentMainWindow(QMainWindow):
         self.sidebar.settings_requested.connect(self._open_settings)
 
     def _populate_initial_conversations(self) -> None:
-        sessions = [c for c in self.skill_agent.list_saved_conversations() if (c.conversation_id or "").strip()]
-        if not sessions:
+        all_sessions = [c for c in self.skill_agent.list_saved_conversations() if (c.conversation_id or "").strip()]
+        sessions_with_messages = []
+        for conv in all_sessions:
+            cid = (conv.conversation_id or "").strip()
+            if cid and self._memory.get_message_records(cid):
+                sessions_with_messages.append(conv)
+        if not sessions_with_messages:
             self._create_new_conversation()
             return
-        for conv in sessions:
+        for conv in sessions_with_messages:
             self._add_conversation((conv.conversation_id or "").strip(), conv.title, pending_db_history=True)
-        self.sidebar.load_conversations(sessions)
-        first_cid = (sessions[0].conversation_id or "").strip()
+        self.sidebar.load_conversations(sessions_with_messages)
+        first_cid = (sessions_with_messages[0].conversation_id or "").strip()
         self._switch_to_conversation(first_cid)
 
     def _add_conversation(self, conversation_id: str, title: str | None = None, pending_db_history: bool = False) -> ChatSessionTab:
@@ -662,6 +680,9 @@ class SkillAgentMainWindow(QMainWindow):
             stream_type = self.stream_renderer.get_stream_type()
             if conv_id == session_tab.conversation_id and stream_type == "think":
                 self.stream_renderer.complete()
+        # 同步到悬浮球
+        if self._floating_ball:
+            self._floating_ball.add_message("assistant", message)
         self.stream_renderer.start(
             session_tab.message_list, 
             message, 
@@ -676,6 +697,9 @@ class SkillAgentMainWindow(QMainWindow):
             stream_type = self.stream_renderer.get_stream_type()
             if conv_id == session_tab.conversation_id and stream_type == "assistant":
                 self.stream_renderer.complete()
+        # 同步到悬浮球
+        if self._floating_ball:
+            self._floating_ball.add_message("think", message)
         self.stream_renderer.start(
             session_tab.message_list, 
             message, 
@@ -689,6 +713,9 @@ class SkillAgentMainWindow(QMainWindow):
             if conv_id == session_tab.conversation_id:
                 self.stream_renderer.complete()
         session_tab.add_message("tool", message)
+        # 同步到悬浮球
+        if self._floating_ball:
+            self._floating_ball.add_message("tool", message)
 
     def _on_tool_call_message(self, message: str, session_tab: ChatSessionTab) -> None:
         """处理工具调用消息"""
@@ -697,6 +724,9 @@ class SkillAgentMainWindow(QMainWindow):
             if conv_id == session_tab.conversation_id:
                 self.stream_renderer.complete()
         session_tab.add_message("tool_call", message)
+        # 同步到悬浮球
+        if self._floating_ball:
+            self._floating_ball.add_message("tool_call", message)
 
     def _on_skill_content_message(self, message: str, session_tab: ChatSessionTab) -> None:
         if self.stream_renderer.is_active():
@@ -704,6 +734,9 @@ class SkillAgentMainWindow(QMainWindow):
             if conv_id == session_tab.conversation_id:
                 self.stream_renderer.complete()
         session_tab.add_message("user", message)
+        # 同步到悬浮球
+        if self._floating_ball:
+            self._floating_ball.add_message("user", message)
 
     def _on_token_usage_message(self, token_usage: dict, session_tab: ChatSessionTab) -> None:
         """处理token_usage消息，将token用量信息传递给stream_renderer"""
@@ -711,6 +744,9 @@ class SkillAgentMainWindow(QMainWindow):
             conv_id = self.stream_renderer.get_conversation_id()
             if conv_id == session_tab.conversation_id:
                 self.stream_renderer.complete(token_usage)
+        # 同步到悬浮球
+        if self._floating_ball:
+            self._floating_ball.finalize_last_message(token_usage)
 
     def _on_await_user_message(self, spec: dict, session_tab: ChatSessionTab) -> None:
         if self.stream_renderer.is_active():
@@ -718,6 +754,9 @@ class SkillAgentMainWindow(QMainWindow):
             if conv_id == session_tab.conversation_id:
                 self.stream_renderer.complete()
         session_tab.show_await_user_prompt(spec, on_confirm_send=lambda t, st=session_tab: self._send_user_message(t, session_tab=st))
+        # 同步到悬浮球
+        if self._floating_ball:
+            self._floating_ball.show_await_user_prompt(spec, on_confirm_send=lambda t: self._on_floating_ball_send_message(t))
 
     def _on_worker_finished(self, result: str, session_tab) -> None:
         self.ui_state.set_task_running(False)
@@ -732,12 +771,18 @@ class SkillAgentMainWindow(QMainWindow):
             
             if result != SKILL_AGENT_AWAITING_USER_REPLY:
                 session_tab.clear_await_user_ui()
+                # 同步到悬浮球
+                if self._floating_ball:
+                    self._floating_ball.clear_await_user_ui()
                 # 检查是否需要添加最终结果
                 if result and result.strip():
                     # 如果流式渲染没有内容或者内容只有"(完成)"这类提示，或者已经通过token_usage完成了渲染
                     has_stream_content = (stream_text.strip() and "(完成)" not in stream_text) or self.stream_renderer.has_completed_with_token_usage()
                     if not has_stream_content:
                         session_tab.add_message("assistant", result)
+                        # 同步到悬浮球
+                        if self._floating_ball:
+                            self._floating_ball.add_message("assistant", result)
         self._sync_input_placeholder()
 
     def resizeEvent(self, event) -> None:
@@ -748,8 +793,21 @@ class SkillAgentMainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._logger.info(f"MainWindow.showEvent() 触发，isVisible() = {self.isVisible()}")
         from PySide6.QtCore import QTimer
         QTimer.singleShot(100, self._ensure_first_tab_layout_correct)
+        # 主窗口显示时隐藏悬浮球
+        if self._floating_ball:
+            self._logger.info(f"MainWindow.showEvent(): 悬浮球存在，调用 hide()")
+            self._floating_ball.hide()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._logger.info(f"MainWindow.hideEvent() 触发，isVisible() = {self.isVisible()}")
+        # 主窗口隐藏时显示悬浮球
+        if self._floating_ball:
+            self._logger.info(f"MainWindow.hideEvent(): 悬浮球存在，调用 show()")
+            self._floating_ball.show()
 
     def _ensure_first_tab_layout_correct(self) -> None:
         tab = self._active_session_tab()
@@ -760,11 +818,11 @@ class SkillAgentMainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         event.ignore()
         
-        from PySide6.QtWidgets import QDialog, QLabel, QHBoxLayout
+        from PySide6.QtWidgets import QDialog, QLabel, QHBoxLayout, QVBoxLayout
         
         dialog = QDialog(self)
         dialog.setWindowTitle("关闭确认")
-        dialog.setFixedSize(300, 120)
+        dialog.setFixedSize(400, 150)
         
         layout = QVBoxLayout(dialog)
         
@@ -780,6 +838,12 @@ class SkillAgentMainWindow(QMainWindow):
         if minimize_style:
             minimize_btn.setStyleSheet(minimize_style)
 
+        floating_btn = QPushButton("悬浮球模式")
+        floating_btn.setObjectName("skillAgentCloseDialogFloatingButton")
+        floating_style = StyleManager.get_style("close_dialog_minimize_button")
+        if floating_style:
+            floating_btn.setStyleSheet(floating_style)
+
         close_btn = QPushButton("直接关闭")
         close_btn.setObjectName("skillAgentCloseDialogCloseButton")
         close_style = StyleManager.get_style("close_dialog_close_button")
@@ -787,6 +851,7 @@ class SkillAgentMainWindow(QMainWindow):
             close_btn.setStyleSheet(close_style)
         
         btn_layout.addWidget(minimize_btn)
+        btn_layout.addWidget(floating_btn)
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
         
@@ -796,6 +861,14 @@ class SkillAgentMainWindow(QMainWindow):
             self._enter_background_mode(),
             dialog.done(1)
         ))
+        
+        def switch_to_floating():
+            self._logger.info(f"切换到悬浮球模式")
+            self.hide()
+            self._enter_background_mode()
+            dialog.done(3)
+        
+        floating_btn.clicked.connect(switch_to_floating)
         
         close_btn.clicked.connect(lambda: (
             self._cleanup_and_close(),

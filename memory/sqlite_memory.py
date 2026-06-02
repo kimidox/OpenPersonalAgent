@@ -45,7 +45,7 @@ class SqliteMemory(Memory):
     def username(self) -> str:
         return self._username
 
-    def _ensure_conversation_row(self, db: Session, conversation_id: str) -> Conversations:
+    def _ensure_conversation_row(self, db: Session, conversation_id: str, conversation_type: str = 'agent_conversation') -> Conversations:
         row = db.query(Conversations).filter(Conversations.conversation_id == conversation_id).first()
         if row:
             return row
@@ -55,13 +55,14 @@ class SqliteMemory(Memory):
             user_id=str(user.uuid),
             title=conversation_id,
             active_skill_ids=[],
+            type=conversation_type,
         )
         db.add(row)
         db.commit()
         db.refresh(row)
         return row
 
-    def ensure_conversation(self, conversation_id: str, *, title: str | None = None) -> str:
+    def ensure_conversation(self, conversation_id: str, *, title: str | None = None, conversation_type: str = 'agent_conversation') -> str:
         cid = (conversation_id or "").strip()
         if not cid:
             return ""
@@ -81,6 +82,7 @@ class SqliteMemory(Memory):
                 user_id=str(user.uuid),
                 title=resolved_title,
                 active_skill_ids=[],
+                type=conversation_type,
             )
             db.add(row)
             db.commit()
@@ -94,9 +96,10 @@ class SqliteMemory(Memory):
         content: str,
         *,
         metadata: dict[str, Any] | None = None,
+        conversation_type: str = 'agent_conversation',
     ) -> None:
         with get_session() as db:
-            self._ensure_conversation_row(db, conversation_id)
+            self._ensure_conversation_row(db, conversation_id, conversation_type)
             mid = str(uuid.uuid4())
             ext = dict(metadata) if metadata else None
             db.add(
@@ -249,9 +252,10 @@ class SqliteMemory(Memory):
         conversation_id: str,
         summary: str,
         compacted_message_ids: list[str],
+        conversation_type: str = 'agent_conversation',
     ) -> None:
         with get_session() as db:
-            self._ensure_conversation_row(db, conversation_id)
+            self._ensure_conversation_row(db, conversation_id, conversation_type)
             mid = str(uuid.uuid4())
             metadata = {
                 "type": "compaction_summary",

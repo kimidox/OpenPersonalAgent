@@ -302,12 +302,12 @@ class SkillAgent:
     def reload_skills(self) -> None:
         self.registry.reload()
 
-    def start_new_conversation(self) -> tuple[str, str]:
+    def start_new_conversation(self, *, conversation_type: str = 'agent_conversation') -> tuple[str, str]:
         if self.memory is None:
             self._conversation_id = ""
             return (self._conversation_id, "")
         self._conversation_id = str(uuid.uuid4())
-        title = self.memory.ensure_conversation(self._conversation_id,title=f"新会话-{self._conversation_id[:5]}")
+        title = self.memory.ensure_conversation(self._conversation_id, title=f"新会话-{self._conversation_id[:5]}", conversation_type=conversation_type)
         return (self._conversation_id, title)
 
     def set_conversation_id(self, conversation_id: str) -> None:
