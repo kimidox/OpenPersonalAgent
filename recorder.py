@@ -207,7 +207,12 @@ def _get_whisper_model():
     """获取或初始化 Whisper 模型（懒加载）"""
     global _whisper_model, _current_model_size, _original_hf_endpoint
     if _whisper_model is None:
+        # 尝试导入 faster_whisper，添加详细日志
+        logger.info("开始导入 faster_whisper 模块...")
         try:
+            import faster_whisper
+            logger.info(f"faster_whisper 模块路径: {faster_whisper.__file__}")
+            logger.info(f"faster_whisper 版本: {getattr(faster_whisper, '__version__', '未知')}")
             from faster_whisper import WhisperModel
             import os
             
@@ -245,11 +250,21 @@ def _get_whisper_model():
             
             _current_model_size = model_size
             logger.info("Whisper 模型加载完成")
-        except ImportError:
-            logger.error("faster-whisper 库未安装，无法进行本地语音识别")
+        except ImportError as ie:
+            logger.error(f"faster-whisper 库导入失败: {ie}")
+            logger.error(f"导入错误详情: {type(ie).__name__}")
+            # 尝试获取更多信息
+            import sys
+            logger.error(f"Python 路径: {sys.path}")
+            try:
+                import importlib.util
+                spec = importlib.util.find_spec('faster_whisper')
+                logger.error(f"faster_whisper spec: {spec}")
+            except Exception as e:
+                logger.error(f"查找 faster_whisper spec 失败: {e}")
             # 恢复原始的 HF_ENDPOINT 环境变量
+            import os
             if _original_hf_endpoint is not None:
-                import os
                 os.environ['HF_ENDPOINT'] = _original_hf_endpoint
             elif 'HF_ENDPOINT' in os.environ:
                 del os.environ['HF_ENDPOINT']
@@ -257,8 +272,8 @@ def _get_whisper_model():
         except Exception as e:
             logger.exception(f"加载 Whisper 模型失败: {e}")
             # 恢复原始的 HF_ENDPOINT 环境变量
+            import os
             if _original_hf_endpoint is not None:
-                import os
                 os.environ['HF_ENDPOINT'] = _original_hf_endpoint
             elif 'HF_ENDPOINT' in os.environ:
                 del os.environ['HF_ENDPOINT']
