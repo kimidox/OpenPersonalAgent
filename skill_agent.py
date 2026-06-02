@@ -647,7 +647,13 @@ class SkillAgent:
         messages.clear()
         messages.append({"role": "system", "content": system_prompt})
         messages.extend(prior)
-        self.memory.append_message(cid, "user", user_query.strip())
+        # Append message metadata (with files if any)
+        metadata = {}
+        if hasattr(self, "_last_uploaded_files") and self._last_uploaded_files is not None:
+            metadata["files"] = self._last_uploaded_files
+            # Clear after using
+            self._last_uploaded_files = None
+        self.memory.append_message(cid, "user", user_query.strip(), metadata=metadata)
         messages.append({"role": "user", "content": user_query.strip()})
 
     def _persist_after_tool_turn(

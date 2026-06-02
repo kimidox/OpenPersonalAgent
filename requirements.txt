@@ -8,6 +8,8 @@ dotenv
 sqlalchemy>=2.0.0
 pydantic>=2.0.0
 pandas~=3.0.1
+openpyxl>=3.0.0
+xlrd>=2.0.0
 jieba>=0.42.1
 python-docx>=0.8.11
 pdfplumber>=0.10.0

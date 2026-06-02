@@ -455,6 +455,7 @@ class SkillAgentMainWindow(QMainWindow):
         from llm.llm_config_manager import get_current_config
         current_config = get_current_config()
         show_thinking = current_config.enable_thinking
+        from ui.utils.file_upload_manager import UploadedFileInfo
         
         for m in records:
             role, content, meta = str(m.get("role") or ""), str(m.get("content") or ""), m.get("metadata") or {}
@@ -476,7 +477,11 @@ class SkillAgentMainWindow(QMainWindow):
                 continue
             
             token_usage = meta.get("token_usage") if msg_type == "assistant" else None
-            card = tab.message_list.add_message(msg_type, content, token_usage=token_usage)
+            files = []
+            file_dicts = meta.get("files", [])
+            if file_dicts and isinstance(file_dicts, list):
+                files = [UploadedFileInfo.from_dict(d) for d in file_dicts]
+            card = tab.message_list.add_message(msg_type, content, token_usage=token_usage, files=files)
             
         from PySide6.QtCore import QTimer
         
@@ -617,17 +622,27 @@ class SkillAgentMainWindow(QMainWindow):
             return
         
         uploaded_files_content = ""
+        uploaded_files = []
         if self.file_upload_controller.has_files():
             uploaded_files_content = self.file_upload_controller.generate_combined_full_content()
+            uploaded_files = self.file_upload_controller.get_all_files()
             self.file_upload_controller.clear_all_files()
         
         self.skill_agent.set_uploaded_files_content(uploaded_files_content)
         self.skill_agent.set_conversation_id(tab.conversation_id)
-        tab.add_message("user", text)
+        tab.add_message("user", text, files=uploaded_files)
         tab.clear_await_user_ui()
         self.input_edit.clear()
         self.ui_state.set_task_running(True)
         enable_thinking = self.ui_state.get_enable_thinking()
+        # Save file info to memory
+        if uploaded_files:
+            from ui.utils.file_upload_manager import UploadedFileInfo
+            file_dicts = [f.to_dict() for f in uploaded_files]
+            # Save to skill agent to store in message metadata
+            self.skill_agent._last_uploaded_files = file_dicts
+        else:
+            self.skill_agent._last_uploaded_files = None
         self.worker_thread = SkillAgentWorkerThread(
             self.skill_agent, text, conversation_id=tab.conversation_id, 
             session_tab=tab, enable_thinking=enable_thinking

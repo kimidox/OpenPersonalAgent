@@ -38,10 +38,10 @@ class ChatSessionTab(QWidget):
     def show_await_user_prompt(self, spec: dict[str, Any], on_confirm_send: Callable[[str], None] | None = None) -> None:
         self.await_user_card.show_prompt(spec, on_confirm_send=on_confirm_send)
 
-    def add_message(self, msg_type: str, content: str, token_usage: dict[str, Any] | None = None) -> None:
+    def add_message(self, msg_type: str, content: str, token_usage: dict[str, Any] | None = None, files: list | None = None) -> None:
         from ui.components.message_card import MessageType
         valid_type: MessageType = msg_type if msg_type in ("user", "assistant", "tool", "think", "tool_call") else "assistant"
-        self.message_list.add_message(valid_type, content, token_usage)
+        self.message_list.add_message(valid_type, content, token_usage, files=files)
 
     def scroll_to_bottom(self) -> None:
         self.message_list.scroll_to_bottom()

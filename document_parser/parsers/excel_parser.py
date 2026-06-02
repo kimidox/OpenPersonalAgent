@@ -41,7 +41,15 @@ class ExcelParser(BaseParser):
             ParseResult: 包含 Markdown 表格内容、元信息和摘要的解析结果
         """
         try:
-            excel_file = pd.ExcelFile(file_path)
+            # Determine engine based on file extension
+            ext = file_path.suffix.lower()
+            if ext == ".xlsx":
+                engine = "openpyxl"
+            elif ext == ".xls":
+                engine = "xlrd"
+            else:
+                engine = None
+            excel_file = pd.ExcelFile(file_path, engine=engine)
         except Exception as e:
             return ParseResult.from_error(f"无法读取 Excel 文件: {e}", file_path=file_path)
 

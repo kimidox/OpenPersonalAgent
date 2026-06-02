@@ -7,6 +7,8 @@ from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePo
 
 from ui.styles.style_manager import StyleManager
 from ui.utils.markdown_utils import markdown_to_html_fragment, normalize_newlines
+from ui.components.file_preview_card import FilePreviewList
+from ui.utils.file_upload_manager import UploadedFileInfo
 
 
 MessageType = Literal["user", "assistant", "tool", "think", "tool_call"]
@@ -17,6 +19,7 @@ class MessageCardWidget(QWidget):
         self,
         msg_type: MessageType,
         content: str = "",
+        files: list[UploadedFileInfo] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -24,9 +27,12 @@ class MessageCardWidget(QWidget):
         self._raw_content = content
         self._is_finalized = False
         self._token_usage: dict[str, Any] | None = None
+        self._files: list[UploadedFileInfo] = files or []
         self._setup_ui()
         if content:
             self.update_content(content)
+        if self._files:
+            self._add_files_to_ui()
 
     def set_available_width(self, available_width: int) -> None:
         """根据可用宽度设置气泡的最大宽度"""
@@ -125,6 +131,11 @@ class MessageCardWidget(QWidget):
             self._bubble_layout.addLayout(self._button_layout)
 
         self._container_layout.addWidget(self._bubble_frame)
+        
+        # File preview list (read only for messages)
+        self._file_preview_list = FilePreviewList(is_read_only=True)
+        self._file_preview_list.hide()
+        self._container_layout.addWidget(self._file_preview_list)
 
         if self._copy_button:
             self.setMouseTracking(True)
@@ -259,6 +270,16 @@ class MessageCardWidget(QWidget):
 
     def get_message_type(self) -> MessageType:
         return self._msg_type
+    
+    def get_files(self) -> list[dict]:
+        from ui.utils.file_upload_manager import UploadedFileInfo
+        return [f.to_dict() for f in self._files]
+    
+    def add_files_from_dict(self, file_dicts: list[dict]) -> None:
+        from ui.utils.file_upload_manager import UploadedFileInfo
+        for d in file_dicts:
+            self._files.append(UploadedFileInfo.from_dict(d))
+        self._add_files_to_ui()
 
     def is_finalized(self) -> bool:
         return self._is_finalized
@@ -291,3 +312,20 @@ class MessageCardWidget(QWidget):
         if self._copy_button:
             self._copy_button.hide()
         super().leaveEvent(event)
+        
+    def add_files(self, files: list[UploadedFileInfo]) -> None:
+        """Add files to the message card"""
+        self._files.extend(files)
+        self._add_files_to_ui()
+        
+    def get_files(self) -> list[UploadedFileInfo]:
+        """Get the files associated with this message"""
+        return self._files.copy()
+        
+    def _add_files_to_ui(self) -> None:
+        """Add all stored files to the UI"""
+        if not self._files:
+            return
+        for file_info in self._files:
+            self._file_preview_list.add_file(file_info)
+        self._file_preview_list.show()

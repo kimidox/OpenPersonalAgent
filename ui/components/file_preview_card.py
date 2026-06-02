@@ -44,9 +44,11 @@ class FilePreviewCard(QFrame):
         self,
         file_info: UploadedFileInfo,
         parent: QWidget | None = None,
+        is_read_only: bool = False,
     ) -> None:
         super().__init__(parent)
         self._file_info = file_info
+        self._is_read_only = is_read_only
         self.setObjectName("skillAgentFilePreviewCard")
         self._apply_style()
         self._setup_ui()
@@ -75,7 +77,10 @@ class FilePreviewCard(QFrame):
         self.setMinimumWidth(200)
         self.setMaximumWidth(320)
         self.setMinimumHeight(60)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        # Set cursor only if not read-only
+        if not self._is_read_only:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self._main_layout = QHBoxLayout(self)
         self._main_layout.setContentsMargins(8, 6, 8, 6)
@@ -92,11 +97,14 @@ class FilePreviewCard(QFrame):
         self._info_layout.setContentsMargins(0, 0, 0, 0)
         self._info_layout.setSpacing(2)
 
-        self._name_label = QLabel(self._file_info.original_name)
+        self._name_label = QLabel()
         self._name_label.setObjectName("skillAgentFileName")
         self._name_label.setStyleSheet("font-size: 10pt; color: #374151; font-weight: 500;")
-        self._name_label.setWordWrap(True)
+        self._name_label.setWordWrap(False)
         self._name_label.setMaximumWidth(180)
+        self._name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._name_label.setToolTip(self._file_info.original_name)
         self._info_layout.addWidget(self._name_label)
 
         self._size_label = QLabel(self._file_info.get_file_size_display())
@@ -111,32 +119,47 @@ class FilePreviewCard(QFrame):
 
         self._main_layout.addWidget(self._info_container, stretch=1)
 
-        self._remove_btn = QPushButton("×")
-        self._remove_btn.setObjectName("skillAgentFileRemoveButton")
-        self._remove_btn.setFixedSize(20, 20)
-        self._remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._remove_btn.clicked.connect(self._on_remove)
-        remove_style = StyleManager.get_style("file_preview_remove_button")
-        if remove_style:
-            self._remove_btn.setStyleSheet(remove_style)
+        # Only add remove button if not read-only
+        if not self._is_read_only:
+            self._remove_btn = QPushButton("×")
+            self._remove_btn.setObjectName("skillAgentFileRemoveButton")
+            self._remove_btn.setFixedSize(20, 20)
+            self._remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._remove_btn.clicked.connect(self._on_remove)
+            remove_style = StyleManager.get_style("file_preview_remove_button")
+            if remove_style:
+                self._remove_btn.setStyleSheet(remove_style)
+            else:
+                self._remove_btn.setStyleSheet("""
+                    QPushButton#skillAgentFileRemoveButton {
+                        background-color: transparent;
+                        color: #9ca3af;
+                        border: none;
+                        border-radius: 10px;
+                        font-size: 14px;
+                        font-weight: bold;
+                    }
+                    QPushButton#skillAgentFileRemoveButton:hover {
+                        background-color: #fee2e2;
+                        color: #ef4444;
+                    }
+                """)
+            self._main_layout.addWidget(self._remove_btn)
         else:
-            self._remove_btn.setStyleSheet("""
-                QPushButton#skillAgentFileRemoveButton {
-                    background-color: transparent;
-                    color: #9ca3af;
-                    border: none;
-                    border-radius: 10px;
-                    font-size: 14px;
-                    font-weight: bold;
-                }
-                QPushButton#skillAgentFileRemoveButton:hover {
-                    background-color: #fee2e2;
-                    color: #ef4444;
-                }
-            """)
-        self._main_layout.addWidget(self._remove_btn)
+            self._remove_btn = None
 
     def _update_display(self) -> None:
+        # 使用 QFontMetrics 生成带省略号的文件名
+        from PySide6.QtGui import QFontMetrics
+        fm = QFontMetrics(self._name_label.font())
+        elided_name = fm.elidedText(
+            self._file_info.original_name, 
+            Qt.TextElideMode.ElideRight, 
+            self._name_label.maximumWidth()
+        )
+        self._name_label.setText(elided_name)
+        self._name_label.setToolTip(self._file_info.original_name)
+        
         if self._file_info.is_parsing:
             self._status_label.setText("解析中...")
             self._status_label.setStyleSheet("font-size: 8pt; color: #2563eb;")
@@ -164,8 +187,9 @@ class FilePreviewCard(QFrame):
         self.remove_clicked.emit(self._file_info.file_id)
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            if not self._remove_btn.geometry().contains(event.pos()):
+        # Only handle preview click if not read-only
+        if not self._is_read_only and event.button() == Qt.MouseButton.LeftButton:
+            if self._remove_btn is not None and not self._remove_btn.geometry().contains(event.pos()):
                 self.preview_clicked.emit(self._file_info.file_id)
         super().mousePressEvent(event)
 
@@ -177,8 +201,9 @@ class FilePreviewList(QWidget):
     file_removed = Signal(str)
     file_preview_requested = Signal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, is_read_only: bool = False) -> None:
         super().__init__(parent)
+        self._is_read_only = is_read_only
         self._file_cards: dict[str, FilePreviewCard] = {}
         self._setup_ui()
 
@@ -193,9 +218,10 @@ class FilePreviewList(QWidget):
         if file_info.file_id in self._file_cards:
             return
 
-        card = FilePreviewCard(file_info, self)
-        card.remove_clicked.connect(self._on_file_removed)
-        card.preview_clicked.connect(self._on_file_preview)
+        card = FilePreviewCard(file_info, self, is_read_only=self._is_read_only)
+        if not self._is_read_only:
+            card.remove_clicked.connect(self._on_file_removed)
+            card.preview_clicked.connect(self._on_file_preview)
         self._file_cards[file_info.file_id] = card
 
         self._main_layout.insertWidget(self._main_layout.count() - 1, card)

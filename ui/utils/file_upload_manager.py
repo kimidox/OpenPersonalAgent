@@ -65,3 +65,20 @@ class UploadedFileInfo:
             "parse_error": self.parse_error,
             "metadata": self.metadata,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "UploadedFileInfo":
+        file_path = Path(data.get("file_path")) if data.get("file_path") else None
+        upload_time = datetime.fromisoformat(data["upload_time"]) if data.get("upload_time") else datetime.now()
+        return cls(
+            file_id=data["file_id"],
+            original_name=data["original_name"],
+            file_path=file_path,
+            file_size=data["file_size"],
+            extension=data["extension"],
+            mime_type=data.get("mime_type"),
+            upload_time=upload_time,
+            is_parsed=data.get("is_parsed", False),
+            parse_error=data.get("parse_error"),
+            metadata=data.get("metadata", {})
+        )

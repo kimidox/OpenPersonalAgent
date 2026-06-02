@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 
 from ui.components.message_card import MessageCardWidget, MessageType
 from ui.styles.style_manager import StyleManager
+from ui.utils.file_upload_manager import UploadedFileInfo
 
 
 class MessageListWidget(QScrollArea):
@@ -47,13 +48,14 @@ class MessageListWidget(QScrollArea):
         msg_type: MessageType,
         content: str = "",
         token_usage: dict[str, Any] | None = None,
+        files: list[UploadedFileInfo] | None = None,
     ) -> MessageCardWidget | None:
         # 避免添加空消息
         content = content or ""
-        if not content.strip() and not token_usage:
+        if not content.strip() and not token_usage and not files:
             return None
             
-        card = MessageCardWidget(msg_type, content)
+        card = MessageCardWidget(msg_type, content, files)
         if token_usage and msg_type in ("assistant", "think"):
             card.finalize_content(token_usage)
         
@@ -145,6 +147,7 @@ class MessageListWidget(QScrollArea):
                 "msg_type": card.get_message_type(),
                 "content": card.get_content(),
                 "is_finalized": card.is_finalized(),
+                "files": card.get_files(),
             }
             metadata_list.append(card_meta)
         
@@ -180,6 +183,7 @@ class MessageListWidget(QScrollArea):
         current_config = get_current_config()
         show_thinking = current_config.enable_thinking
         show_tool = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
+        from ui.utils.file_upload_manager import UploadedFileInfo
         
         for m in records:
             role = str(m.get("role") or "")
@@ -205,8 +209,13 @@ class MessageListWidget(QScrollArea):
             
             # 获取token_usage信息
             token_usage = meta.get("token_usage") if msg_type == "assistant" else None
+            # 获取files信息
+            files = []
+            file_dicts = meta.get("files", [])
+            if file_dicts and isinstance(file_dicts, list):
+                files = [UploadedFileInfo.from_dict(d) for d in file_dicts]
             
-            self.add_message(msg_type, content, token_usage=token_usage)
+            self.add_message(msg_type, content, token_usage=token_usage, files=files)
         
         def finalize_all_cards():
             self.update_all_cards_width()

@@ -93,9 +93,10 @@ class WordParser(BaseParser):
             str | None: 文档标题
         """
         for para in document.paragraphs:
-            if para.style.name.startswith("Heading"):
+            style_name = para.style.name if para.style else ""
+            if style_name.startswith("Heading"):
                 return para.text.strip()
-            if para.style.name == "Title":
+            if style_name == "Title":
                 return para.text.strip()
         return None
 
@@ -198,7 +199,7 @@ class WordParser(BaseParser):
 
         heading_count = sum(
             1 for para in document.paragraphs
-            if para.style and para.style.name.startswith("Heading")
+            if para.style and para.style.name and para.style.name.startswith("Heading")
         )
 
         metadata = {
@@ -247,7 +248,7 @@ class WordParser(BaseParser):
 
         heading_count = sum(
             1 for para in document.paragraphs
-            if para.style and para.style.name.startswith("Heading")
+            if para.style and para.style.name and para.style.name.startswith("Heading")
         )
 
         if title:
