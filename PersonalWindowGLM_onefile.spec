@@ -66,6 +66,11 @@ a = Analysis(
         'dotenv',
         'pyautogui',
         'PIL',
+        'openpyxl',
+        'xlrd',
+        'jieba',
+        'python-docx',
+        'pdfplumber'
     ],
     hookspath=[],
     hooksconfig={},
