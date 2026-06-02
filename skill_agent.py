@@ -302,12 +302,29 @@ class SkillAgent:
     def reload_skills(self) -> None:
         self.registry.reload()
 
-    def start_new_conversation(self, *, conversation_type: str = 'agent_conversation') -> tuple[str, str]:
+    def start_new_conversation(self, *, conversation_type: str = 'agent_conversation', default_skills: list[dict] | None = None) -> tuple[str, str]:
         if self.memory is None:
             self._conversation_id = ""
             return (self._conversation_id, "")
+        
+        # 如果没有传入 default_skills，就从全局配置中加载该会话类型的默认技能
+        if default_skills is None:
+            from skill_agent_preferences import get_default_skills_for_type
+            skill_ids = get_default_skills_for_type(conversation_type)
+            default_skills = []
+            for skill_id in skill_ids:
+                skill = self.registry.get(skill_id)
+                if skill:
+                    skill_name = getattr(skill, "name", skill_id)
+                    default_skills.append({"id": skill_id, "name": skill_name})
+        
         self._conversation_id = str(uuid.uuid4())
-        title = self.memory.ensure_conversation(self._conversation_id, title=f"新会话-{self._conversation_id[:5]}", conversation_type=conversation_type)
+        title = self.memory.ensure_conversation(
+            self._conversation_id,
+            title=f"新会话-{self._conversation_id[:5]}",
+            conversation_type=conversation_type,
+            default_skills=default_skills
+        )
         return (self._conversation_id, title)
 
     def set_conversation_id(self, conversation_id: str) -> None:
@@ -839,6 +856,25 @@ class SkillAgent:
                         active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
                         self._dynamic_prompt.update_active_skills(active_skills_section)
                         print(f"[DEBUG-exec] 恢复 active skills: {active_skill_ids}")
+                else:
+                    # 如果没有保存的 active skills，从全局配置动态读取该会话类型的默认技能
+                    conv = self.memory.get_conversation(self._conversation_id)
+                    if conv:
+                        from skill_agent_preferences import get_default_skills_for_type
+                        conv_type = conv.type or 'agent_conversation'
+                        skill_ids = get_default_skills_for_type(conv_type)
+                        for sid in skill_ids:
+                            skill = self.registry.get(sid)
+                            if skill:
+                                formatted_skill = format_skill_for_prompt(skill)
+                                active_skill_text.append(formatted_skill)
+                                active_skill_ids.append(sid)
+                        # 将默认技能保存到 active_skill_ids 中
+                        if active_skill_ids:
+                            self.memory.set_active_skills(self._conversation_id, active_skill_ids)
+                            active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
+                            self._dynamic_prompt.update_active_skills(active_skills_section)
+                            print(f"[DEBUG-exec] 加载默认技能: {active_skill_ids}")
 
             if self.memory is not None:
                 self._append_model_messages(messages, system_prompt=system_prompt, user_query=user_query)

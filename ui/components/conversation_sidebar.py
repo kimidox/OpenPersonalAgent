@@ -98,9 +98,9 @@ class ConversationSidebar(QWidget):
     def add_conversation(self, conversation: Conversation) -> ConversationListItem:
         """添加会话"""
         conversation_id = conversation.conversation_id
-        title = conversation.title or "新会话"
+        display_title = conversation.get_display_title()
         
-        item = ConversationListItem(conversation_id, title)
+        item = ConversationListItem(conversation_id, display_title)
         item.selected.connect(self._on_conversation_selected)
         item.delete_requested.connect(self._on_conversation_deleted)
         

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QRadioButton,
     QScrollArea,
@@ -67,6 +69,15 @@ import scheduled_tasks
 from scheduled_tasks import NotificationType, RepeatType, ScheduledTask, TaskStatus
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 from ui.styles.style_manager import StyleManager
+from recorder import (
+    get_available_model_sizes,
+    get_model_info,
+    get_downloaded_models,
+    is_model_downloaded,
+    download_whisper_model,
+    set_active_model,
+    get_models_dir,
+)
 
 if TYPE_CHECKING:
     from skill_agent import SkillAgent
@@ -587,6 +598,109 @@ class TaskEditDialog(QDialog):
         return self._result_task
 
 
+class SkillBindingDialog(QDialog):
+    """Skill 会话绑定设置对话框"""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        skill_id: str,
+        skill_name: str | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._skill_id = skill_id
+        self._skill_name = skill_name or skill_id
+        self._result_saved = False
+        self._setup_ui()
+        self._apply_style()
+        self._load_bindings()
+
+    def _apply_style(self) -> None:
+        style = StyleManager.get_style("settings_dialog_stylesheet")
+        if style:
+            self.setStyleSheet(style)
+
+    def _setup_ui(self) -> None:
+        self.setWindowTitle(f"配置 Skill 会话绑定 - {self._skill_name}")
+        self.setModal(True)
+        self.resize(450, 300)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # Skill 信息显示
+        info_label = QLabel(f"Skill ID：{self._skill_id}\nSkill 名称：{self._skill_name}")
+        info_label.setStyleSheet("font-size: 11pt; font-weight: bold;")
+        layout.addWidget(info_label)
+
+        # 分割线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(line)
+
+        # 会话类型选择
+        type_label = QLabel("选择该 Skill 在哪些会话类型中默认启用：")
+        layout.addWidget(type_label)
+
+        self._agent_conv_cb = QCheckBox("智能体会话 (agent_conversation)")
+        self._human_chat_cb = QCheckBox("浮动聊天会话 (human_chat_conversation)")
+        self._record_conv_cb = QCheckBox("录音会话 (record_conversation)")
+
+        layout.addWidget(self._agent_conv_cb)
+        layout.addWidget(self._human_chat_cb)
+        layout.addWidget(self._record_conv_cb)
+
+        layout.addStretch()
+
+        # 按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        
+        save_btn = QPushButton("保存")
+        save_btn.clicked.connect(self._on_save)
+        btn_layout.addWidget(save_btn)
+        
+        layout.addLayout(btn_layout)
+
+    def _load_bindings(self) -> None:
+        from skill_agent_preferences import load_skill_bindings
+        
+        bindings = load_skill_bindings()
+        conv_types = bindings.get(self._skill_id, [])
+        
+        self._agent_conv_cb.setChecked("agent_conversation" in conv_types)
+        self._human_chat_cb.setChecked("human_chat_conversation" in conv_types)
+        self._record_conv_cb.setChecked("record_conversation" in conv_types)
+
+    def _on_save(self) -> None:
+        from skill_agent_preferences import load_skill_bindings, save_skill_bindings
+        
+        bindings = load_skill_bindings()
+        
+        conv_types = []
+        if self._agent_conv_cb.isChecked():
+            conv_types.append("agent_conversation")
+        if self._human_chat_cb.isChecked():
+            conv_types.append("human_chat_conversation")
+        if self._record_conv_cb.isChecked():
+            conv_types.append("record_conversation")
+        
+        if conv_types:
+            bindings[self._skill_id] = conv_types
+        elif self._skill_id in bindings:
+            del bindings[self._skill_id]
+        
+        save_skill_bindings(bindings)
+        self._result_saved = True
+        QMessageBox.information(self, "提示", "配置已保存")
+        self.accept()
+
+
 class SettingsDialog(QDialog):
     """会话设置：多配置组管理、模型信息、Skill 启用/禁用。"""
 
@@ -763,6 +877,109 @@ class SettingsDialog(QDialog):
         tasks_tab_layout.addWidget(task_behavior_group)
 
         tab_widget.addTab(self._tasks_tab, "定时任务管理")
+        
+        whisper_tab = QWidget()
+        whisper_tab_layout = QVBoxLayout(whisper_tab)
+        whisper_tab_layout.setContentsMargins(8, 8, 8, 8)
+        whisper_tab_layout.setSpacing(12)
+        
+        whisper_title = QLabel("Whisper 语音识别模型管理")
+        whisper_title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        whisper_tab_layout.addWidget(whisper_title)
+        
+        models_dir_label = QLabel(f"模型存储目录：{get_models_dir()}")
+        models_dir_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        whisper_tab_layout.addWidget(models_dir_label)
+        
+        model_select_group = QGroupBox("模型选择")
+        model_select_layout = QVBoxLayout(model_select_group)
+        
+        select_row = QHBoxLayout()
+        select_label = QLabel("当前使用模型：")
+        select_row.addWidget(select_label)
+        
+        self._whisper_model_combo = QComboBox()
+        for model_size in get_available_model_sizes():
+            info = get_model_info(model_size)
+            self._whisper_model_combo.addItem(
+                f"{info['name']} ({info['size_mb']}MB) - {info['description']}",
+                model_size
+            )
+        current_model = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
+        idx = self._whisper_model_combo.findData(current_model)
+        if idx >= 0:
+            self._whisper_model_combo.setCurrentIndex(idx)
+        select_row.addWidget(self._whisper_model_combo)
+        select_row.addStretch()
+        model_select_layout.addLayout(select_row)
+        
+        self._whisper_model_status = QLabel()
+        self._whisper_model_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        model_select_layout.addWidget(self._whisper_model_status)
+        
+        switch_btn_row = QHBoxLayout()
+        self._switch_whisper_btn = QPushButton("切换到此模型")
+        self._switch_whisper_btn.clicked.connect(self._on_switch_whisper_model)
+        switch_btn_row.addWidget(self._switch_whisper_btn)
+        switch_btn_row.addStretch()
+        model_select_layout.addLayout(switch_btn_row)
+        
+        whisper_tab_layout.addWidget(model_select_group)
+        
+        download_group = QGroupBox("模型下载")
+        download_layout = QVBoxLayout(download_group)
+        
+        download_row = QHBoxLayout()
+        download_label = QLabel("选择要下载的模型：")
+        download_row.addWidget(download_label)
+        
+        self._download_whisper_combo = QComboBox()
+        for model_size in get_available_model_sizes():
+            info = get_model_info(model_size)
+            status = "✓ 已下载" if is_model_downloaded(model_size) else "未下载"
+            self._download_whisper_combo.addItem(
+                f"{info['name']} ({info['size_mb']}MB) - {status}",
+                model_size
+            )
+        download_row.addWidget(self._download_whisper_combo)
+        download_row.addStretch()
+        download_layout.addLayout(download_row)
+        
+        self._download_progress = QProgressBar()
+        self._download_progress.setVisible(False)
+        download_layout.addWidget(self._download_progress)
+        
+        self._download_status_label = QLabel()
+        self._download_status_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        download_layout.addWidget(self._download_status_label)
+        
+        download_btn_row = QHBoxLayout()
+        self._download_whisper_btn = QPushButton("下载模型")
+        self._download_whisper_btn.clicked.connect(self._on_download_whisper_model)
+        download_btn_row.addWidget(self._download_whisper_btn)
+        
+        self._refresh_whisper_btn = QPushButton("刷新状态")
+        self._refresh_whisper_btn.clicked.connect(self._refresh_whisper_models)
+        download_btn_row.addWidget(self._refresh_whisper_btn)
+        download_btn_row.addStretch()
+        download_layout.addLayout(download_btn_row)
+        
+        whisper_tab_layout.addWidget(download_group)
+        
+        downloaded_group = QGroupBox("已下载模型列表")
+        downloaded_layout = QVBoxLayout(downloaded_group)
+        
+        self._downloaded_models_list = QLabel()
+        self._downloaded_models_list.setWordWrap(True)
+        downloaded_layout.addWidget(self._downloaded_models_list)
+        
+        whisper_tab_layout.addWidget(downloaded_group)
+        
+        whisper_tab_layout.addStretch()
+        
+        tab_widget.addTab(whisper_tab, "语音模型管理")
+        
+        self._whisper_tab = whisper_tab
 
         self._tab_widget = tab_widget
         layout.addWidget(tab_widget)
@@ -1110,6 +1327,11 @@ class SettingsDialog(QDialog):
             name_lab.setWordWrap(True)
             row.addWidget(name_lab, stretch=1)
             
+            edit_btn = QPushButton("编辑")
+            edit_btn.setFixedSize(50, 24)
+            edit_btn.clicked.connect(lambda _, _sid=sid, _s=s: self._on_edit_skill(_sid, _s))
+            row.addWidget(edit_btn)
+            
             if skill_type != "builtin":
                 delete_btn = QPushButton("删除")
                 delete_btn.setFixedSize(50, 24)
@@ -1145,6 +1367,12 @@ class SettingsDialog(QDialog):
                     QMessageBox.warning(self, "警告", f"删除 Skill「{skill_id}」失败")
             except Exception as e:
                 QMessageBox.warning(self, "警告", f"删除 Skill 时发生错误: {e}")
+
+    def _on_edit_skill(self, skill_id: str, skill: Any) -> None:
+        """打开 Skill 会话绑定设置对话框"""
+        skill_name = getattr(skill, "name", skill_id)
+        dialog = SkillBindingDialog(self, skill_id, skill_name)
+        dialog.exec()
 
     def _on_skill_toggled(self, skill_id: str, cb: QCheckBox) -> None:
         if cb.isChecked():
@@ -1283,12 +1511,15 @@ class SettingsDialog(QDialog):
 
     def _update_autostart_status(self) -> None:
         status = autostart.get_autostart_status()
+        # 阻止信号触发，避免每次打开设置页面都弹出提示
+        self._autostart_check.blockSignals(True)
         if status["enabled"]:
             self._autostart_check.setChecked(True)
             self._autostart_status_label.setText("状态：已启用开机自启动")
         else:
             self._autostart_check.setChecked(False)
             self._autostart_status_label.setText("状态：未启用开机自启动")
+        self._autostart_check.blockSignals(False)
 
     def _on_scheduled_task_show_window_changed(self, state: int) -> None:
         """处理定时任务弹出窗口选项变更"""
@@ -1330,3 +1561,103 @@ class SettingsDialog(QDialog):
         self._refresh_task_list()
         self._update_autostart_status()
         self._update_scheduled_task_show_window_status()
+        self._refresh_whisper_models()
+    
+    def _refresh_whisper_models(self) -> None:
+        """刷新 Whisper 模型状态"""
+        downloaded = get_downloaded_models()
+        current_model = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
+        
+        self._download_whisper_combo.clear()
+        for model_size in get_available_model_sizes():
+            info = get_model_info(model_size)
+            status = "✓ 已下载" if is_model_downloaded(model_size) else "未下载"
+            self._download_whisper_combo.addItem(
+                f"{info['name']} ({info['size_mb']}MB) - {status}",
+                model_size
+            )
+        
+        if downloaded:
+            downloaded_names = [get_model_info(m)['name'] for m in downloaded]
+            self._downloaded_models_list.setText(f"已下载：{', '.join(downloaded_names)}")
+        else:
+            self._downloaded_models_list.setText("暂无已下载的模型")
+        
+        is_current_downloaded = is_model_downloaded(current_model)
+        if is_current_downloaded:
+            info = get_model_info(current_model)
+            self._whisper_model_status.setText(f"状态：当前使用 {info['name']} 模型（已下载）")
+            self._switch_whisper_btn.setEnabled(True)
+        else:
+            self._whisper_model_status.setText(f"状态：当前模型 {current_model} 未下载，请先下载")
+            self._switch_whisper_btn.setEnabled(False)
+    
+    def _on_switch_whisper_model(self) -> None:
+        """切换 Whisper 模型"""
+        model_size = self._whisper_model_combo.currentData()
+        if not model_size:
+            return
+        
+        if not is_model_downloaded(model_size):
+            QMessageBox.warning(self, "警告", f"模型 {model_size} 未下载，请先下载")
+            return
+        
+        if set_active_model(model_size):
+            info = get_model_info(model_size)
+            QMessageBox.information(self, "提示", f"已切换到 {info['name']} 模型")
+            self._refresh_whisper_models()
+        else:
+            QMessageBox.warning(self, "警告", "切换模型失败")
+    
+    def _on_download_whisper_model(self) -> None:
+        """下载 Whisper 模型"""
+        model_size = self._download_whisper_combo.currentData()
+        if not model_size:
+            return
+        
+        if is_model_downloaded(model_size):
+            QMessageBox.information(self, "提示", f"模型 {model_size} 已下载")
+            return
+        
+        info = get_model_info(model_size)
+        
+        self._download_whisper_btn.setEnabled(False)
+        self._download_progress.setVisible(True)
+        self._download_progress.setValue(0)
+        self._download_status_label.setText(f"正在下载 {info['name']} 模型...")
+        
+        def download_callback(progress: int, status: str):
+            self._download_progress.setValue(progress)
+            self._download_status_label.setText(status)
+        
+        def do_download():
+            success = download_whisper_model(model_size, callback=download_callback)
+            
+            def on_finished():
+                self._download_whisper_btn.setEnabled(True)
+                self._download_progress.setVisible(False)
+                
+                if success:
+                    self._download_status_label.setText(f"{info['name']} 模型下载完成")
+                    QMessageBox.information(self, "提示", f"{info['name']} 模型下载成功")
+                else:
+                    self._download_status_label.setText("下载失败")
+                    QMessageBox.warning(self, "警告", f"{info['name']} 模型下载失败")
+                
+                self._refresh_whisper_models()
+            
+            from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+            QMetaObject.invokeMethod(self, "_on_download_finished", Qt.ConnectionType.QueuedConnection)
+        
+        self._download_thread = threading.Thread(
+            target=do_download,
+            name="whisper-download",
+            daemon=True
+        )
+        self._download_thread.start()
+    
+    def _on_download_finished(self) -> None:
+        """下载完成后的回调（由线程调用）"""
+        self._download_whisper_btn.setEnabled(True)
+        self._download_progress.setVisible(False)
+        self._refresh_whisper_models()

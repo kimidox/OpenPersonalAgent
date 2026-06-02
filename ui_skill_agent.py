@@ -1,15 +1,3 @@
-"""
-DEPRECATED: 此模块已废弃，请迁移到新的模块化结构。
-
-新入口文件: ui/main.py
-主窗口类: ui.views.main_window.SkillAgentMainWindow
-工作线程: ui.views.worker_thread.SkillAgentWorkerThread
-组件: ui.components.*
-样式: ui.styles.*
-
-此文件仅作为兼容层保留，将在未来版本中移除。
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -39,10 +27,10 @@ def main(background: bool = False) -> None:
     initialize_styles()
     window = SkillAgentMainWindow(background=background)
     
-    # 创建悬浮球（默认隐藏）
     floating_ball = FloatingBall()
     floating_ball.show_main_window.connect(window._show_window)
     floating_ball.quit_application.connect(window._quit_application)
+    floating_ball.create_recording_conversation.connect(window._process_recording_for_conversation)
     window.set_floating_ball(floating_ball)
     
     if not background:

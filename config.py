@@ -260,3 +260,23 @@ except (TypeError, ValueError):
     BACKGROUND_KEEP_MESSAGES_COUNT = 50
 if BACKGROUND_KEEP_MESSAGES_COUNT < 1:
     BACKGROUND_KEEP_MESSAGES_COUNT = 50
+
+# ===== 录音配置 =====
+
+RECORDING_SAMPLE_RATE = 16000
+RECORDING_CHANNELS = 1
+RECORDING_DTYPE = 'int16'
+
+_stl = get_config("RECORDING_TRANSCRIPTION_LANGUAGE")
+RECORDING_TRANSCRIPTION_LANGUAGE = _stl if _stl not in (None, "") else "zh"
+
+# ===== Whisper 本地模型配置 =====
+
+_wms = get_config("WHISPER_MODEL_SIZE")
+WHISPER_MODEL_SIZE = _wms if _wms not in (None, "") else "base"
+
+_wd = get_config("WHISPER_DEVICE")
+WHISPER_DEVICE = _wd if _wd not in (None, "") else "cpu"
+
+_wct = get_config("WHISPER_COMPUTE_TYPE")
+WHISPER_COMPUTE_TYPE = _wct if _wct not in (None, "") else "int8"

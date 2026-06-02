@@ -104,11 +104,24 @@ def _migrate_conversations_type():
         conn.commit()
 
 
+def _migrate_conversations_default_skills():
+    """
+    为 conversations 表添加 default_skills 列
+    """
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("SELECT default_skills FROM conversations LIMIT 1"))
+        except Exception:
+            conn.execute(text("ALTER TABLE conversations ADD COLUMN default_skills TEXT DEFAULT '[]'"))
+        conn.commit()
+
+
 def init_db():
     Base.metadata.create_all(engine)
     _create_fts_tables()
     _migrate_scheduled_tasks()
     _migrate_conversations_type()
+    _migrate_conversations_default_skills()
 
 
 if __name__ == '__main__':

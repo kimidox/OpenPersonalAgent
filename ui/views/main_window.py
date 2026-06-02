@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QTimer
@@ -19,6 +20,7 @@ from skill_agent import SkillAgent, SKILL_AGENT_AWAITING_USER_REPLY
 from resource_path import paths
 from scheduler import TaskScheduler
 from scheduled_tasks import ScheduledTask
+from recorder import get_recorder
 
 from ui.components import ChatSessionTab, SettingsDialog, ConversationSidebar, FileUploadArea
 from ui.state import SessionState, StreamState, UIState
@@ -83,6 +85,8 @@ class SkillAgentMainWindow(QMainWindow):
         self._conversation_tabs: dict[str, ChatSessionTab] = {}
         self._current_conversation_tab: ChatSessionTab | None = None
         self._floating_ball = None
+        # 添加处理录音文件的记录，防止重复处理
+        self._last_processed_recording: str | None = None
         self._init_ui()
         self._init_tray_icon()
         self._init_task_scheduler()
@@ -170,10 +174,17 @@ class SkillAgentMainWindow(QMainWindow):
         self.tray_icon.setToolTip("SkillAgent")
 
         tray_menu = QMenu(self)
+        
         show_action = QAction("显示窗口", self)
         show_action.triggered.connect(self._show_window)
         tray_menu.addAction(show_action)
-
+        
+        self._tray_recording_action = QAction("录音模式", self)
+        self._tray_recording_action.triggered.connect(self._toggle_tray_recording)
+        tray_menu.addAction(self._tray_recording_action)
+        
+        tray_menu.addSeparator()
+        
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(self._quit_application)
         tray_menu.addAction(quit_action)
@@ -189,6 +200,66 @@ class SkillAgentMainWindow(QMainWindow):
     def _tray_icon_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._show_window()
+    
+    def _toggle_tray_recording(self) -> None:
+        """切换托盘录音状态"""
+        recorder = get_recorder()
+        
+        if recorder.is_recording:
+            audio_path = recorder.stop_recording()
+            self._tray_recording_action.setText("录音模式")
+            
+            if audio_path:
+                self._process_recording_for_conversation(audio_path)
+        else:
+            success = recorder.start_recording()
+            if success:
+                self._tray_recording_action.setText("停止录音")
+
+    def _process_recording_for_conversation(self, audio_path: Path, text: str = "") -> None:
+        """处理录音文件：转文本、创建会话并发送消息"""
+        self._logger.info(f"_process_recording_for_conversation 被调用: audio_path={audio_path}, text={text}")
+        
+        # 防止重复处理同一个录音文件
+        audio_path_str = str(audio_path)
+        if self._last_processed_recording == audio_path_str:
+            self._logger.warning(f"检测到重复处理录音文件: {audio_path_str}，跳过")
+            return
+        self._last_processed_recording = audio_path_str
+        
+        recorder = get_recorder()
+        if not text:
+            self._logger.info("text 为空，调用 transcribe_audio 进行转译")
+            text = recorder.transcribe_audio(audio_path)
+        
+        if not text:
+            self._logger.warning("转译结果为空，返回")
+            return
+        
+        self._logger.info(f"转译结果: {text}")
+        
+        if self.worker_thread and self.worker_thread.isRunning():
+            QMessageBox.warning(self, "提示", "当前仍有对话在执行，请结束后再发送录音消息。")
+            return
+        
+        cid, _ = self.skill_agent.start_new_conversation(
+            conversation_type='record_conversation'
+        )
+        self.skill_agent.set_conversation_id(cid)
+        
+        self._logger.info(f"创建新会话: {cid}")
+        
+        tab = self._add_conversation(cid, f"录音会话-{cid[:5]}", pending_db_history=False)
+        
+        # 获取对话信息并添加到侧边栏
+        conv = self._memory.get_conversation(cid)
+        if conv:
+            self.sidebar.add_conversation(conv)
+        
+        self._switch_to_conversation(cid)
+        
+        self._logger.info(f"调用 _send_user_message，text: {text}")
+        self._send_user_message(text, session_tab=tab)
 
     def _enter_background_mode(self) -> None:
         self._is_background_mode = True
@@ -347,8 +418,12 @@ class SkillAgentMainWindow(QMainWindow):
         cid, title = self.skill_agent.start_new_conversation()
         self._add_conversation(cid, title, pending_db_history=False)
         from memory.conversation import Conversation
-        conv = Conversation(cid, self.skill_agent.username, title)
-        self.sidebar.add_conversation(conv)
+        conv = self._memory.get_conversation(cid)
+        if conv:
+            self.sidebar.add_conversation(conv)
+        else:
+            conv = Conversation(cid, self.skill_agent.username, title)
+            self.sidebar.add_conversation(conv)
         self._switch_to_conversation(cid)
         return cid
 
@@ -380,8 +455,12 @@ class SkillAgentMainWindow(QMainWindow):
         tab = self._add_conversation(cid, task.title, pending_db_history=False)
         
         from memory.conversation import Conversation
-        conv = Conversation(cid, self.skill_agent.username, task.title)
-        self.sidebar.add_conversation(conv)
+        conv = self._memory.get_conversation(cid)
+        if conv:
+            self.sidebar.add_conversation(conv)
+        else:
+            conv = Conversation(cid, self.skill_agent.username, task.title)
+            self.sidebar.add_conversation(conv)
         
         self._switch_to_conversation(cid)
         

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from PySide6.QtCore import Qt, QPoint, Signal, QPropertyAnimation, QEasingCurve, QTimer, QEvent
 from PySide6.QtGui import QIcon, QAction
 from PySide6.QtWidgets import QWidget, QPushButton, QMenu, QApplication
@@ -8,6 +9,7 @@ from resource_path import paths
 from ui.styles import StyleManager
 from ui.views.floating_chat_window import FloatingChatWindow
 from logger import get_logger
+from recorder import get_recorder
 
 
 class FloatingBallButton(QPushButton):
@@ -50,12 +52,12 @@ class FloatingBallButton(QPushButton):
 class FloatingBall(QWidget):
     """悬浮球组件，支持拖动、右键菜单和展开会话窗口"""
 
-    # 信号：显示主窗口
     show_main_window = Signal()
-    # 信号：退出应用
     quit_application = Signal()
-    # 信号：发送消息
     send_message_requested = Signal(str)
+    recording_started = Signal()
+    recording_stopped = Signal(Path)
+    create_recording_conversation = Signal(Path, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -124,19 +126,22 @@ class FloatingBall(QWidget):
         """初始化右键菜单"""
         self.menu = QMenu(self)
         
-        # 展开/收起聊天窗口
         toggle_action = QAction("展开聊天窗口", self)
         toggle_action.triggered.connect(self._toggle_chat_window)
         self.menu.addAction(toggle_action)
         
-        # 显示主窗口
         show_action = QAction("显示主窗口", self)
         show_action.triggered.connect(self.show_main_window.emit)
         self.menu.addAction(show_action)
         
         self.menu.addSeparator()
         
-        # 退出应用
+        self._recording_action = QAction("录音模式", self)
+        self._recording_action.triggered.connect(self._toggle_recording)
+        self.menu.addAction(self._recording_action)
+        
+        self.menu.addSeparator()
+        
         quit_action = QAction("退出应用", self)
         quit_action.triggered.connect(self.quit_application.emit)
         self.menu.addAction(quit_action)
@@ -144,6 +149,24 @@ class FloatingBall(QWidget):
     def _on_button_clicked(self):
         """按钮点击事件 - 切换聊天窗口展开/收起"""
         self._toggle_chat_window()
+    
+    def _toggle_recording(self):
+        """切换录音状态"""
+        recorder = get_recorder()
+        
+        if recorder.is_recording:
+            audio_path = recorder.stop_recording()
+            self._recording_action.setText("录音模式")
+            
+            if audio_path:
+                self.recording_stopped.emit(audio_path)
+                # 只发送音频路径，让主窗口统一处理转文本和创建会话
+                self.create_recording_conversation.emit(audio_path, "")
+        else:
+            success = recorder.start_recording()
+            if success:
+                self._recording_action.setText("停止录音")
+                self.recording_started.emit()
 
     def _toggle_chat_window(self):
         """切换聊天窗口的展开/收起状态"""

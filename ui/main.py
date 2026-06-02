@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 
 from PySide6.QtWidgets import QApplication, QStyleFactory
 from PySide6.QtGui import QIcon
@@ -10,6 +11,20 @@ from ui.views.main_window import SkillAgentMainWindow
 from ui.views.floating_ball import FloatingBall
 from resource_path import paths
 from logger import get_logger
+
+
+def _preload_whisper_model():
+    """后台预加载 Whisper 模型"""
+    try:
+        from recorder import download_whisper_model, is_model_downloaded
+        import config
+        
+        model_size = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
+        
+        if not is_model_downloaded(model_size):
+            download_whisper_model(model_size)
+    except Exception:
+        pass
 
 
 def main(background: bool = False) -> None:
@@ -27,14 +42,20 @@ def main(background: bool = False) -> None:
     logger.info("ui.main: 创建主窗口")
     window = SkillAgentMainWindow(background=background)
     
-    # 创建悬浮球（默认隐藏）
     logger.info("ui.main: 创建悬浮球")
     floating_ball = FloatingBall()
     floating_ball.show_main_window.connect(window._show_window)
     floating_ball.quit_application.connect(window._quit_application)
-    # 浮动聊天窗口现在独立处理消息
+    floating_ball.create_recording_conversation.connect(window._process_recording_for_conversation)
     logger.info("ui.main: 设置悬浮球引用")
     window.set_floating_ball(floating_ball)
+    
+    preload_thread = threading.Thread(
+        target=_preload_whisper_model,
+        name="whisper-preload",
+        daemon=True
+    )
+    preload_thread.start()
     
     logger.info(f"ui.main: background = {background}")
     if not background:

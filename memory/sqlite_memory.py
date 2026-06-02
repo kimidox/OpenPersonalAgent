@@ -45,7 +45,7 @@ class SqliteMemory(Memory):
     def username(self) -> str:
         return self._username
 
-    def _ensure_conversation_row(self, db: Session, conversation_id: str, conversation_type: str = 'agent_conversation') -> Conversations:
+    def _ensure_conversation_row(self, db: Session, conversation_id: str, conversation_type: str = 'agent_conversation', default_skills: list[dict] | None = None) -> Conversations:
         row = db.query(Conversations).filter(Conversations.conversation_id == conversation_id).first()
         if row:
             return row
@@ -56,13 +56,14 @@ class SqliteMemory(Memory):
             title=conversation_id,
             active_skill_ids=[],
             type=conversation_type,
+            default_skills=default_skills or [],
         )
         db.add(row)
         db.commit()
         db.refresh(row)
         return row
 
-    def ensure_conversation(self, conversation_id: str, *, title: str | None = None, conversation_type: str = 'agent_conversation') -> str:
+    def ensure_conversation(self, conversation_id: str, *, title: str | None = None, conversation_type: str = 'agent_conversation', default_skills: list[dict] | None = None) -> str:
         cid = (conversation_id or "").strip()
         if not cid:
             return ""
@@ -70,8 +71,14 @@ class SqliteMemory(Memory):
         with get_session() as db:
             row = db.query(Conversations).filter(Conversations.conversation_id == cid).first()
             if row:
+                updated = False
                 if not row.title:
                     row.title = resolved_title
+                    updated = True
+                if default_skills is not None and row.default_skills != default_skills:
+                    row.default_skills = default_skills
+                    updated = True
+                if updated:
                     row.updated_at = datetime.now()
                     db.commit()
                     db.refresh(row)
@@ -83,6 +90,7 @@ class SqliteMemory(Memory):
                 title=resolved_title,
                 active_skill_ids=[],
                 type=conversation_type,
+                default_skills=default_skills or [],
             )
             db.add(row)
             db.commit()
@@ -186,6 +194,21 @@ class SqliteMemory(Memory):
             if not conv or conv.active_skill_ids is None:
                 return []
             return [str(x) for x in conv.active_skill_ids]
+
+    def set_default_skills(self, conversation_id: str, default_skills: list[dict]) -> None:
+        with get_session() as db:
+            conv = db.query(Conversations).filter(Conversations.conversation_id == conversation_id).first()
+            if conv:
+                conv.default_skills = default_skills
+                conv.updated_at = datetime.now()
+                db.commit()
+
+    def get_default_skills(self, conversation_id: str) -> list[dict]:
+        with get_session() as db:
+            conv = db.query(Conversations).filter(Conversations.conversation_id == conversation_id).first()
+            if not conv or conv.default_skills is None:
+                return []
+            return conv.default_skills if isinstance(conv.default_skills, list) else []
 
     def get_conversation(self, conversation_id: str) -> Conversation | None:
         with get_session() as db:

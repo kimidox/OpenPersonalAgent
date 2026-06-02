@@ -1,0 +1,10 @@
+{
+  "skill_bindings": {
+    "2": [
+      "human_chat_conversation"
+    ],
+    "meeting_minutes_generator": [
+      "record_conversation"
+    ]
+  }
+}

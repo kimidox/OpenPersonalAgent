@@ -1,11 +1,35 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, Signal, QSize, QRect
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QFontMetrics
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QToolButton, QSizePolicy
 )
 from ui.styles.style_manager import StyleManager
+
+
+class ElideLabel(QLabel):
+    """支持文本省略的标签"""
+    
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._full_text = text
+        self._elide_mode = Qt.TextElideMode.ElideRight
+        
+    def setText(self, text: str) -> None:
+        self._full_text = text
+        self._update_elided_text()
+        
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_elided_text()
+        
+    def _update_elided_text(self) -> None:
+        """根据可用宽度更新显示的文本"""
+        fm = QFontMetrics(self.font())
+        available_width = self.width()
+        elided = fm.elidedText(self._full_text, self._elide_mode, available_width)
+        super().setText(elided)
 
 
 _DELETE_ICON: QIcon | None = None
@@ -68,10 +92,9 @@ class ConversationListItem(QWidget):
         self._main_layout.setContentsMargins(8, 6, 8, 6)
         self._main_layout.setSpacing(8)
 
-        # 标题标签
-        self._title_label = QLabel(self._title)
-        self._title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._title_label.setWordWrap(False)
+        # 标题标签 - 使用支持文本省略的自定义标签
+        self._title_label = ElideLabel(self._title)
+        self._title_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self._main_layout.addWidget(self._title_label)
 
         # 删除按钮 - 与 tab 关闭按钮保持一致风格
