@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QTimer
@@ -27,6 +28,8 @@ from ui.utils import MessageHandler
 from ui.utils.simple_stream_renderer import SimpleStreamRenderer
 from ui.utils.file_upload_controller import FileUploadController
 from ui.views.worker_thread import SkillAgentWorkerThread
+from tts.synthesizer import TTSSynthesizer
+from tts.tts_config import get_tts_config
 
 if TYPE_CHECKING:
     pass
@@ -82,11 +85,39 @@ class SkillAgentMainWindow(QMainWindow):
         self.skill_agent.set_file_upload_controller(self.file_upload_controller)
         self._conversation_tabs: dict[str, ChatSessionTab] = {}
         self._current_conversation_tab: ChatSessionTab | None = None
+        self._tts_synthesizer: TTSSynthesizer | None = None
+        self._tts_config = get_tts_config()
+        self._init_tts()
         self._init_ui()
         self._init_tray_icon()
         self._init_task_scheduler()
         self._connect_signals()
         self._populate_initial_conversations()
+
+    def _init_tts(self) -> None:
+        if not self._tts_config.enabled:
+            self._logger.info("TTS功能未启用，跳过初始化")
+            return
+        
+        voice_dir = self._tts_config.voice_dir
+        if not voice_dir or not Path(voice_dir).exists():
+            voice_dir = Path(config.TTS_VOICE_DIR)
+        
+        self._tts_synthesizer = TTSSynthesizer(voice_dir)
+        
+        if self._tts_synthesizer.initialize():
+            self._tts_synthesizer.set_speed(self._tts_config.speed)
+            self._tts_synthesizer.set_volume(self._tts_config.volume)
+            self._tts_synthesizer.set_auto_read(self._tts_config.auto_read)
+            
+            voice_model = self._tts_config.voice_model
+            if voice_model:
+                self._tts_synthesizer.load_voice(voice_model)
+            
+            self._logger.info("TTS合成器初始化成功")
+        else:
+            self._logger.warning("TTS合成器初始化失败")
+            self._tts_synthesizer = None
 
     def _init_ui(self) -> None:
         self.setWindowTitle("SkillAgent")
@@ -213,6 +244,9 @@ class SkillAgentMainWindow(QMainWindow):
         if active_tab is not None:
             active_tab.release_ui_cache()
         self.skill_agent.clear_runtime_cache()
+        if self._tts_synthesizer:
+            self._tts_synthesizer.release()
+            self._tts_synthesizer = None
         gc.collect()
         self._logger.info(f"后台模式内存优化完成，释放了 {released_count} 个会话标签页缓存")
 
@@ -605,6 +639,7 @@ class SkillAgentMainWindow(QMainWindow):
             self.worker_thread.request_stop()
         if self.stream_renderer.is_active():
             self.stream_renderer.complete()
+        self.stop_tts_reading()
         self.send_btn.setEnabled(False)
         self.send_btn.setText("")
 
@@ -612,6 +647,9 @@ class SkillAgentMainWindow(QMainWindow):
         text = (text or "").strip()
         if not text or (self.worker_thread and self.worker_thread.isRunning()):
             return
+        
+        self.stop_tts_reading()
+        
         tab = session_tab or self._active_session_tab()
         if tab is None:
             return
@@ -717,19 +755,65 @@ class SkillAgentMainWindow(QMainWindow):
             
             if result != SKILL_AGENT_AWAITING_USER_REPLY:
                 session_tab.clear_await_user_ui()
-                # 检查是否需要添加最终结果
+                final_text = ""
                 if result and result.strip():
-                    # 如果流式渲染没有内容或者内容只有"(完成)"这类提示，或者已经通过token_usage完成了渲染
                     has_stream_content = (stream_text.strip() and "(完成)" not in stream_text) or self.stream_renderer.has_completed_with_token_usage()
                     if not has_stream_content:
                         session_tab.add_message("assistant", result)
+                        final_text = result
+                    else:
+                        final_text = stream_text
+                
+                self._trigger_tts_read(final_text)
         self._sync_input_placeholder()
+
+    def _trigger_tts_read(self, text: str) -> None:
+        if not text or not text.strip():
+            return
+        
+        if self._tts_synthesizer is None or not self._tts_synthesizer.is_enabled:
+            return
+        
+        if not self._tts_config.auto_read:
+            return
+        
+        clean_text = self._clean_text_for_tts(text)
+        if clean_text:
+            self._tts_synthesizer.speak_immediately(clean_text)
+            self._logger.debug(f"TTS朗读触发: {clean_text[:50]}...")
+
+    def _clean_text_for_tts(self, text: str) -> str:
+        import re
+        text = re.sub(r'```[\s\S]*?```', '', text)
+        text = re.sub(r'`[^`]+`', '', text)
+        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+        text = re.sub(r'[*_~]+', '', text)
+        text = re.sub(r'#+\s*', '', text)
+        text = re.sub(r'\n+', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        if len(text) > 1000:
+            text = text[:1000] + "..."
+        return text
+
+    def stop_tts_reading(self) -> None:
+        if self._tts_synthesizer is not None:
+            self._tts_synthesizer.stop()
+            self._logger.info("TTS朗读已停止")
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         tab = self._active_session_tab()
         if tab:
             tab.message_list.update_all_cards_width()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            if self._tts_synthesizer is not None and self._tts_synthesizer.is_playing:
+                self.stop_tts_reading()
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -810,6 +894,9 @@ class SkillAgentMainWindow(QMainWindow):
         if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.terminate()
             self.worker_thread.wait(2000)
+        if self._tts_synthesizer is not None:
+            self._tts_synthesizer.release()
+            self._tts_synthesizer = None
         if hasattr(self, 'task_scheduler'):
             self.task_scheduler.stop()
         from PySide6.QtWidgets import QApplication

@@ -67,6 +67,7 @@ import scheduled_tasks
 from scheduled_tasks import NotificationType, RepeatType, ScheduledTask, TaskStatus
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 from ui.styles.style_manager import StyleManager
+from ui.components.tts_control import TTSControlWidget
 
 if TYPE_CHECKING:
     from skill_agent import SkillAgent
@@ -763,6 +764,17 @@ class SettingsDialog(QDialog):
         tasks_tab_layout.addWidget(task_behavior_group)
 
         tab_widget.addTab(self._tasks_tab, "定时任务管理")
+        
+        tts_tab = QWidget()
+        tts_tab_layout = QVBoxLayout(tts_tab)
+        tts_tab_layout.setContentsMargins(8, 8, 8, 8)
+        tts_tab_layout.setSpacing(8)
+        
+        self._tts_control = TTSControlWidget()
+        self._tts_control.config_changed.connect(self._on_tts_config_changed)
+        tts_tab_layout.addWidget(self._tts_control)
+        
+        tab_widget.addTab(tts_tab, "TTS设置")
 
         self._tab_widget = tab_widget
         layout.addWidget(tab_widget)
@@ -1330,3 +1342,9 @@ class SettingsDialog(QDialog):
         self._refresh_task_list()
         self._update_autostart_status()
         self._update_scheduled_task_show_window_status()
+        self._tts_control.reload_config()
+    
+    def _on_tts_config_changed(self) -> None:
+        logger.info("TTS配置已更新")
+        if self._on_config_changed:
+            self._on_config_changed()

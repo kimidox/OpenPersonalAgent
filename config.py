@@ -260,3 +260,47 @@ except (TypeError, ValueError):
     BACKGROUND_KEEP_MESSAGES_COUNT = 50
 if BACKGROUND_KEEP_MESSAGES_COUNT < 1:
     BACKGROUND_KEEP_MESSAGES_COUNT = 50
+
+# ===== TTS配置 =====
+
+# 是否启用TTS
+_ttse = get_config("TTS_ENABLED")
+TTS_ENABLED = _env_bool(_ttse, False)
+
+# 默认音色模型名称
+TTS_VOICE_MODEL = get_config("TTS_VOICE_MODEL")
+if TTS_VOICE_MODEL is None:
+    TTS_VOICE_MODEL = ""
+
+# 音色权重目录路径
+_ttsvd = get_config("TTS_VOICE_DIR")
+if _ttsvd is None or str(_ttsvd).strip() == "":
+    TTS_VOICE_DIR = str(paths.personal_data_dir / "voices")
+else:
+    TTS_VOICE_DIR = str(_ttsvd).strip()
+
+# 语速 (0.5-2.0)
+_ttss = get_config("TTS_SPEED")
+try:
+    TTS_SPEED = float(_ttss) if _ttss not in (None, "") else 1.0
+except (TypeError, ValueError):
+    TTS_SPEED = 1.0
+if TTS_SPEED < 0.5:
+    TTS_SPEED = 0.5
+if TTS_SPEED > 2.0:
+    TTS_SPEED = 2.0
+
+# 音量 (0.0-1.0)
+_ttsv = get_config("TTS_VOLUME")
+try:
+    TTS_VOLUME = float(_ttsv) if _ttsv not in (None, "") else 1.0
+except (TypeError, ValueError):
+    TTS_VOLUME = 1.0
+if TTS_VOLUME < 0.0:
+    TTS_VOLUME = 0.0
+if TTS_VOLUME > 1.0:
+    TTS_VOLUME = 1.0
+
+# 是否自动朗读AI回复
+_ttsar = get_config("TTS_AUTO_READ")
+TTS_AUTO_READ = _env_bool(_ttsar, True)
