@@ -415,7 +415,7 @@ class SkillAgentMainWindow(QMainWindow):
         return tab
 
     def _create_new_conversation(self) -> str:
-        cid, title = self.skill_agent.start_new_conversation()
+        cid, title = self.skill_agent.start_new_conversation(conversation_type='agent_conversation')
         self._add_conversation(cid, title, pending_db_history=False)
         from memory.conversation import Conversation
         conv = self._memory.get_conversation(cid)

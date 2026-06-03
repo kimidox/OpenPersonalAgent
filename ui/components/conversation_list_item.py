@@ -87,6 +87,7 @@ class ConversationListItem(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMinimumHeight(40)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(self._title)  # 设置悬停提示显示完整标题
 
         self._main_layout = QHBoxLayout(self)
         self._main_layout.setContentsMargins(8, 6, 8, 6)
@@ -118,6 +119,7 @@ class ConversationListItem(QWidget):
         """设置会话标题"""
         self._title = title
         self._title_label.setText(title)
+        self.setToolTip(title)  # 同步更新悬停提示
         
     def get_title(self) -> str:
         """获取会话标题"""

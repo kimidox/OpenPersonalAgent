@@ -174,11 +174,38 @@ class SkillAgent:
     def _disabled_skill_ids_frozen(self) -> frozenset[str]:
         return frozenset(load_disabled_skill_ids())
 
+    def _get_conversation_type(self) -> str:
+        """获取当前会话类型，如果没有会话则返回默认类型"""
+        if self.memory is None:
+            return 'agent_conversation'
+        conv = self.memory.get_conversation(self._conversation_id)
+        if conv:
+            return conv.type or 'agent_conversation'
+        return 'agent_conversation'
+
+    def _get_skills_for_conversation_type(self, conversation_type: str) -> list[Any]:
+        """根据会话类型获取可用的skill列表"""
+        from skill_agent_preferences import get_default_skills_for_type
+        disabled = self._disabled_skill_ids_frozen()
+        
+        # 获取该会话类型绑定的skill ID列表
+        bound_skill_ids = get_default_skills_for_type(conversation_type)
+        
+        # 从registry中获取对应的skill对象
+        skills = []
+        for skill_id in bound_skill_ids:
+            skill = self.registry.get(skill_id)
+            if skill:
+                skills.append(skill)
+        
+        return skills
+
     def _update_system_message(self, messages: list[dict]) -> None:
         """更新消息列表中的系统消息"""
         # 使用最近保存的用户查询来重新构建系统提示词
-        disabled = self._disabled_skill_ids_frozen()
-        skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
+        # 根据会话类型过滤skill目录
+        conv_type = self._get_conversation_type()
+        skills_visible = self._get_skills_for_conversation_type(conv_type)
         catalog = build_skills_catalog_text(skills_visible)
         
         # 获取当前的 active skills
@@ -321,7 +348,7 @@ class SkillAgent:
         self._conversation_id = str(uuid.uuid4())
         title = self.memory.ensure_conversation(
             self._conversation_id,
-            title=f"新会话-{self._conversation_id[:5]}",
+            title=f"{self._conversation_id[:5]}",
             conversation_type=conversation_type,
             default_skills=default_skills
         )
@@ -817,8 +844,9 @@ class SkillAgent:
             self._last_user_query = user_query
             
             model = get_chat_model(enable_thinking=self._enable_thinking)
-            disabled = self._disabled_skill_ids_frozen()
-            skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
+            # 根据会话类型过滤skill目录
+            conv_type = self._get_conversation_type()
+            skills_visible = self._get_skills_for_conversation_type(conv_type)
             catalog = build_skills_catalog_text(skills_visible)
             
             tool_catalog = model.build_tool_catalog()
