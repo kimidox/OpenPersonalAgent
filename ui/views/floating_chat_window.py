@@ -113,12 +113,42 @@ class FloatingChatWindow(QWidget):
         self._connect_signals()
 
     def _init_conversation(self):
-        """初始化对话，创建新的human_chat_conversation类型的会话"""
-        if self._conversation_id is None:
-            cid, title = self._skill_agent.start_new_conversation(conversation_type='human_chat_conversation')
-            self._conversation_id = cid
-            self._skill_agent.set_conversation_id(cid)
-            self._logger.info(f"浮动聊天窗口创建了新会话: {cid} (类型: human_chat_conversation)")
+        """初始化对话，不自动创建会话，等待用户手动创建或加载最近的会话"""
+        # 不再自动创建会话，改为在 showEvent 中加载最近的会话
+        pass
+
+    def _load_latest_conversation(self):
+        """加载最近的 human_chat_conversation 类型会话"""
+        conversations = self._memory.list_user_conversations()
+        # 过滤出 human_chat_conversation 类型的会话
+        human_chat_convs = [c for c in conversations if c.type == 'human_chat_conversation']
+        if human_chat_convs:
+            # 获取最近的会话（list_user_conversations 已按 created_at.desc() 排序）
+            latest_conv = human_chat_convs[0]
+            self._conversation_id = latest_conv.conversation_id
+            self._skill_agent.set_conversation_id(latest_conv.conversation_id)
+            self._logger.info(f"浮动聊天窗口加载了最近会话: {latest_conv.conversation_id} (类型: human_chat_conversation)")
+            return True
+        return False
+
+    def _create_new_conversation(self):
+        """创建新的 human_chat_conversation 类型会话"""
+        # 如果有正在进行的任务，不创建新会话
+        if self._worker_thread and self._worker_thread.isRunning():
+            self._logger.warning("有正在进行的任务，无法创建新会话")
+            return
+
+        cid, title = self._skill_agent.start_new_conversation(conversation_type='human_chat_conversation')
+        self._conversation_id = cid
+        self._skill_agent.set_conversation_id(cid)
+        self._logger.info(f"浮动聊天窗口创建了新会话: {cid} (类型: human_chat_conversation)")
+
+        # 清空消息列表
+        self.clear_messages()
+        # 清空等待用户UI
+        self.clear_await_user_ui()
+        # 重置输入框状态
+        self._ui_state.set_task_running(False)
 
     def _init_ui(self):
         """初始化UI"""
@@ -166,11 +196,11 @@ class FloatingChatWindow(QWidget):
         title_bar = QWidget()
         title_bar.setObjectName("floatingChatTitleBar")
         title_bar.setFixedHeight(32)
-        
+
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(10, 0, 10, 0)
         title_layout.setSpacing(8)
-        
+
         # 图标
         icon_path = paths.get_bundled_resource("application.ico")
         icon_btn = QPushButton()
@@ -182,25 +212,34 @@ class FloatingChatWindow(QWidget):
         else:
             icon_btn.setText("🤖")
         icon_btn.setCursor(Qt.CursorShape.ArrowCursor)
-        
+
         # 标题
         from PySide6.QtWidgets import QLabel
         title_label = QLabel("SkillAgent")
         title_label.setObjectName("floatingChatTitleLabel")
         title_label.setFont(QFont("Microsoft YaHei", 9))
-        
+
+        # 新建会话按钮
+        new_conv_btn = QPushButton("+")
+        new_conv_btn.setFixedSize(24, 24)
+        new_conv_btn.setObjectName("floatingChatNewConvButton")
+        new_conv_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        new_conv_btn.setToolTip("新建会话")
+        new_conv_btn.clicked.connect(self._on_new_conversation_clicked)
+
         # 关闭按钮
         close_btn = QPushButton("×")
         close_btn.setFixedSize(24, 24)
         close_btn.setObjectName("floatingChatCloseButton")
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self._on_close_clicked)
-        
+
         title_layout.addWidget(icon_btn)
         title_layout.addWidget(title_label)
         title_layout.addStretch()
+        title_layout.addWidget(new_conv_btn)
         title_layout.addWidget(close_btn)
-        
+
         return title_bar
 
     def _create_input_area(self) -> QWidget:
@@ -247,6 +286,17 @@ class FloatingChatWindow(QWidget):
                 }
                 #floatingChatTitleLabel {
                     color: #333;
+                }
+                #floatingChatNewConvButton {
+                    border: none;
+                    background-color: transparent;
+                    color: #666;
+                    font-size: 16px;
+                    border-radius: 4px;
+                }
+                #floatingChatNewConvButton:hover {
+                    background-color: rgba(100, 200, 100, 0.3);
+                    color: #44aa44;
                 }
                 #floatingChatCloseButton {
                     border: none;
@@ -388,16 +438,20 @@ class FloatingChatWindow(QWidget):
         text = (text or "").strip()
         if not text or (self._worker_thread and self._worker_thread.isRunning()):
             return
-            
+
+        # 确保会话已初始化
         if self._conversation_id is None:
-            self._init_conversation()
-            
+            # 先尝试加载最近的会话
+            if not self._load_latest_conversation():
+                # 如果没有最近会话，创建新会话
+                self._create_new_conversation()
+
         self.add_message("user", text)
         self.clear_await_user_ui()
         self.input_edit.clear()
         self._ui_state.set_task_running(True)
         enable_thinking = self._ui_state.get_enable_thinking()
-        
+
         self._worker_thread = SkillAgentWorkerThread(
             self._skill_agent, text, conversation_id=self._conversation_id,
             session_tab=self, enable_thinking=enable_thinking
@@ -587,8 +641,15 @@ class FloatingChatWindow(QWidget):
     def showEvent(self, event):
         """窗口显示事件 - 加载历史消息"""
         super().showEvent(event)
+        # 加载最近的 human_chat_conversation 类型会话
+        if self._conversation_id is None:
+            self._load_latest_conversation()
         self._load_conversation_history()
         QTimer.singleShot(100, lambda: (self.message_list.update_all_cards_width(), self.scroll_to_bottom()))
+
+    def _on_new_conversation_clicked(self):
+        """新建会话按钮点击"""
+        self._create_new_conversation()
 
     def mousePressEvent(self, event):
         """鼠标按下事件 - 开始拖动或调整大小"""
