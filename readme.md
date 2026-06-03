@@ -22,6 +22,10 @@ OpenPersonalAgent is an **intelligent agent system (SkillAgent) based on LLM too
 - 🎨 **Background Mode**: Run in background with system tray icon
 - 🛠️ **Tool Catalog Progressive Disclosure**: On-demand tool definition loading for token efficiency
 - 💾 **Memory Optimization**: Smart memory management with configurable retention
+- 🎙️ **Voice Recording & Transcription**: Record audio with sounddevice, transcribe using local Whisper model (faster-whisper)
+- 🎭 **Floating Ball**: Desktop floating widget for quick chat access, recording, and background operation
+- 🔊 **Text-to-Speech (TTS)**: Local text-to-speech synthesis with Piper engine
+- 📋 **Built-in Skills Directory**: System-provided Skills in the Skills/ folder (user Skills in PersonalData/Skills)
 
 ---
 
@@ -154,15 +158,37 @@ The project supports multiple LLM backends:
 
 ### 16. Windows Auto-Start
 
-- ✅ **Registry-based**: Windows registry-based auto-start
+- ✅ **Registry-based**: Windows registry auto-start
 - ✅ **Enable/Disable**: Toggle auto-start in settings
-- ✅ **Command-line Support**: Auto-start with --background flag
+- ✅ **Command-line Support**: Auto-start with --background parameter
+
+### 17. Voice Recording & Transcription
+
+- ✅ **Audio Recording**: Sound device with sounddevice
+- ✅ **Local Transcription**: faster-whisper model integration
+- ✅ **Model Management**: Download/switch Whisper models (tiny/base/small/medium/large)
+- ✅ **Recording Management**: Save recordings to PersonalData/records/
+- ✅ **Transcription Options**: Configurable language, model size, device, compute type
+
+### 18. Floating Ball Widget
+
+- ✅ **Draggable Widget**: Floating on desktop
+- ✅ **Floating Chat Window: Expandable mini-chat interface
+- ✅ **Quick Recording**: One-click recording from floating ball
+- ✅ **Context Menu**: Access main window, recording controls
+
+### 19. Text-to-Speech (TTS)
+
+- ✅ **Local Synthesis**: Piper TTS engine
+- ✅ **Voice Management**: Multiple voice options
+- ✅ **Audio Playback**: Integrated audio player
+- ✅ **Synthesis Options**: Configurable speech rate, pitch, volume
 
 ---
 
 ## 📁 Built-in Skill Examples
 
-The project provides 9 ready-to-use Skill examples demonstrating different scenarios:
+The project provides 11 ready-to-use Skill examples demonstrating different scenarios:
 
 ### 1️⃣ Novel Generation (`id: 1`)
 - **Function**: Automatically generate novel content based on chapter outlines
@@ -208,6 +234,16 @@ The project provides 9 ready-to-use Skill examples demonstrating different scena
 - **Features**: Structured content (title, intro, body sections, conclusion), word count control (1500-2000 words)
 - **Output**: Markdown formatted articles ready for WeChat platform
 
+### 🔟 Meeting Minutes Generation (`id: meeting_minutes_generator`)
+- **Function**: Convert transcribed audio/text into structured meeting minutes
+- **Features**: Meeting overview, topic discussions, decisions, action items with assignees and deadlines
+- **Output**: Well-formatted Markdown meeting minutes
+
+### 1️⃣1️⃣ Scheduled Task Guide (`id: scheduled_task_guide`)
+- **Function**: Guide users in creating scheduled tasks with proper execution types and chains
+- **Features**: Execution type determination (notification vs agent conversation), execution chain generation, goal extraction
+- **Scenarios**: Creating recurring reminders, automated tasks, scheduled agent conversations
+
 ---
 
 ## 🏗️ Technical Architecture
@@ -226,7 +262,8 @@ PersonalWindowGLM/
 ├── scheduled_tasks.py          # Scheduled task data model and management
 ├── scheduler.py                # Task scheduler engine
 ├── notification.py             # Notification system (system tray, toast)
-├── autostart.py              # Windows auto-start management
+├── autostart.py                # Windows auto-start management
+├── recorder.py                 # Voice recording & transcription module
 ├── PersonalWindowGLM.spec      # PyInstaller spec
 ├── PersonalWindowGLM_onefile.spec  # Single-file spec
 ├── build.bat                   # Build script
@@ -273,6 +310,14 @@ PersonalWindowGLM/
 │       ├── markdown_parser.py  # Markdown parser
 │       ├── text_parser.py      # Plain text parser
 │       └── json_parser.py      # JSON parser
+├── tts/                        # Text-to-Speech module
+│   ├── __init__.py             # Module exports
+│   ├── tts_engine.py           # TTS engine interface
+│   ├── piper_engine.py         # Piper TTS engine implementation
+│   ├── synthesizer.py          # Speech synthesizer
+│   ├── audio_player.py         # Audio player
+│   ├── voice_manager.py        # Voice manager
+│   └── tts_config.py           # TTS configuration
 ├── ui/                         # Modular frontend
 │   ├── components/             # Reusable UI components
 │   │   ├── chat_bubble.py      # Chat bubble component
@@ -284,9 +329,12 @@ PersonalWindowGLM/
 │   │   ├── file_preview_card.py# File preview component
 │   │   ├── conversation_sidebar.py # Conversation sidebar
 │   │   ├── conversation_list_item.py # Conversation list item
-│   │   └── tab_bar.py          # Tab bar component
+│   │   ├── tab_bar.py          # Tab bar component
+│   │   └── tts_control.py      # TTS control component
 │   ├── views/                  # Page views
 │   │   ├── main_window.py      # Main window
+│   │   ├── floating_ball.py    # Floating ball widget
+│   │   ├── floating_chat_window.py # Floating chat window
 │   │   └── worker_thread.py    # Worker thread
 │   ├── state/                  # State management
 │   │   ├── session_state.py    # Session state
@@ -294,7 +342,8 @@ PersonalWindowGLM/
 │   │   └── ui_state.py         # UI state
 │   ├── styles/                 # Style management
 │   │   ├── color_scheme.py     # Color scheme
-│   │   └── style_manager.py    # Style manager
+│   │   ├── style_manager.py    # Style manager
+│   │   └── ui_skill_agent_styles.css # UI stylesheet
 │   └── utils/                  # UI utilities
 │       ├── html_utils.py       # HTML utilities
 │       ├── markdown_utils.py   # Markdown utilities
@@ -304,11 +353,11 @@ PersonalWindowGLM/
 │       ├── stream_renderer.py  # Stream rendering
 │       ├── file_upload_manager.py # File upload manager
 │       └── file_upload_controller.py # File upload controller
-├── database/                   # Database layer (SQLAlchemy)
-│   ├── __init__.py             # DB setup
-│   └── models.py               # SQLAlchemy models (Conversations, Messages, User, ScheduledTask)
+├── Skills/                     # Built-in Skills directory (version controlled)
+│   ├── meeting_minutes_generator/ # Meeting minutes generation Skill
+│   └── scheduled_task_guide/   # Scheduled task creation guide Skill
 └── PersonalData/               # User data directory (gitignored)
-    ├── Skills/                 # Skill document directory
+    ├── Skills/                 # User Skill document directory
     │   ├── DuckDuckGoSearch/
     │   ├── baiduSearch/
     │   ├── 基金查询/
@@ -318,6 +367,9 @@ PersonalWindowGLM/
     │   ├── 聊天语气/
     │   ├── 图片匹配测试/
     │   └── 微信公众号文章生成/
+    ├── models/                 # Local model files (Whisper, TTS)
+    │   └── base/               # Whisper base model example
+    ├── records/                # Recording files directory
     ├── data/                   # Database files (app.db)
     ├── logs/                   # Log files (app_YYYYMMDD.log)
     ├── venv/                   # Auto-created virtual environment
@@ -542,6 +594,23 @@ USE_TOOL_CATALOG=true               # Enable tool catalog (progressive disclosur
 MEMORY_OPTIMIZATION_ENABLED=true    # Enable memory optimization
 MEMORY_OPTIMIZATION_DELAY_SECONDS=30 # Delay before activating optimization (seconds)
 BACKGROUND_KEEP_MESSAGES_COUNT=50   # Number of messages to keep in background mode
+
+# ===== Recording Configuration =====
+RECORDING_SAMPLE_RATE=16000         # Recording sample rate (Hz)
+RECORDING_CHANNELS=1                # Recording channels (1=mono, 2=stereo)
+RECORDING_DTYPE=int16               # Recording data type
+RECORDING_TRANSCRIPTION_LANGUAGE=zh # Transcription language code
+WHISPER_MODEL_SIZE=base             # Whisper model size (tiny, base, small, medium, large)
+WHISPER_DEVICE=cpu                  # Whisper device (cpu, cuda)
+WHISPER_COMPUTE_TYPE=int8           # Whisper compute type (int8, float16, float32)
+
+# ===== TTS Configuration =====
+TTS_ENABLED=true                    # Enable text-to-speech
+TTS_ENGINE=piper                    # TTS engine to use
+TTS_VOICE=default                   # Default TTS voice
+TTS_SPEED=1.0                       # TTS speech speed multiplier
+TTS_PITCH=1.0                       # TTS pitch multiplier
+TTS_VOLUME=1.0                      # TTS volume multiplier
 ```
 
 ---
@@ -568,6 +637,9 @@ Main dependencies:
 - pygetwindow >= 0.0.9 (Window management)
 - pandas ~= 3.0.1 (Data processing)
 - jieba >= 0.42.1 (Chinese text segmentation)
+- sounddevice >= 0.4.6 (Audio recording)
+- numpy >= 1.20.0 (Audio processing)
+- faster-whisper >= 1.0.0 (Voice transcription)
 
 ### Run the Application
 ```bash
@@ -759,7 +831,23 @@ Issues and Pull Requests are welcome!
 
 ## Changelog
 
-### v2.2.0 (Current Version)
+### v3.0.0 (Current Version)
+- ✨ Added voice recording and transcription module (recorder.py) with Whisper integration
+- ✨ Added floating ball widget for quick access and recording
+- ✨ Added floating chat window for compact conversations
+- ✨ Added text-to-speech (TTS) module with Piper engine
+- ✨ Added two new built-in Skills: Meeting Minutes Generator and Scheduled Task Guide
+- ✨ Added Skills/ directory for built-in Skills (version controlled)
+- ✨ Added PersonalData/records/ directory for audio recordings
+- ✨ Added PersonalData/models/ directory for local model files
+- ✨ Added Whisper model download and management functionality
+- ✨ Added TTS control UI component
+- ✨ Enhanced recorder with faster-whisper support
+- ✨ Added new configuration options for recording and TTS
+- ✨ Added sounddevice, numpy, faster-whisper dependencies
+- 🐛 Fixed multiple UI and stability issues
+
+### v2.2.0
 - ✨ Added WeChat Official Account Article Generation Skill (id: 100)
 - ✨ Added token usage tracking with UI display
 - ✨ Added memory compaction mechanism with configurable threshold

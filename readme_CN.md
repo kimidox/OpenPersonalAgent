@@ -22,6 +22,10 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 - 🎨 **后台模式**：在后台运行，仅显示系统托盘图标
 - 🛠️ **工具目录渐进式披露**：按需加载工具定义以节省token
 - 💾 **内存优化**：智能内存管理，支持可配置的消息保留
+- 🎙️ **语音录制与转写**：使用 sounddevice 录制音频，通过本地 Whisper 模型（faster-whisper）转写
+- 🎭 **悬浮球**：桌面悬浮组件，用于快速访问、录制和后台操作
+- 🔊 **文本转语音（TTS）**：使用 Piper 引擎的本地文本转语音合成
+- 📋 **内置技能目录**：Skills/ 目录提供系统内置技能（受版本控制），用户技能在 PersonalData/Skills/
 
 ---
 
@@ -158,11 +162,33 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 - ✅ **启用/禁用**：在设置中切换自启动
 - ✅ **命令行支持**：自启动时使用 --background 参数
 
+### 17. 语音录制与转写
+
+- ✅ **音频录制**：使用 sounddevice 录制音频
+- ✅ **本地转写**：集成 faster-whisper 模型
+- ✅ **模型管理**：下载/切换 Whisper 模型（tiny/base/small/medium/large）
+- ✅ **录制管理**：保存录音到 PersonalData/records/
+- ✅ **转写配置**：可配置语言、模型大小、设备、计算类型
+
+### 18. 悬浮球组件
+
+- ✅ **可拖动组件**：在桌面悬浮显示
+- ✅ **悬浮聊天窗口**：可展开的迷你聊天界面
+- ✅ **快速录制**：从悬浮球一键开始录制
+- ✅ **上下文菜单**：访问主窗口、录制控制
+
+### 19. 文本转语音（TTS）
+
+- ✅ **本地合成**：Piper TTS 引擎
+- ✅ **语音管理**：多种语音选项
+- ✅ **音频播放**：集成音频播放器
+- ✅ **合成配置**：可配置语速、音调、音量
+
 ---
 
 ## 📁 内置Skill示例
 
-项目提供9个开箱即用的Skill示例，展示不同场景的应用：
+项目提供11个开箱即用的Skill示例，展示不同场景的应用：
 
 ### 1️⃣ 小说生成 (`id: 1`)
 - **功能**：根据章节大纲自动生成小说内容
@@ -208,6 +234,16 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 - **特性**：结构化内容（标题、引言、正文章节、结论）、字数控制（1500-2000字）
 - **输出**：Markdown格式的文章，可直接发布到微信平台
 
+### 🔟 会议纪要生成 (`id: meeting_minutes_generator`)
+- **功能**：将转写的音频/文本转换为结构清晰的会议纪要
+- **特性**：会议概况、议题讨论、决策事项、带负责人和截止时间的行动项
+- **输出**：格式良好的 Markdown 会议纪要
+
+### 1️⃣1️⃣ 定时任务创建指南 (`id: scheduled_task_guide`)
+- **功能**：指导用户创建定时任务，包含正确的执行类型和链路
+- **特性**：执行类型判断（通知 vs 智能体对话）、执行链路生成、目标提取
+- **场景**：创建重复提醒、自动化任务、定时智能体对话
+
 ---
 
 ## 🏗️ 技术架构
@@ -227,6 +263,7 @@ PersonalWindowGLM/
 ├── scheduler.py                # 任务调度引擎
 ├── notification.py             # 通知系统（系统托盘、浮动提示）
 ├── autostart.py                # Windows自启动管理
+├── recorder.py                 # 语音录制与转写模块
 ├── PersonalWindowGLM.spec      # PyInstaller spec
 ├── PersonalWindowGLM_onefile.spec  # 单文件spec
 ├── build.bat                   # 构建脚本
@@ -273,6 +310,14 @@ PersonalWindowGLM/
 │       ├── markdown_parser.py  # Markdown 解析器
 │       ├── text_parser.py      # 纯文本解析器
 │       └── json_parser.py      # JSON 解析器
+├── tts/                        # 文本转语音模块
+│   ├── __init__.py             # 模块导出
+│   ├── tts_engine.py           # TTS引擎接口
+│   ├── piper_engine.py         # Piper TTS引擎实现
+│   ├── synthesizer.py          # 语音合成器
+│   ├── audio_player.py         # 音频播放器
+│   ├── voice_manager.py        # 语音管理器
+│   └── tts_config.py           # TTS配置
 ├── ui/                         # 模块化前端
 │   ├── components/             # 可复用UI组件
 │   │   ├── chat_bubble.py      # 聊天气泡组件
@@ -284,9 +329,12 @@ PersonalWindowGLM/
 │   │   ├── file_preview_card.py# 文件预览组件
 │   │   ├── conversation_sidebar.py # 会话侧边栏
 │   │   ├── conversation_list_item.py # 会话列表项
-│   │   └── tab_bar.py          # 标签栏组件
+│   │   ├── tab_bar.py          # 标签栏组件
+│   │   └── tts_control.py      # TTS控制组件
 │   ├── views/                  # 页面视图
 │   │   ├── main_window.py      # 主窗口
+│   │   ├── floating_ball.py    # 悬浮球组件
+│   │   ├── floating_chat_window.py # 悬浮聊天窗口
 │   │   └── worker_thread.py    # 工作线程
 │   ├── state/                  # 状态管理
 │   │   ├── session_state.py    # 会话状态
@@ -294,7 +342,8 @@ PersonalWindowGLM/
 │   │   └── ui_state.py         # UI状态
 │   ├── styles/                 # 样式管理
 │   │   ├── color_scheme.py     # 配色方案
-│   │   └── style_manager.py    # 样式管理器
+│   │   ├── style_manager.py    # 样式管理器
+│   │   └── ui_skill_agent_styles.css # UI样式表
 │   └── utils/                  # UI工具函数
 │       ├── html_utils.py       # HTML工具
 │       ├── markdown_utils.py   # Markdown工具
@@ -304,11 +353,11 @@ PersonalWindowGLM/
 │       ├── stream_renderer.py  # 流式渲染
 │       ├── file_upload_manager.py # 文件上传管理器
 │       └── file_upload_controller.py # 文件上传控制器
-├── database/                   # 数据库层（SQLAlchemy）
-│   ├── __init__.py             # DB设置
-│   └── models.py               # SQLAlchemy模型（Conversations, Messages, User, ScheduledTask）
+├── Skills/                     # 内置技能目录（受版本控制）
+│   ├── meeting_minutes_generator/ # 会议纪要生成技能
+│   └── scheduled_task_guide/   # 定时任务创建指南技能
 └── PersonalData/               # 用户数据目录（gitignore）
-    ├── Skills/                 # Skill文档目录
+    ├── Skills/                 # 用户Skill文档目录
     │   ├── DuckDuckGoSearch/
     │   ├── baiduSearch/
     │   ├── 基金查询/
@@ -318,6 +367,9 @@ PersonalWindowGLM/
     │   ├── 聊天语气/
     │   ├── 图片匹配测试/
     │   └── 微信公众号文章生成/
+    ├── models/                 # 本地模型文件（Whisper、TTS）
+    │   └── base/               # Whisper base模型示例
+    ├── records/                # 录音文件目录
     ├── data/                   # 数据库文件（app.db）
     ├── logs/                   # 日志文件（app_YYYYMMDD.log）
     ├── venv/                   # 自动创建的虚拟环境
@@ -542,6 +594,23 @@ USE_TOOL_CATALOG=true               # 启用工具目录（渐进式披露）
 MEMORY_OPTIMIZATION_ENABLED=true    # 启用内存优化
 MEMORY_OPTIMIZATION_DELAY_SECONDS=30 # 激活优化前的延迟（秒）
 BACKGROUND_KEEP_MESSAGES_COUNT=50   # 后台模式下保留的消息数量
+
+# ===== 录音配置 =====
+RECORDING_SAMPLE_RATE=16000         # 录制采样率（Hz）
+RECORDING_CHANNELS=1                # 录制通道数（1=单声道，2=立体声）
+RECORDING_DTYPE=int16               # 录制数据类型
+RECORDING_TRANSCRIPTION_LANGUAGE=zh # 转写语言代码
+WHISPER_MODEL_SIZE=base             # Whisper 模型大小（tiny/base/small/medium/large）
+WHISPER_DEVICE=cpu                  # Whisper 设备（cpu，cuda）
+WHISPER_COMPUTE_TYPE=int8           # Whisper 计算类型（int8，float16，float32）
+
+# ===== TTS配置 =====
+TTS_ENABLED=true                    # 启用文本转语音
+TTS_ENGINE=piper                    # 使用的TTS引擎
+TTS_VOICE=default                   # 默认TTS语音
+TTS_SPEED=1.0                       # TTS语速倍率
+TTS_PITCH=1.0                       # TTS音调倍率
+TTS_VOLUME=1.0                      # TTS音量倍率
 ```
 
 ---
@@ -568,6 +637,9 @@ pip install -r requirements.txt
 - pygetwindow >= 0.0.9（窗口管理）
 - pandas ~= 3.0.1（数据处理）
 - jieba >= 0.42.1（中文分词）
+- sounddevice >= 0.4.6（音频录制）
+- numpy >= 1.20.0（音频处理）
+- faster-whisper >= 1.0.0（语音转写）
 
 ### 运行程序
 ```bash
@@ -759,7 +831,23 @@ MIT License
 
 ## 更新日志
 
-### v2.2.0 (当前版本)
+### v3.0.0 (当前版本)
+- ✨ 新增语音录制与转写模块（recorder.py），集成Whisper
+- ✨ 新增悬浮球组件，用于快速访问和录制
+- ✨ 新增悬浮聊天窗口，提供紧凑型会话
+- ✨ 新增文本转语音（TTS）模块，集成Piper引擎
+- ✨ 新增两个内置技能：会议纪要生成和定时任务创建指南
+- ✨ 新增Skills/目录用于内置技能（受版本控制）
+- ✨ 新增PersonalData/records/目录用于音频录制
+- ✨ 新增PersonalData/models/目录用于本地模型文件
+- ✨ 新增Whisper模型下载与管理功能
+- ✨ 新增TTS控制UI组件
+- ✨ 增强录制功能，支持faster-whisper
+- ✨ 新增录制和TTS的新配置选项
+- ✨ 新增sounddevice、numpy、faster-whisper依赖
+- 🐛 修复多个UI和稳定性问题
+
+### v2.2.0
 - ✨ 新增微信公众号文章生成Skill（id: 100）
 - ✨ 新增Token使用量追踪及UI显示
 - ✨ 新增记忆压缩机制，支持可配置阈值
