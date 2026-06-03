@@ -174,6 +174,9 @@ class MessageListWidget(QScrollArea):
         if skill_agent is None or not conversation_id:
             return
         
+        # 先清空现有消息列表，避免重复添加
+        self.clear_all()
+        
         records = skill_agent.message_records_for_conversation(conversation_id)
         if not records:
             return
