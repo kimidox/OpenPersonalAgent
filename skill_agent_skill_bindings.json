@@ -5,6 +5,9 @@
     ],
     "meeting_minutes_generator": [
       "record_conversation"
+    ],
+    "100": [
+      "agent_conversation"
     ]
   }
 }

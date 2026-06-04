@@ -77,6 +77,9 @@ from recorder import (
     download_whisper_model,
     set_active_model,
     get_models_dir,
+    is_model_loaded,
+    get_loaded_model_size,
+    load_whisper_model,
 )
 
 if TYPE_CHECKING:
@@ -917,10 +920,24 @@ class SettingsDialog(QDialog):
         self._whisper_model_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
         model_select_layout.addWidget(self._whisper_model_status)
         
+        # 添加加载模型进度条
+        self._load_progress = QProgressBar()
+        self._load_progress.setVisible(False)
+        model_select_layout.addWidget(self._load_progress)
+        
+        self._load_status_label = QLabel()
+        self._load_status_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        model_select_layout.addWidget(self._load_status_label)
+        
         switch_btn_row = QHBoxLayout()
         self._switch_whisper_btn = QPushButton("切换到此模型")
         self._switch_whisper_btn.clicked.connect(self._on_switch_whisper_model)
         switch_btn_row.addWidget(self._switch_whisper_btn)
+        
+        self._load_whisper_btn = QPushButton("加载模型")
+        self._load_whisper_btn.clicked.connect(self._on_load_whisper_model)
+        switch_btn_row.addWidget(self._load_whisper_btn)
+        
         switch_btn_row.addStretch()
         model_select_layout.addLayout(switch_btn_row)
         
@@ -1567,6 +1584,7 @@ class SettingsDialog(QDialog):
         """刷新 Whisper 模型状态"""
         downloaded = get_downloaded_models()
         current_model = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
+        loaded_model = get_loaded_model_size()
         
         self._download_whisper_combo.clear()
         for model_size in get_available_model_sizes():
@@ -1584,13 +1602,19 @@ class SettingsDialog(QDialog):
             self._downloaded_models_list.setText("暂无已下载的模型")
         
         is_current_downloaded = is_model_downloaded(current_model)
+        is_model_loaded_now = is_model_loaded()
         if is_current_downloaded:
             info = get_model_info(current_model)
-            self._whisper_model_status.setText(f"状态：当前使用 {info['name']} 模型（已下载）")
+            if is_model_loaded_now and loaded_model == current_model:
+                self._whisper_model_status.setText(f"状态：当前使用 {info['name']} 模型（已下载并已加载）")
+            else:
+                self._whisper_model_status.setText(f"状态：当前使用 {info['name']} 模型（已下载，未加载）")
             self._switch_whisper_btn.setEnabled(True)
+            self._load_whisper_btn.setEnabled(True)
         else:
             self._whisper_model_status.setText(f"状态：当前模型 {current_model} 未下载，请先下载")
             self._switch_whisper_btn.setEnabled(False)
+            self._load_whisper_btn.setEnabled(False)
     
     def _on_switch_whisper_model(self) -> None:
         """切换 Whisper 模型"""
@@ -1661,3 +1685,50 @@ class SettingsDialog(QDialog):
         self._download_whisper_btn.setEnabled(True)
         self._download_progress.setVisible(False)
         self._refresh_whisper_models()
+    
+    def _on_load_whisper_model(self) -> None:
+        """加载 Whisper 模型"""
+        model_size = self._whisper_model_combo.currentData()
+        if not model_size:
+            return
+        
+        if not is_model_downloaded(model_size):
+            QMessageBox.warning(self, "警告", f"模型 {model_size} 未下载，请先下载")
+            return
+        
+        info = get_model_info(model_size)
+        
+        self._load_whisper_btn.setEnabled(False)
+        self._switch_whisper_btn.setEnabled(False)
+        self._load_progress.setVisible(True)
+        self._load_progress.setValue(0)
+        self._load_status_label.setText(f"正在加载 {info['name']} 模型...")
+        
+        # 直接在主线程中加载模型，避免子线程导致的崩溃问题
+        try:
+            def load_callback(progress: int, status: str):
+                self._load_progress.setValue(progress)
+                self._load_status_label.setText(status)
+            
+            success = load_whisper_model(model_size, callback=load_callback)
+            
+            self._load_whisper_btn.setEnabled(True)
+            self._switch_whisper_btn.setEnabled(True)
+            self._load_progress.setVisible(False)
+            
+            if success:
+                self._load_status_label.setText(f"{info['name']} 模型加载完成")
+                QMessageBox.information(self, "提示", f"{info['name']} 模型加载成功")
+            else:
+                self._load_status_label.setText("加载失败")
+                QMessageBox.warning(self, "警告", f"{info['name']} 模型加载失败")
+            
+            self._refresh_whisper_models()
+        except Exception as e:
+            logger.exception(f"加载模型时发生异常: {e}")
+            self._load_whisper_btn.setEnabled(True)
+            self._switch_whisper_btn.setEnabled(True)
+            self._load_progress.setVisible(False)
+            self._load_status_label.setText(f"加载失败: {str(e)}")
+            QMessageBox.warning(self, "警告", f"加载模型时发生错误: {str(e)}")
+            self._refresh_whisper_models()

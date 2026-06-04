@@ -203,81 +203,128 @@ def set_active_model(model_size: str) -> bool:
         return False
 
 
-def _get_whisper_model():
-    """获取或初始化 Whisper 模型（懒加载）"""
+def is_model_loaded() -> bool:
+    """
+    检查模型是否已加载
+    
+    Returns:
+        是否已加载
+    """
+    global _whisper_model
+    return _whisper_model is not None
+
+
+def get_loaded_model_size() -> Optional[str]:
+    """
+    获取已加载模型的大小
+    
+    Returns:
+        模型大小，如果未加载则返回 None
+    """
+    global _current_model_size
+    return _current_model_size
+
+
+def load_whisper_model(model_size: str = None, callback: Callable[[int, str], None] = None) -> bool:
+    """
+    显式加载 Whisper 模型
+    
+    Args:
+        model_size: 模型大小，默认使用配置中的值
+        callback: 进度回调函数 (progress: int, status: str)
+    
+    Returns:
+        是否加载成功
+    """
     global _whisper_model, _current_model_size, _original_hf_endpoint
-    if _whisper_model is None:
-        # 尝试导入 faster_whisper，添加详细日志
+    
+    if model_size is None:
+        model_size = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
+    
+    if not is_model_downloaded(model_size):
+        if callback:
+            callback(0, "错误: 模型未下载")
+        logger.error(f"模型 {model_size} 未下载")
+        return False
+    
+    if callback:
+        callback(10, "正在初始化模型...")
+    
+    try:
+        # 尝试导入 faster_whisper（在主线程中进行）
         logger.info("开始导入 faster_whisper 模块...")
+        import faster_whisper
+        from faster_whisper import WhisperModel
+        import os
+        
+        if callback:
+            callback(30, "正在加载模型文件...")
+        
+        # 设置 Hugging Face 镜像站
+        _original_hf_endpoint = os.environ.get('HF_ENDPOINT')
+        os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+        
+        device = getattr(config, 'WHISPER_DEVICE', 'cpu')
+        compute_type = getattr(config, 'WHISPER_COMPUTE_TYPE', 'int8')
+        models_dir = get_models_dir()
+        
+        logger.info(f"加载 Whisper 模型: {model_size}, device={device}, compute_type={compute_type}")
+        
+        if callback:
+            callback(60, "正在加载模型到内存...")
+        
+        # 使用已下载的模型路径
+        model_path = models_dir / model_size
+        if model_path.exists() and model_path.is_dir():
+            logger.info(f"使用本地已下载的模型: {model_path}")
+            _whisper_model = WhisperModel(
+                str(model_path),
+                device=device,
+                compute_type=compute_type,
+                cpu_threads=4
+            )
+        else:
+            _whisper_model = WhisperModel(
+                model_size,
+                device=device,
+                compute_type=compute_type,
+                download_root=str(models_dir),
+                cpu_threads=4
+            )
+        
+        _current_model_size = model_size
+        
+        if callback:
+            callback(100, "模型加载完成")
+        
+        logger.info(f"Whisper 模型 {model_size} 加载完成")
+        return True
+        
+    except ImportError as ie:
+        logger.error(f"faster-whisper 库导入失败: {ie}")
+        if callback:
+            callback(0, "错误: faster-whisper 未安装")
+        return False
+    except Exception as e:
+        logger.exception(f"加载 Whisper 模型失败: {e}")
+        if callback:
+            callback(0, f"加载失败: {e}")
+        # 恢复原始的 HF_ENDPOINT
         try:
-            import faster_whisper
-            logger.info(f"faster_whisper 模块路径: {faster_whisper.__file__}")
-            logger.info(f"faster_whisper 版本: {getattr(faster_whisper, '__version__', '未知')}")
-            from faster_whisper import WhisperModel
-            import os
-            
-            # 设置 Hugging Face 镜像站，保存原始值到全局变量
-            _original_hf_endpoint = os.environ.get('HF_ENDPOINT')
-            os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-            
-            model_size = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
-            device = getattr(config, 'WHISPER_DEVICE', 'cpu')
-            compute_type = getattr(config, 'WHISPER_COMPUTE_TYPE', 'int8')
-            models_dir = get_models_dir()
-            
-            logger.info(f"加载 Whisper 模型: {model_size}, device={device}, compute_type={compute_type}")
-            logger.info(f"使用镜像站: {os.environ['HF_ENDPOINT']}")
-            
-            # 首先检查模型是否已下载到指定目录
-            model_path = models_dir / model_size
-            if model_path.exists() and model_path.is_dir():
-                # 使用已下载的模型路径
-                logger.info(f"使用本地已下载的模型: {model_path}")
-                _whisper_model = WhisperModel(
-                    str(model_path),
-                    device=device,
-                    compute_type=compute_type
-                )
-            else:
-                # 使用默认缓存机制下载
-                logger.info(f"使用模型大小名称加载: {model_size}")
-                _whisper_model = WhisperModel(
-                    model_size,
-                    device=device,
-                    compute_type=compute_type,
-                    download_root=str(models_dir)
-                )
-            
-            _current_model_size = model_size
-            logger.info("Whisper 模型加载完成")
-        except ImportError as ie:
-            logger.error(f"faster-whisper 库导入失败: {ie}")
-            logger.error(f"导入错误详情: {type(ie).__name__}")
-            # 尝试获取更多信息
-            import sys
-            logger.error(f"Python 路径: {sys.path}")
-            try:
-                import importlib.util
-                spec = importlib.util.find_spec('faster_whisper')
-                logger.error(f"faster_whisper spec: {spec}")
-            except Exception as e:
-                logger.error(f"查找 faster_whisper spec 失败: {e}")
-            # 恢复原始的 HF_ENDPOINT 环境变量
-            import os
             if _original_hf_endpoint is not None:
                 os.environ['HF_ENDPOINT'] = _original_hf_endpoint
             elif 'HF_ENDPOINT' in os.environ:
                 del os.environ['HF_ENDPOINT']
-            return None
-        except Exception as e:
-            logger.exception(f"加载 Whisper 模型失败: {e}")
-            # 恢复原始的 HF_ENDPOINT 环境变量
-            import os
-            if _original_hf_endpoint is not None:
-                os.environ['HF_ENDPOINT'] = _original_hf_endpoint
-            elif 'HF_ENDPOINT' in os.environ:
-                del os.environ['HF_ENDPOINT']
-            return None
+        except:
+            pass
+        return False
+
+
+def _get_whisper_model():
+    """获取已加载的 Whisper 模型（不再自动加载）"""
+    global _whisper_model
+    if _whisper_model is None:
+        logger.warning("模型未加载，请先调用 load_whisper_model() 加载模型")
     return _whisper_model
 
 
@@ -335,19 +382,6 @@ class AudioRecorder:
         self._audio_frames = []
         self._stop_event.clear()
         self._is_recording = True
-        
-        # 在开始录音时预加载模型
-        def _preload_model():
-            try:
-                logger.info("开始预加载Whisper模型...")
-                _get_whisper_model()
-                logger.info("Whisper模型预加载完成")
-            except Exception as e:
-                logger.exception(f"预加载Whisper模型时发生错误: {e}")
-        
-        # 异步加载模型，不阻塞录音
-        preload_thread = threading.Thread(target=_preload_model, daemon=True)
-        preload_thread.start()
         
         def _record_audio():
             try:
