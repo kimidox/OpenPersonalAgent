@@ -987,12 +987,37 @@ class SettingsDialog(QDialog):
         tts_tab_layout.addWidget(tts_info_label)
         
         # 模型路径配置
-        tts_model_group = QGroupBox("模型路径配置")
+        tts_model_group = QGroupBox("模型配置")
         tts_model_layout = QVBoxLayout(tts_model_group)
         
+        # 模型类型选择
+        model_type_row = QHBoxLayout()
+        model_type_label = QLabel("模型类型：")
+        model_type_row.addWidget(model_type_label)
+        self._tts_model_type_combo = QComboBox()
+        self._tts_model_type_combo.addItem("中文模型（sherpa-onnx-vits-zh-ll）", "zh")
+        self._tts_model_type_combo.addItem("中英文模型（vits-melo-tts-zh_en）", "zh_en")
+        current_model_type = getattr(config, 'TTS_MODEL_TYPE', 'zh')
+        idx = self._tts_model_type_combo.findData(current_model_type)
+        if idx >= 0:
+            self._tts_model_type_combo.setCurrentIndex(idx)
+        self._tts_model_type_combo.currentIndexChanged.connect(self._on_tts_model_type_changed)
+        model_type_row.addWidget(self._tts_model_type_combo)
+        model_type_row.addStretch()
+        tts_model_layout.addLayout(model_type_row)
+        
+        # 模型类型说明
+        model_type_info = QLabel(
+            "中文模型：纯中文，5个音色（约50MB）\n"
+            "中英文模型：支持中英文混合朗读（约100MB）"
+        )
+        model_type_info.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        tts_model_layout.addWidget(model_type_info)
+        
+        # 自定义模型路径
         path_row = QHBoxLayout()
         self._tts_model_path_edit = QLineEdit()
-        self._tts_model_path_edit.setPlaceholderText("留空则使用默认模型（自动下载）")
+        self._tts_model_path_edit.setPlaceholderText("留空则使用自动下载的模型")
         current_tts_path = getattr(config, 'TTS_MODEL_PATH', '')
         self._tts_model_path_edit.setText(current_tts_path)
         path_row.addWidget(self._tts_model_path_edit)
@@ -1872,7 +1897,7 @@ class SettingsDialog(QDialog):
         """保存 TTS 模型路径"""
         model_path = self._tts_model_path_edit.text().strip()
         
-        # 空路径表示使用默认模型
+        # 空路径表示使用自动下载的模型
         if model_path:
             from pathlib import Path
             if not Path(model_path).exists():
@@ -1885,6 +1910,25 @@ class SettingsDialog(QDialog):
         QMessageBox.information(self, "提示", "模型路径已保存")
         self._refresh_tts_model_status()
     
+    def _on_tts_model_type_changed(self, index: int) -> None:
+        """TTS 模型类型选择变化时自动保存"""
+        model_type = self._tts_model_type_combo.currentData()
+        config.set_config("TTS_MODEL_TYPE", model_type)
+        config.TTS_MODEL_TYPE = model_type
+        
+        # 清空模型路径，让系统使用自动下载的模型
+        self._tts_model_path_edit.setText("")
+        config.set_config("TTS_MODEL_PATH", "")
+        config.TTS_MODEL_PATH = ""
+        
+        # 提示用户需要重新加载模型
+        QMessageBox.information(
+            self,
+            "提示",
+            f"已切换到 {self._tts_model_type_combo.currentText()}\n请点击\"加载模型\"按钮下载并加载新模型"
+        )
+        self._refresh_tts_model_status()
+    
     def _on_tts_speed_changed(self, value: int) -> None:
         """语速滑块值改变"""
         speed = value / 100.0
@@ -1894,8 +1938,9 @@ class SettingsDialog(QDialog):
         """加载 TTS 模型"""
         from tts import load_tts_model
         
-        # 获取配置的模型路径
+        # 获取配置的模型路径和模型类型
         model_path = self._tts_model_path_edit.text().strip()
+        model_type = self._tts_model_type_combo.currentData()
         
         self._load_tts_btn.setEnabled(False)
         self._release_tts_btn.setEnabled(False)
@@ -1908,11 +1953,11 @@ class SettingsDialog(QDialog):
                 self._tts_load_progress.setValue(progress)
                 self._tts_load_status.setText(status)
             
-            # 如果有配置路径，使用它；否则自动下载默认模型
+            # 如果有配置路径，使用它；否则根据模型类型自动下载
             if model_path:
                 success = load_tts_model(model_path, callback=load_callback, auto_download=False)
             else:
-                success = load_tts_model(callback=load_callback, auto_download=True)
+                success = load_tts_model(model_type=model_type, callback=load_callback, auto_download=True)
             
             self._tts_load_progress.setVisible(False)
             

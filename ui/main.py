@@ -52,12 +52,14 @@ def _preload_tts_check():
         if getattr(config, 'TTS_AUTO_LOAD', False):
             logger.info("配置了自动加载 TTS 模型，正在加载...")
             if not is_tts_model_loaded():
-                # 使用配置的模型路径或自动下载
+                # 使用配置的模型类型
+                model_type = getattr(config, 'TTS_MODEL_TYPE', 'zh')
                 model_path = getattr(config, 'TTS_MODEL_PATH', '')
+                
                 if model_path:
                     success = load_tts_model(model_path, auto_download=False)
                 else:
-                    success = load_tts_model(auto_download=True)
+                    success = load_tts_model(model_type=model_type, auto_download=True)
                 
                 if success:
                     logger.info("TTS 模型自动加载成功")

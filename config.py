@@ -282,6 +282,10 @@ ASR_AUTO_LOAD = _asr_auto_load.lower() in ("true", "1", "yes") if _asr_auto_load
 
 # ===== TTS 文本转语音模型配置 =====
 
+# TTS 模型类型（zh=中文，zh_en=中英文）
+_tts_model_type = get_config("TTS_MODEL_TYPE")
+TTS_MODEL_TYPE = _tts_model_type if _tts_model_type in ("zh", "zh_en") else "zh"
+
 # TTS 模型目录路径
 _tts_model = get_config("TTS_MODEL_PATH")
 TTS_MODEL_PATH = _tts_model if _tts_model not in (None, "") else ""
