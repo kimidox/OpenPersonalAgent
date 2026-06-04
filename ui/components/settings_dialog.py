@@ -975,22 +975,36 @@ class SettingsDialog(QDialog):
         tts_tab_layout.addWidget(tts_title)
         
         # 说明文字
-        tts_info_label = QLabel("使用 sherpa-onnx VITS 中文模型进行本地文本转语音。\n模型体积约 50MB，内存占用约 80MB。\n首次加载时会自动下载模型到 PersonalData/model 目录。")
+        tts_info_label = QLabel("使用 sherpa-onnx VITS 模型进行本地文本转语音。\n支持自定义导入模型，或使用默认中文模型（首次加载自动下载）。")
         tts_info_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
         tts_info_label.setWordWrap(True)
         tts_tab_layout.addWidget(tts_info_label)
         
-        # 模型信息
-        tts_model_group = QGroupBox("模型信息")
+        # 模型路径配置
+        tts_model_group = QGroupBox("模型路径配置")
         tts_model_layout = QVBoxLayout(tts_model_group)
+        
+        path_row = QHBoxLayout()
+        self._tts_model_path_edit = QLineEdit()
+        self._tts_model_path_edit.setPlaceholderText("留空则使用默认模型（自动下载）")
+        current_tts_path = getattr(config, 'TTS_MODEL_PATH', '')
+        self._tts_model_path_edit.setText(current_tts_path)
+        path_row.addWidget(self._tts_model_path_edit)
+        
+        browse_tts_btn = QPushButton("浏览")
+        browse_tts_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        browse_tts_btn.clicked.connect(self._on_browse_tts_model)
+        path_row.addWidget(browse_tts_btn)
+        tts_model_layout.addLayout(path_row)
         
         self._tts_model_status = QLabel()
         self._tts_model_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
         tts_model_layout.addWidget(self._tts_model_status)
         
-        tts_model_path_label = QLabel("模型目录：PersonalData/model")
-        tts_model_path_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
-        tts_model_layout.addWidget(tts_model_path_label)
+        save_tts_path_btn = QPushButton("保存路径")
+        save_tts_path_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        save_tts_path_btn.clicked.connect(self._on_save_tts_model_path)
+        tts_model_layout.addWidget(save_tts_path_btn)
         
         tts_tab_layout.addWidget(tts_model_group)
         
@@ -1007,7 +1021,7 @@ class SettingsDialog(QDialog):
         tts_load_layout.addWidget(self._tts_load_status)
         
         tts_load_btn_row = QHBoxLayout()
-        self._load_tts_btn = QPushButton("加载模型（首次会自动下载）")
+        self._load_tts_btn = QPushButton("加载模型")
         self._load_tts_btn.setObjectName("skillAgentSettingsAddConfigButton")
         self._load_tts_btn.clicked.connect(self._on_load_tts_model)
         tts_load_btn_row.addWidget(self._load_tts_btn)
@@ -1028,7 +1042,7 @@ class SettingsDialog(QDialog):
         
         # 说话人选择
         speaker_row = QHBoxLayout()
-        speaker_label = QLabel("说话人：")
+        speaker_label = QLabel("音色：")
         speaker_row.addWidget(speaker_label)
         self._tts_speaker_combo = QComboBox()
         self._tts_speaker_combo.addItem("默认", 0)
@@ -1092,6 +1106,23 @@ class SettingsDialog(QDialog):
         tts_test_layout.addWidget(self._tts_test_status)
         
         tts_tab_layout.addWidget(tts_test_group)
+        
+        # 自定义模型说明
+        custom_model_group = QGroupBox("自定义模型说明")
+        custom_model_layout = QVBoxLayout(custom_model_group)
+        
+        custom_info = QLabel(
+            "支持导入自定义 VITS ONNX 模型：\n"
+            "1. 模型目录需包含：model.onnx、tokens.txt、lexicon.txt\n"
+            "2. 多音色模型需包含：dict/ 目录（jieba 分词词典）\n"
+            "3. 可使用自己训练的 VITS 模型（需导出为 ONNX 格式）\n"
+            "4. 或下载其他预训练模型：https://github.com/k2-fsa/sherpa-onnx/releases"
+        )
+        custom_info.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        custom_info.setWordWrap(True)
+        custom_model_layout.addWidget(custom_info)
+        
+        tts_tab_layout.addWidget(custom_model_group)
         
         tts_tab_layout.addStretch()
         
@@ -1748,8 +1779,17 @@ class SettingsDialog(QDialog):
         model_path = get_tts_model_path()
         num_speakers = get_num_speakers()
         
+        # 音色名称映射（sherpa-onnx-vits-zh-ll 模型）
+        speaker_names = {
+            0: "苏映雪（女声）",
+            1: "顾念（女声）",
+            2: "付思雨（女声）",
+            3: "冰娇（女声）",
+            4: "巴总（男声）",
+        }
+        
         if is_loaded:
-            self._tts_model_status.setText(f"状态：模型已加载（支持 {num_speakers} 个说话人）")
+            self._tts_model_status.setText(f"状态：模型已加载（支持 {num_speakers} 个音色）")
             self._load_tts_btn.setEnabled(False)
             self._release_tts_btn.setEnabled(True)
             self._tts_test_btn.setEnabled(True)
@@ -1757,12 +1797,27 @@ class SettingsDialog(QDialog):
             # 更新说话人选项
             self._tts_speaker_combo.clear()
             for i in range(num_speakers):
-                self._tts_speaker_combo.addItem(f"说话人 {i}", i)
+                name = speaker_names.get(i, f"音色 {i}")
+                self._tts_speaker_combo.addItem(name, i)
         else:
-            self._tts_model_status.setText("状态：模型未加载")
-            self._load_tts_btn.setEnabled(True)
-            self._release_tts_btn.setEnabled(False)
-            self._tts_test_btn.setEnabled(False)
+            config_path = self._tts_model_path_edit.text().strip()
+            if config_path:
+                from pathlib import Path
+                if Path(config_path).exists():
+                    self._tts_model_status.setText(f"状态：模型路径有效，未加载")
+                    self._load_tts_btn.setEnabled(True)
+                    self._release_tts_btn.setEnabled(False)
+                    self._tts_test_btn.setEnabled(False)
+                else:
+                    self._tts_model_status.setText(f"状态：模型目录不存在")
+                    self._load_tts_btn.setEnabled(False)
+                    self._release_tts_btn.setEnabled(False)
+                    self._tts_test_btn.setEnabled(False)
+            else:
+                self._tts_model_status.setText("状态：未配置路径（将使用默认模型）")
+                self._load_tts_btn.setEnabled(True)
+                self._release_tts_btn.setEnabled(False)
+                self._tts_test_btn.setEnabled(False)
         
         # 加载保存的参数
         speaker_id = getattr(config, 'TTS_SPEAKER_ID', 0)
@@ -1775,6 +1830,35 @@ class SettingsDialog(QDialog):
         self._tts_speed_slider.setValue(int(speed * 100))
         self._tts_speed_label.setText(f"{speed:.1f}")
     
+    def _on_browse_tts_model(self) -> None:
+        """浏览选择 TTS 模型目录"""
+        from PySide6.QtWidgets import QFileDialog
+        dir_path = QFileDialog.getExistingDirectory(
+            self,
+            "选择 TTS 模型目录",
+            ""
+        )
+        if dir_path:
+            self._tts_model_path_edit.setText(dir_path)
+            self._refresh_tts_model_status()
+    
+    def _on_save_tts_model_path(self) -> None:
+        """保存 TTS 模型路径"""
+        model_path = self._tts_model_path_edit.text().strip()
+        
+        # 空路径表示使用默认模型
+        if model_path:
+            from pathlib import Path
+            if not Path(model_path).exists():
+                QMessageBox.warning(self, "警告", "模型目录不存在")
+                return
+        
+        config.set_config("TTS_MODEL_PATH", model_path)
+        config.TTS_MODEL_PATH = model_path
+        
+        QMessageBox.information(self, "提示", "模型路径已保存")
+        self._refresh_tts_model_status()
+    
     def _on_tts_speed_changed(self, value: int) -> None:
         """语速滑块值改变"""
         speed = value / 100.0
@@ -1783,6 +1867,9 @@ class SettingsDialog(QDialog):
     def _on_load_tts_model(self) -> None:
         """加载 TTS 模型"""
         from tts import load_tts_model
+        
+        # 获取配置的模型路径
+        model_path = self._tts_model_path_edit.text().strip()
         
         self._load_tts_btn.setEnabled(False)
         self._release_tts_btn.setEnabled(False)
@@ -1795,7 +1882,11 @@ class SettingsDialog(QDialog):
                 self._tts_load_progress.setValue(progress)
                 self._tts_load_status.setText(status)
             
-            success = load_tts_model(callback=load_callback)
+            # 如果有配置路径，使用它；否则自动下载默认模型
+            if model_path:
+                success = load_tts_model(model_path, callback=load_callback, auto_download=False)
+            else:
+                success = load_tts_model(callback=load_callback, auto_download=True)
             
             self._tts_load_progress.setVisible(False)
             
