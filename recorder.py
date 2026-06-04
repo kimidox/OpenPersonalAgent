@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+import shutil
+import tarfile
 import threading
+import urllib.request
 import wave
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Callable, List
+from typing import Optional, Callable
 
 from logger import get_module_logger
 from resource_path import paths
@@ -13,319 +16,322 @@ import config
 
 logger = get_module_logger("recorder")
 
-_whisper_model = None
-_model_download_progress = 0
-_current_model_size = None
-_original_hf_endpoint = None
+# 全局 sherpa-onnx 模型实例
+_onnx_recognizer = None
+_onnx_model_path = None
+
+# 默认模型下载配置
+DEFAULT_MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-int8-2025-10-07.tar.bz2"
+DEFAULT_MODEL_NAME = "sherpa-onnx-paraformer-zh-int8-2025-10-07"
 
 
-def get_models_dir() -> Path:
-    """获取模型存储目录"""
-    models_dir = paths.personal_data_dir / "models"
-    models_dir.mkdir(parents=True, exist_ok=True)
-    return models_dir
+def get_default_model_dir() -> Path:
+    """获取默认模型目录路径"""
+    model_dir = paths.personal_data_dir / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    return model_dir
 
 
-def get_available_model_sizes() -> List[str]:
-    """获取可用的模型大小列表"""
-    return ["tiny", "base", "small", "medium", "large"]
-
-
-def get_model_info(model_size: str) -> dict:
-    """获取模型信息"""
-    model_infos = {
-        "tiny": {"name": "Tiny", "size_mb": 75, "description": "最小模型，速度最快"},
-        "base": {"name": "Base", "size_mb": 150, "description": "基础模型，推荐日常使用"},
-        "small": {"name": "Small", "size_mb": 500, "description": "小型模型，准确度较好"},
-        "medium": {"name": "Medium", "size_mb": 1500, "description": "中型模型，准确度高"},
-        "large": {"name": "Large", "size_mb": 3000, "description": "大型模型，准确度最高"},
-    }
-    return model_infos.get(model_size, {"name": model_size, "size_mb": 0, "description": "未知模型"})
-
-
-def download_whisper_model(model_size: str = None, callback: Callable[[int, str], None] = None) -> bool:
+def download_onnx_model(callback: Callable[[int, str], None] = None) -> Optional[Path]:
     """
-    预下载 Whisper 模型到 PersonalData/models
+    自动下载 ONNX INT8 模型到 PersonalData/model 目录
     
     Args:
-        model_size: 模型大小，默认使用配置中的值
         callback: 进度回调函数 (progress: int, status: str)
     
     Returns:
-        是否下载成功
+        模型目录路径，如果失败则返回 None
     """
+    model_dir = get_default_model_dir()
+    target_dir = model_dir / DEFAULT_MODEL_NAME
+    
+    # 如果模型已存在，直接返回
+    if target_dir.exists():
+        # 检查是否有必要的模型文件
+        onnx_files = list(target_dir.glob("*.onnx"))
+        if onnx_files:
+            logger.info(f"模型已存在: {target_dir}")
+            return target_dir
+    
+    if callback:
+        callback(5, "正在准备下载模型...")
+    
+    logger.info(f"开始下载 ONNX INT8 模型到: {model_dir}")
+    
     try:
-        from faster_whisper import utils
-        import os
-        
-        # 设置 Hugging Face 镜像站，避免从 huggingface.co 直接下载
-        # 使用 hf-mirror.com 作为镜像站
-        original_hf_endpoint = os.environ.get('HF_ENDPOINT')
-        os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-        
-        if model_size is None:
-            model_size = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
-        
-        models_dir = get_models_dir()
-        model_output_dir = models_dir / model_size
-        model_output_dir.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"开始下载 Whisper 模型: {model_size} 到 {model_output_dir}")
-        logger.info(f"使用镜像站: {os.environ['HF_ENDPOINT']}")
+        # 下载压缩包
+        tar_path = model_dir / f"{DEFAULT_MODEL_NAME}.tar.bz2"
         
         if callback:
-            callback(10, f"正在下载模型 {model_size}...")
+            callback(10, "正在下载模型文件（约 80MB）...")
         
-        # 使用 faster_whisper.utils.download_model 下载模型
-        utils.download_model(
-            model_size,
-            output_dir=str(model_output_dir)
-        )
+        def download_progress(block_num, block_size, total_size):
+            if total_size > 0:
+                progress = int(10 + (block_num * block_size / total_size) * 50)
+                if callback and progress <= 60:
+                    callback(progress, f"正在下载模型文件（约 80MB）...")
+        
+        urllib.request.urlretrieve(DEFAULT_MODEL_URL, tar_path, download_progress)
         
         if callback:
-            callback(100, "模型下载完成")
+            callback(65, "正在解压模型文件...")
         
-        logger.info(f"Whisper 模型 {model_size} 下载完成")
+        # 解压
+        with tarfile.open(tar_path, 'r:bz2') as tar:
+            tar.extractall(model_dir)
         
-        # 恢复原始的 HF_ENDPOINT 环境变量
-        if original_hf_endpoint is not None:
-            os.environ['HF_ENDPOINT'] = original_hf_endpoint
-        elif 'HF_ENDPOINT' in os.environ:
-            del os.environ['HF_ENDPOINT']
+        # 删除压缩包
+        tar_path.unlink()
         
-        return True
-        
-    except ImportError:
-        logger.error("faster-whisper 库未安装")
         if callback:
-            callback(0, "错误: faster-whisper 未安装")
-        # 恢复原始的 HF_ENDPOINT 环境变量
-        if 'original_hf_endpoint' in locals():
-            if original_hf_endpoint is not None:
-                os.environ['HF_ENDPOINT'] = original_hf_endpoint
-            elif 'HF_ENDPOINT' in os.environ:
-                del os.environ['HF_ENDPOINT']
-        return False
+            callback(95, "模型下载完成")
+        
+        logger.info(f"模型下载并解压完成: {target_dir}")
+        return target_dir
+        
     except Exception as e:
-        logger.exception(f"下载 Whisper 模型失败: {e}")
+        logger.exception(f"下载模型失败: {e}")
         if callback:
             callback(0, f"下载失败: {e}")
-        # 恢复原始的 HF_ENDPOINT 环境变量
-        if 'original_hf_endpoint' in locals():
-            if original_hf_endpoint is not None:
-                os.environ['HF_ENDPOINT'] = original_hf_endpoint
-            elif 'HF_ENDPOINT' in os.environ:
-                del os.environ['HF_ENDPOINT']
-        return False
+        return None
 
 
-def is_model_downloaded(model_size: str = None) -> bool:
+def load_onnx_model(model_path: str = None, callback: Callable[[int, str], None] = None, auto_download: bool = True) -> bool:
     """
-    检查模型是否已下载
+    加载 sherpa-onnx ONNX 模型
     
     Args:
-        model_size: 模型大小
-    
-    Returns:
-        是否已下载
-    """
-    try:
-        if model_size is None:
-            model_size = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
-        
-        models_dir = get_models_dir()
-        model_path = models_dir / model_size
-        
-        # 检查是否有必要的模型文件
-        if model_path.exists() and model_path.is_dir():
-            # 检查是否有 config.json 和 model.bin 文件
-            if (model_path / "config.json").exists() and (
-                (model_path / "model.bin").exists() or
-                (model_path / "model.safetensors").exists()
-            ):
-                return True
-        
-        # 同时也检查旧的缓存结构
-        model_folder_name = f"models--Systran--faster-whisper-{model_size}"
-        old_model_path = models_dir / model_folder_name
-        
-        if old_model_path.exists():
-            snapshots_dir = old_model_path / "snapshots"
-            if snapshots_dir.exists():
-                for snapshot in snapshots_dir.iterdir():
-                    if snapshot.is_dir():
-                        return True
-        
-        return False
-    except Exception:
-        return False
-
-
-def get_downloaded_models() -> List[str]:
-    """获取已下载的模型列表"""
-    downloaded = []
-    try:
-        models_dir = get_models_dir()
-        for model_size in get_available_model_sizes():
-            if is_model_downloaded(model_size):
-                downloaded.append(model_size)
-    except Exception:
-        pass
-    return downloaded
-
-
-def set_active_model(model_size: str) -> bool:
-    """
-    设置当前使用的模型
-    
-    Args:
-        model_size: 模型大小
-    
-    Returns:
-        是否设置成功
-    """
-    global _whisper_model, _current_model_size
-    
-    if not is_model_downloaded(model_size):
-        return False
-    
-    try:
-        from config import set_config
-        set_config("WHISPER_MODEL_SIZE", model_size)
-        
-        _whisper_model = None
-        _current_model_size = model_size
-        
-        logger.info(f"已切换到模型: {model_size}")
-        return True
-    except Exception as e:
-        logger.exception(f"设置模型失败: {e}")
-        return False
-
-
-def is_model_loaded() -> bool:
-    """
-    检查模型是否已加载
-    
-    Returns:
-        是否已加载
-    """
-    global _whisper_model
-    return _whisper_model is not None
-
-
-def get_loaded_model_size() -> Optional[str]:
-    """
-    获取已加载模型的大小
-    
-    Returns:
-        模型大小，如果未加载则返回 None
-    """
-    global _current_model_size
-    return _current_model_size
-
-
-def load_whisper_model(model_size: str = None, callback: Callable[[int, str], None] = None) -> bool:
-    """
-    显式加载 Whisper 模型
-    
-    Args:
-        model_size: 模型大小，默认使用配置中的值
+        model_path: ONNX 模型目录路径，默认使用配置中的值或自动下载
         callback: 进度回调函数 (progress: int, status: str)
+        auto_download: 是否在模型不存在时自动下载
     
     Returns:
         是否加载成功
     """
-    global _whisper_model, _current_model_size, _original_hf_endpoint
+    global _onnx_recognizer, _onnx_model_path
     
-    if model_size is None:
-        model_size = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
+    # 如果没有指定路径，尝试使用配置或默认目录
+    if model_path is None:
+        model_path = getattr(config, 'ASR_ONNX_MODEL_PATH', '')
+        
+        # 如果配置中没有路径，使用默认目录
+        if not model_path and auto_download:
+            default_dir = get_default_model_dir() / DEFAULT_MODEL_NAME
+            if default_dir.exists():
+                model_path = str(default_dir)
+            else:
+                # 自动下载模型
+                if callback:
+                    callback(0, "模型未找到，正在自动下载...")
+                downloaded_path = download_onnx_model(callback)
+                if downloaded_path:
+                    model_path = str(downloaded_path)
+                    # 保存到配置
+                    config.set_config("ASR_ONNX_MODEL_PATH", model_path)
+                    config.ASR_ONNX_MODEL_PATH = model_path
+                else:
+                    return False
     
-    if not is_model_downloaded(model_size):
+    if not model_path:
         if callback:
-            callback(0, "错误: 模型未下载")
-        logger.error(f"模型 {model_size} 未下载")
+            callback(0, "错误: 未配置模型路径")
+        logger.error("ONNX 模型路径未配置")
+        return False
+    
+    model_path = Path(model_path)
+    
+    # 如果模型目录不存在，尝试自动下载
+    if not model_path.exists() and auto_download:
+        if callback:
+            callback(0, "模型目录不存在，正在自动下载...")
+        downloaded_path = download_onnx_model(callback)
+        if downloaded_path:
+            model_path = downloaded_path
+        else:
+            return False
+    
+    if not model_path.exists():
+        if callback:
+            callback(0, f"错误: 模型目录不存在: {model_path}")
+        logger.error(f"ONNX 模型目录不存在: {model_path}")
         return False
     
     if callback:
-        callback(10, "正在初始化模型...")
+        callback(70, "正在初始化 sherpa-onnx...")
     
     try:
-        # 尝试导入 faster_whisper（在主线程中进行）
-        logger.info("开始导入 faster_whisper 模块...")
-        import faster_whisper
-        from faster_whisper import WhisperModel
-        import os
+        import sherpa_onnx
         
         if callback:
-            callback(30, "正在加载模型文件...")
+            callback(80, "正在加载 ONNX 模型...")
         
-        # 设置 Hugging Face 镜像站
-        _original_hf_endpoint = os.environ.get('HF_ENDPOINT')
-        os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+        # 查找模型文件
+        model_dir = Path(model_path)
         
-        device = getattr(config, 'WHISPER_DEVICE', 'cpu')
-        compute_type = getattr(config, 'WHISPER_COMPUTE_TYPE', 'int8')
-        models_dir = get_models_dir()
+        # 查找 ONNX 模型文件
+        onnx_files = list(model_dir.glob("*.onnx"))
+        if not onnx_files:
+            if callback:
+                callback(0, f"错误: 未找到 ONNX 模型文件")
+            logger.error(f"未找到 ONNX 模型文件: {model_dir}")
+            return False
         
-        logger.info(f"加载 Whisper 模型: {model_size}, device={device}, compute_type={compute_type}")
+        # 使用第一个 ONNX 文件（通常是 model.int8.onnx 或 model.onnx）
+        model_file = onnx_files[0]
+        
+        # 查找 tokens.txt 文件
+        tokens_file = model_dir / "tokens.txt"
+        if not tokens_file.exists():
+            # 尝试其他可能的名称
+            tokens_files = list(model_dir.glob("tokens*.txt"))
+            if tokens_files:
+                tokens_file = tokens_files[0]
+            else:
+                if callback:
+                    callback(0, f"错误: 未找到 tokens.txt 文件")
+                logger.error(f"未找到 tokens.txt 文件: {model_dir}")
+                return False
         
         if callback:
-            callback(60, "正在加载模型到内存...")
+            callback(90, "正在创建识别器...")
         
-        # 使用已下载的模型路径
-        model_path = models_dir / model_size
-        if model_path.exists() and model_path.is_dir():
-            logger.info(f"使用本地已下载的模型: {model_path}")
-            _whisper_model = WhisperModel(
-                str(model_path),
-                device=device,
-                compute_type=compute_type,
-                cpu_threads=4
-            )
-        else:
-            _whisper_model = WhisperModel(
-                model_size,
-                device=device,
-                compute_type=compute_type,
-                download_root=str(models_dir),
-                cpu_threads=4
-            )
+        # 创建 OfflineRecognizer
+        # Paraformer ONNX INT8 模型配置
+        _onnx_recognizer = sherpa_onnx.OfflineRecognizer.from_paraformer(
+            paraformer=str(model_file),
+            tokens=str(tokens_file),
+            num_threads=4,
+            sample_rate=16000,
+            decoding_method="greedy_search",
+        )
         
-        _current_model_size = model_size
+        _onnx_model_path = str(model_path)
         
         if callback:
             callback(100, "模型加载完成")
         
-        logger.info(f"Whisper 模型 {model_size} 加载完成")
+        logger.info(f"sherpa-onnx 模型加载完成: {model_file}")
         return True
         
     except ImportError as ie:
-        logger.error(f"faster-whisper 库导入失败: {ie}")
+        logger.error(f"sherpa-onnx 库导入失败: {ie}")
         if callback:
-            callback(0, "错误: faster-whisper 未安装")
+            callback(0, "错误: sherpa-onnx 未安装，请运行 pip install sherpa-onnx")
         return False
     except Exception as e:
-        logger.exception(f"加载 Whisper 模型失败: {e}")
+        logger.exception(f"加载 sherpa-onnx 模型失败: {e}")
         if callback:
             callback(0, f"加载失败: {e}")
-        # 恢复原始的 HF_ENDPOINT
-        try:
-            if _original_hf_endpoint is not None:
-                os.environ['HF_ENDPOINT'] = _original_hf_endpoint
-            elif 'HF_ENDPOINT' in os.environ:
-                del os.environ['HF_ENDPOINT']
-        except:
-            pass
         return False
 
 
-def _get_whisper_model():
-    """获取已加载的 Whisper 模型（不再自动加载）"""
-    global _whisper_model
-    if _whisper_model is None:
-        logger.warning("模型未加载，请先调用 load_whisper_model() 加载模型")
-    return _whisper_model
+def release_onnx_model():
+    """释放已加载的 sherpa-onnx 模型以节省内存"""
+    global _onnx_recognizer, _onnx_model_path
+    
+    logger.info("释放 sherpa-onnx 模型...")
+    
+    if _onnx_recognizer is not None:
+        try:
+            del _onnx_recognizer
+        except Exception as e:
+            logger.warning(f"清理模型资源时发生错误: {e}")
+        _onnx_recognizer = None
+    
+    _onnx_model_path = None
+    logger.info("sherpa-onnx 模型已释放")
+
+
+def is_onnx_model_loaded() -> bool:
+    """
+    检查 sherpa-onnx 模型是否已加载
+    
+    Returns:
+        是否已加载
+    """
+    return _onnx_recognizer is not None
+
+
+def get_onnx_model_path() -> Optional[str]:
+    """
+    获取已加载模型的路径
+    
+    Returns:
+        模型路径，如果未加载则返回 None
+    """
+    return _onnx_model_path
+
+
+def transcribe_audio_with_onnx(audio_path: Path) -> Optional[str]:
+    """
+    使用 sherpa-onnx 进行语音转文本
+    
+    Args:
+        audio_path: 音频文件路径
+        
+    Returns:
+        转换后的文本，如果失败则返回 None
+    """
+    if not audio_path.exists():
+        logger.error(f"音频文件不存在: {audio_path}")
+        return None
+    
+    if _onnx_recognizer is None:
+        logger.error("sherpa-onnx 模型未加载")
+        return None
+    
+    try:
+        logger.info(f"使用 sherpa-onnx 进行语音识别: {audio_path}")
+        
+        # 创建音频流
+        import sherpa_onnx
+        
+        # 读取 WAV 文件
+        with wave.open(str(audio_path), 'rb') as wf:
+            sample_rate = wf.getframerate()
+            num_channels = wf.getnchannels()
+            sample_width = wf.getsampwidth()
+            num_frames = wf.getnframes()
+            audio_data = wf.readframes(num_frames)
+        
+        # 转换为 numpy 数组
+        import numpy as np
+        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+        
+        # 如果是多声道，转换为单声道
+        if num_channels > 1:
+            audio_array = audio_array.reshape(-1, num_channels)
+            audio_array = audio_array.mean(axis=1).astype(np.int16)
+        
+        # 重采样到 16kHz（如果需要）
+        if sample_rate != 16000:
+            import scipy.signal
+            audio_array = scipy.signal.resample_poly(
+                audio_array,
+                16000,
+                sample_rate
+            ).astype(np.int16)
+        
+        # 创建音频流
+        stream = _onnx_recognizer.create_stream()
+        stream.accept_waveform(16000, audio_array)
+        
+        # 进行识别
+        _onnx_recognizer.decode_stream(stream)
+        
+        # 获取结果
+        result = stream.result.text
+        
+        if result:
+            logger.info(f"语音识别成功，文本长度: {len(result)}")
+            return result.strip()
+        else:
+            logger.warning("sherpa-onnx 返回空文本")
+            return None
+        
+    except Exception as e:
+        logger.exception(f"语音识别时发生错误: {e}")
+        return None
 
 
 class AudioRecorder:
@@ -333,9 +339,9 @@ class AudioRecorder:
     音频录音管理器
     
     功能：
-    1. 使用sounddevice进行录音
-    2. 保存为WAV格式到PersonalData/records目录
-    3. 使用OpenAI兼容API进行语音转文本
+    1. 使用 sounddevice 进行录音
+    2. 保存为 WAV 格式到 PersonalData/records 目录
+    3. 使用 sherpa-onnx 进行语音转文本
     """
     
     def __init__(self):
@@ -476,9 +482,6 @@ class AudioRecorder:
                 except Exception as e:
                     logger.exception(f"执行录音停止回调时发生错误: {e}")
             
-            # 注意：这里不立即释放模型，因为可能紧接着会调用 transcribe_audio
-            # 模型会在 transcribe_audio 之后释放，或者通过显式调用 release_whisper_model 释放
-            
             return audio_path
             
         except Exception as e:
@@ -492,78 +495,22 @@ class AudioRecorder:
             return None
     
     def transcribe_audio(self, audio_path: Path) -> Optional[str]:
-        """将音频文件转换为文本（使用本地 Whisper 模型）
+        """
+        将音频文件转换为文本（使用 sherpa-onnx）
         
         Args:
             audio_path: 音频文件路径
             
         Returns:
-            转换后的文本，如果失败则返回None
+            转换后的文本，如果失败则返回 None
         """
-        if not audio_path.exists():
-            logger.error(f"音频文件不存在: {audio_path}")
-            return None
-        
-        model = _get_whisper_model()
-        if model is None:
-            logger.error("Whisper 模型未加载，无法进行语音识别")
-            return None
-        
-        try:
-            language = getattr(config, 'RECORDING_TRANSCRIPTION_LANGUAGE', 'zh')
-            
-            segments, info = model.transcribe(
-                str(audio_path),
-                language=language,
-                beam_size=5
-            )
-            
-            text_parts = []
-            for segment in segments:
-                text_parts.append(segment.text)
-            
-            text = "".join(text_parts).strip()
-            logger.info(f"音频转文本成功，长度: {len(text)}, 检测语言: {info.language}")
-            
-            return text
-            
-        except Exception as e:
-            logger.exception(f"音频转文本时发生错误: {e}")
-            return None
+        return transcribe_audio_with_onnx(audio_path)
     
     def get_current_audio_path(self) -> Optional[Path]:
         return self._current_audio_path
 
 
 _recorder_instance: Optional[AudioRecorder] = None
-
-
-def release_whisper_model():
-    """释放已加载的Whisper模型以节省内存"""
-    global _whisper_model, _current_model_size, _original_hf_endpoint
-    
-    if _whisper_model is not None:
-        logger.info("释放Whisper模型...")
-        try:
-            # 尝试清理模型资源
-            if hasattr(_whisper_model, 'model'):
-                del _whisper_model.model
-            del _whisper_model
-        except Exception as e:
-            logger.warning(f"清理模型资源时发生错误: {e}")
-        
-        _whisper_model = None
-        _current_model_size = None
-        
-        # 恢复原始的HF_ENDPOINT环境变量
-        if _original_hf_endpoint is not None:
-            import os
-            os.environ['HF_ENDPOINT'] = _original_hf_endpoint
-        elif 'HF_ENDPOINT' in os.environ:
-            del os.environ['HF_ENDPOINT']
-        _original_hf_endpoint = None
-        
-        logger.info("Whisper模型已释放")
 
 
 def get_recorder() -> AudioRecorder:

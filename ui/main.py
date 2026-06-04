@@ -13,16 +13,15 @@ from resource_path import paths
 from logger import get_logger
 
 
-def _preload_whisper_model():
-    """后台预加载 Whisper 模型"""
+def _preload_asr_check():
+    """后台检查 ASR 模型配置"""
     try:
-        from recorder import download_whisper_model, is_model_downloaded
+        from recorder import is_onnx_model_loaded
         import config
         
-        model_size = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
-        
-        if not is_model_downloaded(model_size):
-            download_whisper_model(model_size)
+        if not is_onnx_model_loaded():
+            logger = get_logger()
+            logger.info("ONNX 模型未加载，录音功能需要先在设置中加载模型")
     except Exception:
         pass
 
@@ -51,8 +50,8 @@ def main(background: bool = False) -> None:
     window.set_floating_ball(floating_ball)
     
     preload_thread = threading.Thread(
-        target=_preload_whisper_model,
-        name="whisper-preload",
+        target=_preload_asr_check,
+        name="asr-preload",
         daemon=True
     )
     preload_thread.start()

@@ -153,7 +153,7 @@ class FloatingBall(QWidget):
     
     def _toggle_recording(self):
         """切换录音状态"""
-        from recorder import is_model_loaded
+        from recorder import is_onnx_model_loaded
         recorder = get_recorder()
         
         if recorder.is_recording:
@@ -166,7 +166,7 @@ class FloatingBall(QWidget):
                 self.create_recording_conversation.emit(audio_path, "")
         else:
             # 在开始录音前先检查模型是否已加载
-            if not is_model_loaded():
+            if not is_onnx_model_loaded():
                 # 我们通过信号让主窗口来显示提示，避免在悬浮球中直接显示对话框导致的问题
                 self.show_model_not_loaded_warning.emit()
                 return

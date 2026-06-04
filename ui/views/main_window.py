@@ -213,7 +213,7 @@ class SkillAgentMainWindow(QMainWindow):
     
     def _toggle_tray_recording(self) -> None:
         """切换托盘录音状态"""
-        from recorder import is_model_loaded
+        from recorder import is_onnx_model_loaded
         recorder = get_recorder()
         
         if recorder.is_recording:
@@ -224,7 +224,7 @@ class SkillAgentMainWindow(QMainWindow):
                 self._process_recording_for_conversation(audio_path)
         else:
             # 在开始录音前先检查模型是否已加载
-            if not is_model_loaded():
+            if not is_onnx_model_loaded():
                 QMessageBox.warning(
                     self, 
                     "提示", 
@@ -246,11 +246,11 @@ class SkillAgentMainWindow(QMainWindow):
             return
         self._last_processed_recording = audio_path_str
         
-        from recorder import is_model_loaded
+        from recorder import is_onnx_model_loaded
         recorder = get_recorder()
         if not text:
             self._logger.info("text 为空，调用 transcribe_audio 进行转译")
-            if not is_model_loaded():
+            if not is_onnx_model_loaded():
                 QMessageBox.warning(
                     self, 
                     "提示", 

@@ -270,13 +270,8 @@ RECORDING_DTYPE = 'int16'
 _stl = get_config("RECORDING_TRANSCRIPTION_LANGUAGE")
 RECORDING_TRANSCRIPTION_LANGUAGE = _stl if _stl not in (None, "") else "zh"
 
-# ===== Whisper 本地模型配置 =====
+# ===== ASR 语音识别模型配置 =====
 
-_wms = get_config("WHISPER_MODEL_SIZE")
-WHISPER_MODEL_SIZE = _wms if _wms not in (None, "") else "base"
-
-_wd = get_config("WHISPER_DEVICE")
-WHISPER_DEVICE = _wd if _wd not in (None, "") else "cpu"
-
-_wct = get_config("WHISPER_COMPUTE_TYPE")
-WHISPER_COMPUTE_TYPE = _wct if _wct not in (None, "") else "int8"
+# ONNX 模型目录路径
+_asr_onnx = get_config("ASR_ONNX_MODEL_PATH")
+ASR_ONNX_MODEL_PATH = _asr_onnx if _asr_onnx not in (None, "") else ""

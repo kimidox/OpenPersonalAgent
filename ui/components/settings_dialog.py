@@ -70,16 +70,11 @@ from scheduled_tasks import NotificationType, RepeatType, ScheduledTask, TaskSta
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 from ui.styles.style_manager import StyleManager
 from recorder import (
-    get_available_model_sizes,
-    get_model_info,
-    get_downloaded_models,
-    is_model_downloaded,
-    download_whisper_model,
-    set_active_model,
-    get_models_dir,
-    is_model_loaded,
-    get_loaded_model_size,
-    load_whisper_model,
+    load_onnx_model,
+    release_onnx_model,
+    is_onnx_model_loaded,
+    get_onnx_model_path,
+    get_recorder,
 )
 
 if TYPE_CHECKING:
@@ -905,128 +900,68 @@ class SettingsDialog(QDialog):
 
         tab_widget.addTab(self._tasks_tab, "定时任务管理")
         
-        whisper_tab = QWidget()
-        whisper_tab_layout = QVBoxLayout(whisper_tab)
-        whisper_tab_layout.setContentsMargins(8, 8, 8, 8)
-        whisper_tab_layout.setSpacing(12)
+        asr_tab = QWidget()
+        asr_tab_layout = QVBoxLayout(asr_tab)
+        asr_tab_layout.setContentsMargins(8, 8, 8, 8)
+        asr_tab_layout.setSpacing(12)
         
-        whisper_title = QLabel("Whisper 语音识别模型管理")
-        whisper_title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
-        whisper_tab_layout.addWidget(whisper_title)
+        asr_title = QLabel("ASR 语音识别配置")
+        asr_title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        asr_tab_layout.addWidget(asr_title)
         
-        models_dir_label = QLabel(f"模型存储目录：{get_models_dir()}")
-        models_dir_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
-        whisper_tab_layout.addWidget(models_dir_label)
+        # 说明文字
+        info_label = QLabel("使用 sherpa-onnx ONNX INT8 模型进行本地语音识别。\n内存占用约 80MB，精度损失 < 0.5%。\n首次加载时会自动下载模型到 PersonalData/model 目录。")
+        info_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        info_label.setWordWrap(True)
+        asr_tab_layout.addWidget(info_label)
         
-        model_select_group = QGroupBox("模型选择")
-        model_select_layout = QVBoxLayout(model_select_group)
+        # 模型信息
+        model_group = QGroupBox("模型信息")
+        model_layout = QVBoxLayout(model_group)
         
-        select_row = QHBoxLayout()
-        select_label = QLabel("当前使用模型：")
-        select_row.addWidget(select_label)
+        self._asr_model_status = QLabel()
+        self._asr_model_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        model_layout.addWidget(self._asr_model_status)
         
-        self._whisper_model_combo = QComboBox()
-        self._whisper_model_combo.setObjectName("skillAgentSettingsModelSelect")
-        for model_size in get_available_model_sizes():
-            info = get_model_info(model_size)
-            self._whisper_model_combo.addItem(
-                f"{info['name']} ({info['size_mb']}MB) - {info['description']}",
-                model_size
-            )
-        current_model = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
-        idx = self._whisper_model_combo.findData(current_model)
-        if idx >= 0:
-            self._whisper_model_combo.setCurrentIndex(idx)
-        select_row.addWidget(self._whisper_model_combo)
-        select_row.addStretch()
-        model_select_layout.addLayout(select_row)
+        model_path_label = QLabel("模型目录：PersonalData/model")
+        model_path_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        model_layout.addWidget(model_path_label)
         
-        self._whisper_model_status = QLabel()
-        self._whisper_model_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
-        model_select_layout.addWidget(self._whisper_model_status)
+        asr_tab_layout.addWidget(model_group)
         
-        # 添加加载模型进度条
-        self._load_progress = QProgressBar()
-        self._load_progress.setVisible(False)
-        model_select_layout.addWidget(self._load_progress)
+        # 模型加载
+        load_group = QGroupBox("模型加载")
+        load_layout = QVBoxLayout(load_group)
         
-        self._load_status_label = QLabel()
-        self._load_status_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
-        model_select_layout.addWidget(self._load_status_label)
+        self._asr_load_progress = QProgressBar()
+        self._asr_load_progress.setVisible(False)
+        load_layout.addWidget(self._asr_load_progress)
         
-        switch_btn_row = QHBoxLayout()
-        self._switch_whisper_btn = QPushButton("切换到此模型")
-        self._switch_whisper_btn.setObjectName("skillAgentSettingsAddConfigButton")
-        self._switch_whisper_btn.clicked.connect(self._on_switch_whisper_model)
-        switch_btn_row.addWidget(self._switch_whisper_btn)
+        self._asr_load_status = QLabel()
+        self._asr_load_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        load_layout.addWidget(self._asr_load_status)
         
-        self._load_whisper_btn = QPushButton("加载模型")
-        self._load_whisper_btn.setObjectName("skillAgentSettingsAddConfigButton")
-        self._load_whisper_btn.clicked.connect(self._on_load_whisper_model)
-        switch_btn_row.addWidget(self._load_whisper_btn)
+        load_btn_row = QHBoxLayout()
+        self._load_asr_btn = QPushButton("加载模型（首次会自动下载）")
+        self._load_asr_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._load_asr_btn.clicked.connect(self._on_load_asr_model)
+        load_btn_row.addWidget(self._load_asr_btn)
         
-        switch_btn_row.addStretch()
-        model_select_layout.addLayout(switch_btn_row)
+        self._release_asr_btn = QPushButton("释放模型")
+        self._release_asr_btn.setObjectName("skillAgentSettingsDeleteConfigButton")
+        self._release_asr_btn.clicked.connect(self._on_release_asr_model)
+        load_btn_row.addWidget(self._release_asr_btn)
         
-        whisper_tab_layout.addWidget(model_select_group)
+        load_btn_row.addStretch()
+        load_layout.addLayout(load_btn_row)
         
-        download_group = QGroupBox("模型下载")
-        download_layout = QVBoxLayout(download_group)
+        asr_tab_layout.addWidget(load_group)
         
-        download_row = QHBoxLayout()
-        download_label = QLabel("选择要下载的模型：")
-        download_row.addWidget(download_label)
+        asr_tab_layout.addStretch()
         
-        self._download_whisper_combo = QComboBox()
-        self._download_whisper_combo.setObjectName("skillAgentSettingsDownloadSelect")
-        for model_size in get_available_model_sizes():
-            info = get_model_info(model_size)
-            status = "✓ 已下载" if is_model_downloaded(model_size) else "未下载"
-            self._download_whisper_combo.addItem(
-                f"{info['name']} ({info['size_mb']}MB) - {status}",
-                model_size
-            )
-        download_row.addWidget(self._download_whisper_combo)
-        download_row.addStretch()
-        download_layout.addLayout(download_row)
+        tab_widget.addTab(asr_tab, "语音识别配置")
         
-        self._download_progress = QProgressBar()
-        self._download_progress.setVisible(False)
-        download_layout.addWidget(self._download_progress)
-        
-        self._download_status_label = QLabel()
-        self._download_status_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
-        download_layout.addWidget(self._download_status_label)
-        
-        download_btn_row = QHBoxLayout()
-        self._download_whisper_btn = QPushButton("下载模型")
-        self._download_whisper_btn.setObjectName("skillAgentSettingsAddConfigButton")
-        self._download_whisper_btn.clicked.connect(self._on_download_whisper_model)
-        download_btn_row.addWidget(self._download_whisper_btn)
-        
-        self._refresh_whisper_btn = QPushButton("刷新状态")
-        self._refresh_whisper_btn.setObjectName("skillAgentSettingsMoveUpButton")
-        self._refresh_whisper_btn.clicked.connect(self._refresh_whisper_models)
-        download_btn_row.addWidget(self._refresh_whisper_btn)
-        download_btn_row.addStretch()
-        download_layout.addLayout(download_btn_row)
-        
-        whisper_tab_layout.addWidget(download_group)
-        
-        downloaded_group = QGroupBox("已下载模型列表")
-        downloaded_layout = QVBoxLayout(downloaded_group)
-        
-        self._downloaded_models_list = QLabel()
-        self._downloaded_models_list.setWordWrap(True)
-        downloaded_layout.addWidget(self._downloaded_models_list)
-        
-        whisper_tab_layout.addWidget(downloaded_group)
-        
-        whisper_tab_layout.addStretch()
-        
-        tab_widget.addTab(whisper_tab, "语音模型管理")
-        
-        self._whisper_tab = whisper_tab
+        self._asr_tab = asr_tab
 
         self._tab_widget = tab_widget
         layout.addWidget(tab_widget)
@@ -1612,157 +1547,57 @@ class SettingsDialog(QDialog):
         self._refresh_task_list()
         self._update_autostart_status()
         self._update_scheduled_task_show_window_status()
-        self._refresh_whisper_models()
+        self._refresh_asr_model_status()
     
-    def _refresh_whisper_models(self) -> None:
-        """刷新 Whisper 模型状态"""
-        downloaded = get_downloaded_models()
-        current_model = getattr(config, 'WHISPER_MODEL_SIZE', 'base')
-        loaded_model = get_loaded_model_size()
+    def _refresh_asr_model_status(self) -> None:
+        """刷新 ASR 模型状态"""
+        is_loaded = is_onnx_model_loaded()
+        model_path = get_onnx_model_path()
         
-        self._download_whisper_combo.clear()
-        for model_size in get_available_model_sizes():
-            info = get_model_info(model_size)
-            status = "✓ 已下载" if is_model_downloaded(model_size) else "未下载"
-            self._download_whisper_combo.addItem(
-                f"{info['name']} ({info['size_mb']}MB) - {status}",
-                model_size
-            )
-        
-        if downloaded:
-            downloaded_names = [get_model_info(m)['name'] for m in downloaded]
-            self._downloaded_models_list.setText(f"已下载：{', '.join(downloaded_names)}")
+        if is_loaded:
+            self._asr_model_status.setText(f"状态：模型已加载")
+            self._load_asr_btn.setEnabled(False)
+            self._release_asr_btn.setEnabled(True)
         else:
-            self._downloaded_models_list.setText("暂无已下载的模型")
-        
-        is_current_downloaded = is_model_downloaded(current_model)
-        is_model_loaded_now = is_model_loaded()
-        if is_current_downloaded:
-            info = get_model_info(current_model)
-            if is_model_loaded_now and loaded_model == current_model:
-                self._whisper_model_status.setText(f"状态：当前使用 {info['name']} 模型（已下载并已加载）")
-            else:
-                self._whisper_model_status.setText(f"状态：当前使用 {info['name']} 模型（已下载，未加载）")
-            self._switch_whisper_btn.setEnabled(True)
-            self._load_whisper_btn.setEnabled(True)
-        else:
-            self._whisper_model_status.setText(f"状态：当前模型 {current_model} 未下载，请先下载")
-            self._switch_whisper_btn.setEnabled(False)
-            self._load_whisper_btn.setEnabled(False)
+            self._asr_model_status.setText("状态：模型未加载")
+            self._load_asr_btn.setEnabled(True)
+            self._release_asr_btn.setEnabled(False)
     
-    def _on_switch_whisper_model(self) -> None:
-        """切换 Whisper 模型"""
-        model_size = self._whisper_model_combo.currentData()
-        if not model_size:
-            return
+    def _on_load_asr_model(self) -> None:
+        """加载 ONNX 模型（首次会自动下载）"""
+        self._load_asr_btn.setEnabled(False)
+        self._release_asr_btn.setEnabled(False)
+        self._asr_load_progress.setVisible(True)
+        self._asr_load_progress.setValue(0)
+        self._asr_load_status.setText("正在加载模型...")
         
-        if not is_model_downloaded(model_size):
-            QMessageBox.warning(self, "警告", f"模型 {model_size} 未下载，请先下载")
-            return
-        
-        if set_active_model(model_size):
-            info = get_model_info(model_size)
-            QMessageBox.information(self, "提示", f"已切换到 {info['name']} 模型")
-            self._refresh_whisper_models()
-        else:
-            QMessageBox.warning(self, "警告", "切换模型失败")
-    
-    def _on_download_whisper_model(self) -> None:
-        """下载 Whisper 模型"""
-        model_size = self._download_whisper_combo.currentData()
-        if not model_size:
-            return
-        
-        if is_model_downloaded(model_size):
-            QMessageBox.information(self, "提示", f"模型 {model_size} 已下载")
-            return
-        
-        info = get_model_info(model_size)
-        
-        self._download_whisper_btn.setEnabled(False)
-        self._download_progress.setVisible(True)
-        self._download_progress.setValue(0)
-        self._download_status_label.setText(f"正在下载 {info['name']} 模型...")
-        
-        def download_callback(progress: int, status: str):
-            self._download_progress.setValue(progress)
-            self._download_status_label.setText(status)
-        
-        def do_download():
-            success = download_whisper_model(model_size, callback=download_callback)
-            
-            def on_finished():
-                self._download_whisper_btn.setEnabled(True)
-                self._download_progress.setVisible(False)
-                
-                if success:
-                    self._download_status_label.setText(f"{info['name']} 模型下载完成")
-                    QMessageBox.information(self, "提示", f"{info['name']} 模型下载成功")
-                else:
-                    self._download_status_label.setText("下载失败")
-                    QMessageBox.warning(self, "警告", f"{info['name']} 模型下载失败")
-                
-                self._refresh_whisper_models()
-            
-            from PySide6.QtCore import QMetaObject, Qt, Q_ARG
-            QMetaObject.invokeMethod(self, "_on_download_finished", Qt.ConnectionType.QueuedConnection)
-        
-        self._download_thread = threading.Thread(
-            target=do_download,
-            name="whisper-download",
-            daemon=True
-        )
-        self._download_thread.start()
-    
-    def _on_download_finished(self) -> None:
-        """下载完成后的回调（由线程调用）"""
-        self._download_whisper_btn.setEnabled(True)
-        self._download_progress.setVisible(False)
-        self._refresh_whisper_models()
-    
-    def _on_load_whisper_model(self) -> None:
-        """加载 Whisper 模型"""
-        model_size = self._whisper_model_combo.currentData()
-        if not model_size:
-            return
-        
-        if not is_model_downloaded(model_size):
-            QMessageBox.warning(self, "警告", f"模型 {model_size} 未下载，请先下载")
-            return
-        
-        info = get_model_info(model_size)
-        
-        self._load_whisper_btn.setEnabled(False)
-        self._switch_whisper_btn.setEnabled(False)
-        self._load_progress.setVisible(True)
-        self._load_progress.setValue(0)
-        self._load_status_label.setText(f"正在加载 {info['name']} 模型...")
-        
-        # 直接在主线程中加载模型，避免子线程导致的崩溃问题
         try:
             def load_callback(progress: int, status: str):
-                self._load_progress.setValue(progress)
-                self._load_status_label.setText(status)
+                self._asr_load_progress.setValue(progress)
+                self._asr_load_status.setText(status)
             
-            success = load_whisper_model(model_size, callback=load_callback)
+            success = load_onnx_model(callback=load_callback)
             
-            self._load_whisper_btn.setEnabled(True)
-            self._switch_whisper_btn.setEnabled(True)
-            self._load_progress.setVisible(False)
+            self._asr_load_progress.setVisible(False)
             
             if success:
-                self._load_status_label.setText(f"{info['name']} 模型加载完成")
-                QMessageBox.information(self, "提示", f"{info['name']} 模型加载成功")
+                self._asr_load_status.setText("模型加载完成")
+                QMessageBox.information(self, "提示", "模型加载成功")
             else:
-                self._load_status_label.setText("加载失败")
-                QMessageBox.warning(self, "警告", f"{info['name']} 模型加载失败")
+                self._asr_load_status.setText("加载失败")
+                QMessageBox.warning(self, "警告", "模型加载失败")
             
-            self._refresh_whisper_models()
+            self._refresh_asr_model_status()
         except Exception as e:
             logger.exception(f"加载模型时发生异常: {e}")
-            self._load_whisper_btn.setEnabled(True)
-            self._switch_whisper_btn.setEnabled(True)
-            self._load_progress.setVisible(False)
-            self._load_status_label.setText(f"加载失败: {str(e)}")
+            self._asr_load_progress.setVisible(False)
+            self._asr_load_status.setText(f"加载失败: {str(e)}")
             QMessageBox.warning(self, "警告", f"加载模型时发生错误: {str(e)}")
-            self._refresh_whisper_models()
+            self._refresh_asr_model_status()
+    
+    def _on_release_asr_model(self) -> None:
+        """释放 ONNX 模型"""
+        release_onnx_model()
+        self._asr_load_status.setText("模型已释放")
+        QMessageBox.information(self, "提示", "模型已释放")
+        self._refresh_asr_model_status()
