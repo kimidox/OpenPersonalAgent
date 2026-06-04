@@ -956,6 +956,12 @@ class SettingsDialog(QDialog):
         load_btn_row.addStretch()
         load_layout.addLayout(load_btn_row)
         
+        # 自动加载选项（勾选时自动保存）
+        self._asr_auto_load_checkbox = QCheckBox("程序启动自动加载语音识别模型")
+        self._asr_auto_load_checkbox.setChecked(getattr(config, 'ASR_AUTO_LOAD', False))
+        self._asr_auto_load_checkbox.stateChanged.connect(self._on_asr_auto_load_changed)
+        load_layout.addWidget(self._asr_auto_load_checkbox)
+        
         asr_tab_layout.addWidget(load_group)
         
         asr_tab_layout.addStretch()
@@ -1033,6 +1039,12 @@ class SettingsDialog(QDialog):
         
         tts_load_btn_row.addStretch()
         tts_load_layout.addLayout(tts_load_btn_row)
+        
+        # 自动加载选项（勾选时自动保存）
+        self._tts_auto_load_checkbox = QCheckBox("程序启动自动加载语音合成模型")
+        self._tts_auto_load_checkbox.setChecked(getattr(config, 'TTS_AUTO_LOAD', False))
+        self._tts_auto_load_checkbox.stateChanged.connect(self._on_tts_auto_load_changed)
+        tts_load_layout.addWidget(self._tts_auto_load_checkbox)
         
         tts_tab_layout.addWidget(tts_load_group)
         
@@ -1770,6 +1782,20 @@ class SettingsDialog(QDialog):
         QMessageBox.information(self, "提示", "模型已释放")
         self._refresh_asr_model_status()
     
+    def _on_save_asr_auto_load(self) -> None:
+        """保存 ASR 自动加载配置"""
+        auto_load = self._asr_auto_load_checkbox.isChecked()
+        config.set_config("ASR_AUTO_LOAD", str(auto_load).lower())
+        config.ASR_AUTO_LOAD = auto_load
+        QMessageBox.information(self, "提示", f"已保存：程序启动{'自动加载' if auto_load else '不自动加载'}语音识别模型")
+    
+    def _on_asr_auto_load_changed(self, state: int) -> None:
+        """ASR 自动加载勾选状态改变时自动保存"""
+        from PySide6.QtCore import Qt
+        auto_load = state == Qt.CheckState.Checked.value
+        config.set_config("ASR_AUTO_LOAD", str(auto_load).lower())
+        config.ASR_AUTO_LOAD = auto_load
+    
     # ===== TTS 相关方法 =====
     
     def _refresh_tts_model_status(self) -> None:
@@ -1925,6 +1951,20 @@ class SettingsDialog(QDialog):
         config.TTS_SPEED = speed
         
         QMessageBox.information(self, "提示", "TTS 参数已保存")
+    
+    def _on_save_tts_auto_load(self) -> None:
+        """保存 TTS 自动加载配置"""
+        auto_load = self._tts_auto_load_checkbox.isChecked()
+        config.set_config("TTS_AUTO_LOAD", str(auto_load).lower())
+        config.TTS_AUTO_LOAD = auto_load
+        QMessageBox.information(self, "提示", f"已保存：程序启动{'自动加载' if auto_load else '不自动加载'}语音合成模型")
+    
+    def _on_tts_auto_load_changed(self, state: int) -> None:
+        """TTS 自动加载勾选状态改变时自动保存"""
+        from PySide6.QtCore import Qt
+        auto_load = state == Qt.CheckState.Checked.value
+        config.set_config("TTS_AUTO_LOAD", str(auto_load).lower())
+        config.TTS_AUTO_LOAD = auto_load
     
     def _on_test_tts(self) -> None:
         """测试朗读"""

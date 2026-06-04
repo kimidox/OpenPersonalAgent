@@ -113,6 +113,7 @@ class MessageCardWidget(QWidget):
 
         import config
         self._copy_button = None
+        self._speak_button = None
         if self._msg_type in config.COPY_BUTTON_ENABLED_TYPES:
             self._copy_button = QToolButton()
             self._copy_button.setText("复制")
@@ -122,11 +123,24 @@ class MessageCardWidget(QWidget):
             self._apply_copy_button_style()
             self._copy_button.clicked.connect(self._on_copy_clicked)
             self._copy_button.hide()
+            
+            # 仅对助手消息添加语音播放按钮
+            if self._msg_type == "assistant":
+                self._speak_button = QToolButton()
+                self._speak_button.setText("朗读")
+                self._speak_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+                self._speak_button.setCursor(Qt.PointingHandCursor)
+                self._speak_button.setFixedSize(50, 24)
+                self._apply_speak_button_style()
+                self._speak_button.clicked.connect(self._on_speak_clicked)
+                self._speak_button.hide()
 
             self._button_layout = QHBoxLayout()
             self._button_layout.setContentsMargins(0, 6, 0, 0)
-            self._button_layout.setSpacing(0)
+            self._button_layout.setSpacing(8)
             self._button_layout.addStretch()
+            if self._speak_button:
+                self._button_layout.addWidget(self._speak_button)
             self._button_layout.addWidget(self._copy_button)
             self._bubble_layout.addLayout(self._button_layout)
 
@@ -137,7 +151,7 @@ class MessageCardWidget(QWidget):
         self._file_preview_list.hide()
         self._container_layout.addWidget(self._file_preview_list)
 
-        if self._copy_button:
+        if self._copy_button or self._speak_button:
             self.setMouseTracking(True)
 
         # 排列气泡 - 使用专门的对齐容器来确保正确的布局
@@ -296,6 +310,12 @@ class MessageCardWidget(QWidget):
         if style:
             self._copy_button.setStyleSheet(style)
 
+    def _apply_speak_button_style(self) -> None:
+        self._speak_button.setObjectName("skillAgentSpeakButton")
+        style = StyleManager.get_style("message_card_copy_button")
+        if style:
+            self._speak_button.setStyleSheet(style)
+
     def _on_copy_clicked(self) -> None:
         clipboard = QApplication.clipboard()
         clipboard.setText(self._raw_content)
@@ -303,14 +323,57 @@ class MessageCardWidget(QWidget):
         from PySide6.QtCore import QTimer
         QTimer.singleShot(1500, lambda: self._copy_button.setText("复制"))
 
+    def _on_speak_clicked(self) -> None:
+        """点击朗读按钮"""
+        from tts import is_tts_model_loaded, speak_text
+        from PySide6.QtWidgets import QMessageBox
+        
+        if not is_tts_model_loaded():
+            QMessageBox.warning(
+                self,
+                "提示",
+                "TTS 模型未加载，请先在设置中加载语音合成模型"
+            )
+            return
+        
+        if not self._raw_content.strip():
+            QMessageBox.warning(self, "提示", "消息内容为空，无法朗读")
+            return
+        
+        # 开始朗读
+        self._speak_button.setText("朗读中...")
+        self._speak_button.setEnabled(False)
+        
+        import config
+        speaker_id = getattr(config, 'TTS_SPEAKER_ID', 0)
+        speed = getattr(config, 'TTS_SPEED', 1.0)
+        
+        try:
+            speak_text(
+                self._raw_content,
+                speaker_id=speaker_id,
+                speed=speed
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "警告", f"朗读失败: {str(e)}")
+        
+        # 恢复按钮状态
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(2000, lambda: self._speak_button.setText("朗读"))
+        QTimer.singleShot(2000, lambda: self._speak_button.setEnabled(True))
+
     def enterEvent(self, event) -> None:
         if self._copy_button:
             self._copy_button.show()
+        if self._speak_button:
+            self._speak_button.show()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
         if self._copy_button:
             self._copy_button.hide()
+        if self._speak_button:
+            self._speak_button.hide()
         super().leaveEvent(event)
         
     def add_files(self, files: list[UploadedFileInfo]) -> None:

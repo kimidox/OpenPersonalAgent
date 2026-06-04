@@ -14,16 +14,60 @@ from logger import get_logger
 
 
 def _preload_asr_check():
-    """后台检查 ASR 模型配置"""
+    """后台检查 ASR 模型配置并自动加载"""
     try:
-        from recorder import is_onnx_model_loaded
         import config
+        from recorder import is_onnx_model_loaded, load_onnx_model
         
-        if not is_onnx_model_loaded():
-            logger = get_logger()
-            logger.info("ONNX 模型未加载，录音功能需要先在设置中加载模型")
-    except Exception:
-        pass
+        logger = get_logger()
+        
+        # 检查是否配置了自动加载
+        if getattr(config, 'ASR_AUTO_LOAD', False):
+            logger.info("配置了自动加载 ASR 模型，正在加载...")
+            if not is_onnx_model_loaded():
+                success = load_onnx_model()
+                if success:
+                    logger.info("ASR 模型自动加载成功")
+                else:
+                    logger.warning("ASR 模型自动加载失败")
+            else:
+                logger.info("ASR 模型已加载")
+        else:
+            if not is_onnx_model_loaded():
+                logger.info("ASR 模型未加载，录音功能需要先在设置中加载模型")
+    except Exception as e:
+        logger = get_logger()
+        logger.exception(f"ASR 模型自动加载检查异常: {e}")
+
+
+def _preload_tts_check():
+    """后台检查 TTS 模型配置并自动加载"""
+    try:
+        import config
+        from tts import is_tts_model_loaded, load_tts_model
+        
+        logger = get_logger()
+        
+        # 检查是否配置了自动加载
+        if getattr(config, 'TTS_AUTO_LOAD', False):
+            logger.info("配置了自动加载 TTS 模型，正在加载...")
+            if not is_tts_model_loaded():
+                # 使用配置的模型路径或自动下载
+                model_path = getattr(config, 'TTS_MODEL_PATH', '')
+                if model_path:
+                    success = load_tts_model(model_path, auto_download=False)
+                else:
+                    success = load_tts_model(auto_download=True)
+                
+                if success:
+                    logger.info("TTS 模型自动加载成功")
+                else:
+                    logger.warning("TTS 模型自动加载失败")
+            else:
+                logger.info("TTS 模型已加载")
+    except Exception as e:
+        logger = get_logger()
+        logger.exception(f"TTS 模型自动加载检查异常: {e}")
 
 
 def main(background: bool = False) -> None:
@@ -55,6 +99,14 @@ def main(background: bool = False) -> None:
         daemon=True
     )
     preload_thread.start()
+    
+    # TTS 自动加载线程
+    tts_preload_thread = threading.Thread(
+        target=_preload_tts_check,
+        name="tts-preload",
+        daemon=True
+    )
+    tts_preload_thread.start()
     
     logger.info(f"ui.main: background = {background}")
     if not background:
