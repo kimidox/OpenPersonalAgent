@@ -275,3 +275,17 @@ RECORDING_TRANSCRIPTION_LANGUAGE = _stl if _stl not in (None, "") else "zh"
 # ONNX 模型目录路径
 _asr_onnx = get_config("ASR_ONNX_MODEL_PATH")
 ASR_ONNX_MODEL_PATH = _asr_onnx if _asr_onnx not in (None, "") else ""
+
+# ===== TTS 文本转语音模型配置 =====
+
+# TTS 模型目录路径
+_tts_model = get_config("TTS_MODEL_PATH")
+TTS_MODEL_PATH = _tts_model if _tts_model not in (None, "") else ""
+
+# TTS 说话人 ID（默认 0）
+_tts_speaker = get_config("TTS_SPEAKER_ID")
+TTS_SPEAKER_ID = int(_tts_speaker) if _tts_speaker not in (None, "") else 0
+
+# TTS 语速（默认 1.0，范围 0.5-2.0）
+_tts_speed = get_config("TTS_SPEED")
+TTS_SPEED = float(_tts_speed) if _tts_speed not in (None, "") else 1.0

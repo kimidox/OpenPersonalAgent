@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -962,6 +963,141 @@ class SettingsDialog(QDialog):
         tab_widget.addTab(asr_tab, "语音识别配置")
         
         self._asr_tab = asr_tab
+        
+        # ===== TTS 文本转语音配置标签页 =====
+        tts_tab = QWidget()
+        tts_tab_layout = QVBoxLayout(tts_tab)
+        tts_tab_layout.setContentsMargins(8, 8, 8, 8)
+        tts_tab_layout.setSpacing(12)
+        
+        tts_title = QLabel("TTS 文本转语音配置")
+        tts_title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        tts_tab_layout.addWidget(tts_title)
+        
+        # 说明文字
+        tts_info_label = QLabel("使用 sherpa-onnx VITS 中文模型进行本地文本转语音。\n模型体积约 50MB，内存占用约 80MB。\n首次加载时会自动下载模型到 PersonalData/model 目录。")
+        tts_info_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        tts_info_label.setWordWrap(True)
+        tts_tab_layout.addWidget(tts_info_label)
+        
+        # 模型信息
+        tts_model_group = QGroupBox("模型信息")
+        tts_model_layout = QVBoxLayout(tts_model_group)
+        
+        self._tts_model_status = QLabel()
+        self._tts_model_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        tts_model_layout.addWidget(self._tts_model_status)
+        
+        tts_model_path_label = QLabel("模型目录：PersonalData/model")
+        tts_model_path_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        tts_model_layout.addWidget(tts_model_path_label)
+        
+        tts_tab_layout.addWidget(tts_model_group)
+        
+        # 模型加载
+        tts_load_group = QGroupBox("模型加载")
+        tts_load_layout = QVBoxLayout(tts_load_group)
+        
+        self._tts_load_progress = QProgressBar()
+        self._tts_load_progress.setVisible(False)
+        tts_load_layout.addWidget(self._tts_load_progress)
+        
+        self._tts_load_status = QLabel()
+        self._tts_load_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        tts_load_layout.addWidget(self._tts_load_status)
+        
+        tts_load_btn_row = QHBoxLayout()
+        self._load_tts_btn = QPushButton("加载模型（首次会自动下载）")
+        self._load_tts_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._load_tts_btn.clicked.connect(self._on_load_tts_model)
+        tts_load_btn_row.addWidget(self._load_tts_btn)
+        
+        self._release_tts_btn = QPushButton("释放模型")
+        self._release_tts_btn.setObjectName("skillAgentSettingsDeleteConfigButton")
+        self._release_tts_btn.clicked.connect(self._on_release_tts_model)
+        tts_load_btn_row.addWidget(self._release_tts_btn)
+        
+        tts_load_btn_row.addStretch()
+        tts_load_layout.addLayout(tts_load_btn_row)
+        
+        tts_tab_layout.addWidget(tts_load_group)
+        
+        # 语音参数配置
+        tts_params_group = QGroupBox("语音参数")
+        tts_params_layout = QVBoxLayout(tts_params_group)
+        
+        # 说话人选择
+        speaker_row = QHBoxLayout()
+        speaker_label = QLabel("说话人：")
+        speaker_row.addWidget(speaker_label)
+        self._tts_speaker_combo = QComboBox()
+        self._tts_speaker_combo.addItem("默认", 0)
+        speaker_row.addWidget(self._tts_speaker_combo)
+        speaker_row.addStretch()
+        tts_params_layout.addLayout(speaker_row)
+        
+        # 语速调节
+        speed_row = QHBoxLayout()
+        speed_label = QLabel("语速：")
+        speed_row.addWidget(speed_label)
+        self._tts_speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self._tts_speed_slider.setMinimum(50)
+        self._tts_speed_slider.setMaximum(200)
+        self._tts_speed_slider.setValue(100)
+        self._tts_speed_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._tts_speed_slider.setTickInterval(25)
+        speed_row.addWidget(self._tts_speed_slider)
+        self._tts_speed_label = QLabel("1.0")
+        self._tts_speed_label.setMinimumWidth(40)
+        speed_row.addWidget(self._tts_speed_label)
+        self._tts_speed_slider.valueChanged.connect(self._on_tts_speed_changed)
+        tts_params_layout.addLayout(speed_row)
+        
+        # 保存参数按钮
+        save_params_btn = QPushButton("保存参数")
+        save_params_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        save_params_btn.clicked.connect(self._on_save_tts_params)
+        tts_params_layout.addWidget(save_params_btn)
+        
+        tts_tab_layout.addWidget(tts_params_group)
+        
+        # 测试朗读
+        tts_test_group = QGroupBox("测试朗读")
+        tts_test_layout = QVBoxLayout(tts_test_group)
+        
+        test_text_row = QHBoxLayout()
+        self._tts_test_text_edit = QLineEdit()
+        self._tts_test_text_edit.setPlaceholderText("输入测试文本，如：你好世界")
+        self._tts_test_text_edit.setText("你好，这是一个语音合成测试。")
+        test_text_row.addWidget(self._tts_test_text_edit)
+        tts_test_layout.addLayout(test_text_row)
+        
+        test_btn_row = QHBoxLayout()
+        self._tts_test_btn = QPushButton("开始朗读")
+        self._tts_test_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._tts_test_btn.clicked.connect(self._on_test_tts)
+        test_btn_row.addWidget(self._tts_test_btn)
+        
+        self._tts_stop_btn = QPushButton("停止朗读")
+        self._tts_stop_btn.setObjectName("skillAgentSettingsDeleteConfigButton")
+        self._tts_stop_btn.clicked.connect(self._on_stop_tts)
+        self._tts_stop_btn.setEnabled(False)
+        test_btn_row.addWidget(self._tts_stop_btn)
+        
+        test_btn_row.addStretch()
+        tts_test_layout.addLayout(test_btn_row)
+        
+        self._tts_test_status = QLabel()
+        self._tts_test_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        tts_test_layout.addWidget(self._tts_test_status)
+        
+        tts_tab_layout.addWidget(tts_test_group)
+        
+        tts_tab_layout.addStretch()
+        
+        tab_widget.addTab(tts_tab, "语音合成配置")
+        
+        self._tts_tab = tts_tab
 
         self._tab_widget = tab_widget
         layout.addWidget(tab_widget)
@@ -1548,6 +1684,7 @@ class SettingsDialog(QDialog):
         self._update_autostart_status()
         self._update_scheduled_task_show_window_status()
         self._refresh_asr_model_status()
+        self._refresh_tts_model_status()
     
     def _refresh_asr_model_status(self) -> None:
         """刷新 ASR 模型状态"""
@@ -1601,3 +1738,149 @@ class SettingsDialog(QDialog):
         self._asr_load_status.setText("模型已释放")
         QMessageBox.information(self, "提示", "模型已释放")
         self._refresh_asr_model_status()
+    
+    # ===== TTS 相关方法 =====
+    
+    def _refresh_tts_model_status(self) -> None:
+        """刷新 TTS 模型状态"""
+        from tts import is_tts_model_loaded, get_tts_model_path, get_num_speakers
+        is_loaded = is_tts_model_loaded()
+        model_path = get_tts_model_path()
+        num_speakers = get_num_speakers()
+        
+        if is_loaded:
+            self._tts_model_status.setText(f"状态：模型已加载（支持 {num_speakers} 个说话人）")
+            self._load_tts_btn.setEnabled(False)
+            self._release_tts_btn.setEnabled(True)
+            self._tts_test_btn.setEnabled(True)
+            
+            # 更新说话人选项
+            self._tts_speaker_combo.clear()
+            for i in range(num_speakers):
+                self._tts_speaker_combo.addItem(f"说话人 {i}", i)
+        else:
+            self._tts_model_status.setText("状态：模型未加载")
+            self._load_tts_btn.setEnabled(True)
+            self._release_tts_btn.setEnabled(False)
+            self._tts_test_btn.setEnabled(False)
+        
+        # 加载保存的参数
+        speaker_id = getattr(config, 'TTS_SPEAKER_ID', 0)
+        speed = getattr(config, 'TTS_SPEED', 1.0)
+        
+        idx = self._tts_speaker_combo.findData(speaker_id)
+        if idx >= 0:
+            self._tts_speaker_combo.setCurrentIndex(idx)
+        
+        self._tts_speed_slider.setValue(int(speed * 100))
+        self._tts_speed_label.setText(f"{speed:.1f}")
+    
+    def _on_tts_speed_changed(self, value: int) -> None:
+        """语速滑块值改变"""
+        speed = value / 100.0
+        self._tts_speed_label.setText(f"{speed:.1f}")
+    
+    def _on_load_tts_model(self) -> None:
+        """加载 TTS 模型"""
+        from tts import load_tts_model
+        
+        self._load_tts_btn.setEnabled(False)
+        self._release_tts_btn.setEnabled(False)
+        self._tts_load_progress.setVisible(True)
+        self._tts_load_progress.setValue(0)
+        self._tts_load_status.setText("正在加载模型...")
+        
+        try:
+            def load_callback(progress: int, status: str):
+                self._tts_load_progress.setValue(progress)
+                self._tts_load_status.setText(status)
+            
+            success = load_tts_model(callback=load_callback)
+            
+            self._tts_load_progress.setVisible(False)
+            
+            if success:
+                self._tts_load_status.setText("模型加载完成")
+                QMessageBox.information(self, "提示", "TTS 模型加载成功")
+            else:
+                self._tts_load_status.setText("加载失败")
+                QMessageBox.warning(self, "警告", "TTS 模型加载失败")
+            
+            self._refresh_tts_model_status()
+        except Exception as e:
+            logger.exception(f"加载 TTS 模型时发生异常: {e}")
+            self._tts_load_progress.setVisible(False)
+            self._tts_load_status.setText(f"加载失败: {str(e)}")
+            QMessageBox.warning(self, "警告", f"加载 TTS 模型时发生错误: {str(e)}")
+            self._refresh_tts_model_status()
+    
+    def _on_release_tts_model(self) -> None:
+        """释放 TTS 模型"""
+        from tts import release_tts_model
+        release_tts_model()
+        self._tts_load_status.setText("模型已释放")
+        QMessageBox.information(self, "提示", "TTS 模型已释放")
+        self._refresh_tts_model_status()
+    
+    def _on_save_tts_params(self) -> None:
+        """保存 TTS 参数"""
+        speaker_id = self._tts_speaker_combo.currentData()
+        speed = self._tts_speed_slider.value() / 100.0
+        
+        config.set_config("TTS_SPEAKER_ID", str(speaker_id))
+        config.set_config("TTS_SPEED", str(speed))
+        
+        config.TTS_SPEAKER_ID = speaker_id
+        config.TTS_SPEED = speed
+        
+        QMessageBox.information(self, "提示", "TTS 参数已保存")
+    
+    def _on_test_tts(self) -> None:
+        """测试朗读"""
+        from tts import speak_text, is_tts_model_loaded
+        
+        if not is_tts_model_loaded():
+            QMessageBox.warning(self, "警告", "请先加载 TTS 模型")
+            return
+        
+        text = self._tts_test_text_edit.text().strip()
+        if not text:
+            QMessageBox.warning(self, "警告", "请输入测试文本")
+            return
+        
+        speaker_id = self._tts_speaker_combo.currentData()
+        speed = self._tts_speed_slider.value() / 100.0
+        
+        self._tts_test_btn.setEnabled(False)
+        self._tts_stop_btn.setEnabled(True)
+        self._tts_test_status.setText("正在朗读...")
+        
+        def on_finished():
+            self._tts_test_btn.setEnabled(True)
+            self._tts_stop_btn.setEnabled(False)
+            self._tts_test_status.setText("朗读完成")
+        
+        self._tts_playing = True
+        
+        def _speak():
+            try:
+                speak_text(text, speaker_id, speed, on_finished)
+            except Exception as e:
+                logger.exception(f"朗读时发生错误: {e}")
+                self._tts_test_status.setText(f"朗读失败: {str(e)}")
+                on_finished()
+        
+        import threading
+        self._tts_thread = threading.Thread(target=_speak, daemon=True)
+        self._tts_thread.start()
+    
+    def _on_stop_tts(self) -> None:
+        """停止朗读"""
+        try:
+            import sounddevice as sd
+            sd.stop()
+            self._tts_test_btn.setEnabled(True)
+            self._tts_stop_btn.setEnabled(False)
+            self._tts_test_status.setText("朗读已停止")
+        except Exception as e:
+            logger.exception(f"停止朗读时发生错误: {e}")
