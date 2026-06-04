@@ -505,6 +505,75 @@ QPushButton#skillAgentStopButton:disabled {
   color: #1d4ed8;
 }
 
+#skillAgentSettingsDialog QTableWidget {
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  gridline-color: #e5e7eb;
+  alternate-background-color: #f9fafb;
+  selection-background-color: #e8f3ff;
+  selection-color: #2563eb;
+}
+
+#skillAgentSettingsDialog QTableWidget::item {
+  padding: 6px 8px;
+  border: none;
+}
+
+#skillAgentSettingsDialog QTableWidget::item:selected {
+  background-color: #e8f3ff;
+  color: #2563eb;
+}
+
+#skillAgentSettingsDialog QHeaderView::section {
+  background-color: #f9fafb;
+  color: #374151;
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid #e5e7eb;
+  font-weight: 600;
+}
+
+#skillAgentSettingsDialog QHeaderView::section:first {
+  border-top-left-radius: 6px;
+}
+
+#skillAgentSettingsDialog QHeaderView::section:last {
+  border-top-right-radius: 6px;
+}
+
+#skillAgentSettingsDialog QComboBox {
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 6px 32px 6px 12px;
+  min-height: 30px;
+}
+
+#skillAgentSettingsDialog QComboBox:hover {
+  border-color: #93c5fd;
+}
+
+#skillAgentSettingsDialog QComboBox:focus {
+  border-color: #93c5fd;
+  outline: none;
+}
+
+#skillAgentSettingsDialog QComboBox::drop-down {
+  border: none;
+  width: 30px;
+}
+
+#skillAgentSettingsDialog QComboBox QAbstractItemView {
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 4px;
+  selection-background-color: #e8f3ff;
+  selection-color: #2563eb;
+}
+
 /* -------------------------------------------------------------------------
  * 组件：ChatSessionTab / 会话聊天区 — QTextEdit 控件级样式（Qt Style Sheet）
  * ------------------------------------------------------------------------- */

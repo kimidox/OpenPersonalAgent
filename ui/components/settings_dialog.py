@@ -782,7 +782,15 @@ class SettingsDialog(QDialog):
         # 第二个页签：Skill管理
         skills_tab = QWidget()
         skills_tab_layout = QVBoxLayout(skills_tab)
-        skills_tab_layout.setContentsMargins(0, 0, 0, 0)
+        skills_tab_layout.setContentsMargins(8, 8, 8, 8)
+        skills_tab_layout.setSpacing(12)
+        
+        skills_title = QLabel("Skill 管理")
+        skills_title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        skills_tab_layout.addWidget(skills_title)
+        
+        skills_list_group = QGroupBox("已加载 Skill 列表")
+        skills_list_layout = QVBoxLayout(skills_list_group)
         
         self._skills_scroll = QScrollArea()
         self._skills_scroll.setWidgetResizable(True)
@@ -792,20 +800,30 @@ class SettingsDialog(QDialog):
         self._skills_layout.setContentsMargins(8, 8, 8, 8)
         self._skills_layout.setSpacing(6)
         self._skills_scroll.setWidget(self._skills_inner)
-        skills_tab_layout.addWidget(self._skills_scroll)
+        skills_list_layout.addWidget(self._skills_scroll)
+        
+        skills_tab_layout.addWidget(skills_list_group)
         
         tab_widget.addTab(skills_tab, "Skill管理")
 
         self._tasks_tab = QWidget()
         tasks_tab_layout = QVBoxLayout(self._tasks_tab)
         tasks_tab_layout.setContentsMargins(8, 8, 8, 8)
-        tasks_tab_layout.setSpacing(8)
+        tasks_tab_layout.setSpacing(12)
+
+        tasks_title = QLabel("定时任务管理")
+        tasks_title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        tasks_tab_layout.addWidget(tasks_title)
+
+        task_list_group = QGroupBox("任务列表")
+        task_list_layout = QVBoxLayout(task_list_group)
 
         filter_layout = QHBoxLayout()
         filter_label = QLabel("状态筛选：")
         filter_label.setFont(QFont("Microsoft YaHei", 9))
         filter_layout.addWidget(filter_label)
         self._task_status_filter = QComboBox()
+        self._task_status_filter.setObjectName("skillAgentSettingsTaskFilter")
         self._task_status_filter.addItem("全部", "all")
         self._task_status_filter.addItem("待触发", "pending")
         self._task_status_filter.addItem("已触发", "triggered")
@@ -813,9 +831,10 @@ class SettingsDialog(QDialog):
         self._task_status_filter.currentIndexChanged.connect(self._on_task_filter_changed)
         filter_layout.addWidget(self._task_status_filter)
         filter_layout.addStretch()
-        tasks_tab_layout.addLayout(filter_layout)
+        task_list_layout.addLayout(filter_layout)
 
         self._task_table = QTableWidget()
+        self._task_table.setObjectName("skillAgentSettingsTaskTable")
         self._task_table.setColumnCount(8)
         self._task_table.setHorizontalHeaderLabels([
             "标题", "内容", "触发时间", "重复类型", "执行方式", "通知方式", "状态", "操作"
@@ -827,11 +846,14 @@ class SettingsDialog(QDialog):
         self._task_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
         self._task_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
         self._task_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Interactive)
+        self._task_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Interactive)
         self._task_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._task_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._task_table.setAlternatingRowColors(True)
+        self._task_table.verticalHeader().setVisible(False)
+        self._task_table.verticalHeader().setDefaultSectionSize(45)
         self._task_table.itemSelectionChanged.connect(self._update_task_button_states)
-        tasks_tab_layout.addWidget(self._task_table)
+        task_list_layout.addWidget(self._task_table)
 
         task_btn_layout = QHBoxLayout()
         self._add_task_btn = QPushButton("添加任务")
@@ -852,7 +874,9 @@ class SettingsDialog(QDialog):
         task_btn_layout.addWidget(self._delete_task_btn)
 
         task_btn_layout.addStretch()
-        tasks_tab_layout.addLayout(task_btn_layout)
+        task_list_layout.addLayout(task_btn_layout)
+
+        tasks_tab_layout.addWidget(task_list_group)
 
         autostart_group = QGroupBox("开机自启动设置")
         autostart_layout = QVBoxLayout(autostart_group)
@@ -902,6 +926,7 @@ class SettingsDialog(QDialog):
         select_row.addWidget(select_label)
         
         self._whisper_model_combo = QComboBox()
+        self._whisper_model_combo.setObjectName("skillAgentSettingsModelSelect")
         for model_size in get_available_model_sizes():
             info = get_model_info(model_size)
             self._whisper_model_combo.addItem(
@@ -931,10 +956,12 @@ class SettingsDialog(QDialog):
         
         switch_btn_row = QHBoxLayout()
         self._switch_whisper_btn = QPushButton("切换到此模型")
+        self._switch_whisper_btn.setObjectName("skillAgentSettingsAddConfigButton")
         self._switch_whisper_btn.clicked.connect(self._on_switch_whisper_model)
         switch_btn_row.addWidget(self._switch_whisper_btn)
         
         self._load_whisper_btn = QPushButton("加载模型")
+        self._load_whisper_btn.setObjectName("skillAgentSettingsAddConfigButton")
         self._load_whisper_btn.clicked.connect(self._on_load_whisper_model)
         switch_btn_row.addWidget(self._load_whisper_btn)
         
@@ -951,6 +978,7 @@ class SettingsDialog(QDialog):
         download_row.addWidget(download_label)
         
         self._download_whisper_combo = QComboBox()
+        self._download_whisper_combo.setObjectName("skillAgentSettingsDownloadSelect")
         for model_size in get_available_model_sizes():
             info = get_model_info(model_size)
             status = "✓ 已下载" if is_model_downloaded(model_size) else "未下载"
@@ -972,10 +1000,12 @@ class SettingsDialog(QDialog):
         
         download_btn_row = QHBoxLayout()
         self._download_whisper_btn = QPushButton("下载模型")
+        self._download_whisper_btn.setObjectName("skillAgentSettingsAddConfigButton")
         self._download_whisper_btn.clicked.connect(self._on_download_whisper_model)
         download_btn_row.addWidget(self._download_whisper_btn)
         
         self._refresh_whisper_btn = QPushButton("刷新状态")
+        self._refresh_whisper_btn.setObjectName("skillAgentSettingsMoveUpButton")
         self._refresh_whisper_btn.clicked.connect(self._refresh_whisper_models)
         download_btn_row.addWidget(self._refresh_whisper_btn)
         download_btn_row.addStretch()
@@ -1345,13 +1375,13 @@ class SettingsDialog(QDialog):
             row.addWidget(name_lab, stretch=1)
             
             edit_btn = QPushButton("编辑")
-            edit_btn.setFixedSize(50, 24)
+            edit_btn.setObjectName("skillAgentSettingsAddConfigButton")
             edit_btn.clicked.connect(lambda _, _sid=sid, _s=s: self._on_edit_skill(_sid, _s))
             row.addWidget(edit_btn)
             
             if skill_type != "builtin":
                 delete_btn = QPushButton("删除")
-                delete_btn.setFixedSize(50, 24)
+                delete_btn.setObjectName("skillAgentSettingsDeleteConfigButton")
                 delete_btn.clicked.connect(lambda _, _sid=sid, _s=s: self._on_delete_skill(_sid, _s))
                 row.addWidget(delete_btn)
             
@@ -1426,16 +1456,20 @@ class SettingsDialog(QDialog):
 
             action_widget = QWidget()
             action_layout = QHBoxLayout(action_widget)
-            action_layout.setContentsMargins(4, 2, 4, 2)
-            action_layout.setSpacing(4)
+            action_layout.setContentsMargins(4, 4, 4, 4)
+            action_layout.setSpacing(10)
 
             edit_btn = QPushButton("编辑")
-            edit_btn.setFixedSize(50, 24)
+            edit_btn.setObjectName("skillAgentSettingsAddConfigButton")
+            edit_btn.setMinimumWidth(70)
+            edit_btn.setMinimumHeight(32)
             edit_btn.clicked.connect(lambda _, t=task: self._edit_task_direct(t))
             action_layout.addWidget(edit_btn)
 
             cancel_btn = QPushButton("取消")
-            cancel_btn.setFixedSize(50, 24)
+            cancel_btn.setObjectName("skillAgentSettingsDeleteConfigButton")
+            cancel_btn.setMinimumWidth(70)
+            cancel_btn.setMinimumHeight(32)
             cancel_btn.clicked.connect(lambda _, t=task: self._cancel_task_direct(t))
             if task.status != "pending":
                 cancel_btn.setEnabled(False)
