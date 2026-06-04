@@ -98,6 +98,16 @@ class SkillAgentMainWindow(QMainWindow):
         self._floating_ball = floating_ball
         self._logger.info(f"MainWindow.set_floating_ball() 调用，当前 isVisible() = {self.isVisible()}")
         # 不在这里设置显示/隐藏，让 showEvent/hideEvent 来处理
+        # 连接悬浮球的模型未加载警告信号
+        self._floating_ball.show_model_not_loaded_warning.connect(self._on_show_model_not_loaded_warning)
+    
+    def _on_show_model_not_loaded_warning(self):
+        """显示模型未加载的警告"""
+        QMessageBox.warning(
+            self, 
+            "提示", 
+            "语音模型未加载，请先在设置页面点击「加载模型」按钮加载模型，然后再使用录音功能。"
+        )
     
     def _on_floating_ball_send_message(self, text: str):
         """处理来自悬浮球的消息发送请求"""
@@ -203,6 +213,7 @@ class SkillAgentMainWindow(QMainWindow):
     
     def _toggle_tray_recording(self) -> None:
         """切换托盘录音状态"""
+        from recorder import is_model_loaded
         recorder = get_recorder()
         
         if recorder.is_recording:
@@ -212,6 +223,14 @@ class SkillAgentMainWindow(QMainWindow):
             if audio_path:
                 self._process_recording_for_conversation(audio_path)
         else:
+            # 在开始录音前先检查模型是否已加载
+            if not is_model_loaded():
+                QMessageBox.warning(
+                    self, 
+                    "提示", 
+                    "语音模型未加载，请先在设置页面点击「加载模型」按钮加载模型，然后再使用录音功能。"
+                )
+                return
             success = recorder.start_recording()
             if success:
                 self._tray_recording_action.setText("停止录音")
@@ -227,9 +246,17 @@ class SkillAgentMainWindow(QMainWindow):
             return
         self._last_processed_recording = audio_path_str
         
+        from recorder import is_model_loaded
         recorder = get_recorder()
         if not text:
             self._logger.info("text 为空，调用 transcribe_audio 进行转译")
+            if not is_model_loaded():
+                QMessageBox.warning(
+                    self, 
+                    "提示", 
+                    "语音模型未加载，请先在设置页面点击「加载模型」按钮加载模型，然后再使用录音功能。"
+                )
+                return
             text = recorder.transcribe_audio(audio_path)
         
         if not text:
