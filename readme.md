@@ -660,6 +660,76 @@ python main.py
 
 ---
 
+## 🎙️ Voice Features & Model Download
+
+This project supports local voice recognition (ASR) and text-to-speech (TTS) using sherpa-onnx ONNX models. Models are **external to the package** to reduce distribution size.
+
+### Available Models
+
+| Model | Type | Size | Description |
+|-------|------|------|-------------|
+| **sherpa-onnx-paraformer-zh-int8** | ASR | ~80 MB | Chinese speech recognition (INT8 quantized) |
+| **sherpa-onnx-vits-zh-ll** | TTS (zh) | ~150 MB | Chinese TTS with 5 voice options |
+| **vits-melo-tts-zh_en** | TTS (zh_en) | ~200 MB | Chinese-English mixed TTS |
+
+### Download Models
+
+#### Method 1: Using Download Script (Recommended)
+
+```bash
+# Download default models (ASR + Chinese TTS)
+python download_models.py
+
+# Download ASR model only
+python download_models.py --asr
+
+# Download TTS model (Chinese by default)
+python download_models.py --tts
+
+# Download Chinese TTS model
+python download_models.py --tts zh
+
+# Download Chinese-English TTS model
+python download_models.py --tts zh_en
+
+# Download all models
+python download_models.py --all
+
+# Check downloaded models
+python download_models.py --check
+
+# List available models
+python download_models.py --list
+```
+
+#### Method 2: Auto-Download on First Use
+
+When you first use voice features, the program will automatically download models if:
+- `ASR_AUTO_DOWNLOAD=true` (default)
+- `TTS_AUTO_DOWNLOAD=true` (default)
+
+#### Method 3: Manual Download
+
+Download from GitHub and extract to `PersonalData/model/`:
+- ASR: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-int8-2025-10-07.tar.bz2
+- TTS (zh): https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-vits-zh-ll.tar.bz2
+- TTS (zh_en): https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts-zh_en.tar.bz2
+
+### Model Storage Location
+
+- **Development mode**: `PersonalData/model/`
+- **Bundled exe**: `%APPDATA%/OpenPersonalAgent/model/`
+
+### Detailed Documentation
+
+See [MODEL_DOWNLOAD.md](./MODEL_DOWNLOAD.md) for:
+- Complete model introduction
+- Configuration options
+- Voice selection guide
+- FAQ and troubleshooting
+
+---
+
 ## 🎨 Interface Preview
 
 ![SkillAgent Main Interface](doc/img_1.png)

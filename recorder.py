@@ -96,19 +96,23 @@ def download_onnx_model(callback: Callable[[int, str], None] = None) -> Optional
         return None
 
 
-def load_onnx_model(model_path: str = None, callback: Callable[[int, str], None] = None, auto_download: bool = True) -> bool:
+def load_onnx_model(model_path: str = None, callback: Callable[[int, str], None] = None, auto_download: bool = None) -> bool:
     """
     加载 sherpa-onnx ONNX 模型
     
     Args:
         model_path: ONNX 模型目录路径，默认使用配置中的值或自动下载
         callback: 进度回调函数 (progress: int, status: str)
-        auto_download: 是否在模型不存在时自动下载
+        auto_download: 是否在模型不存在时自动下载，默认使用配置中的值
     
     Returns:
         是否加载成功
     """
     global _onnx_recognizer, _onnx_model_path
+    
+    # 如果没有指定 auto_download，使用配置中的值
+    if auto_download is None:
+        auto_download = getattr(config, 'ASR_AUTO_DOWNLOAD', True)
     
     # 如果没有指定路径，尝试使用配置或默认目录
     if model_path is None:

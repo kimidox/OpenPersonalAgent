@@ -121,7 +121,7 @@ def download_tts_model(model_type: str = "zh", callback: Callable[[int, str], No
         return None
 
 
-def load_tts_model(model_path: str = None, model_type: str = None, callback: Callable[[int, str], None] = None, auto_download: bool = True) -> bool:
+def load_tts_model(model_path: str = None, model_type: str = None, callback: Callable[[int, str], None] = None, auto_download: bool = None) -> bool:
     """
     加载 sherpa-onnx TTS 模型
     
@@ -129,12 +129,16 @@ def load_tts_model(model_path: str = None, model_type: str = None, callback: Cal
         model_path: TTS 模型目录路径，默认使用配置中的值或自动下载
         model_type: 模型类型，"zh"（中文）或 "zh_en"（中英文），仅在自动下载时使用
         callback: 进度回调函数 (progress: int, status: str)
-        auto_download: 是否在模型不存在时自动下载
+        auto_download: 是否在模型不存在时自动下载，默认使用配置中的值
     
     Returns:
         是否加载成功
     """
     global _tts_engine, _tts_model_path
+    
+    # 如果没有指定 auto_download，使用配置中的值
+    if auto_download is None:
+        auto_download = getattr(config, 'TTS_AUTO_DOWNLOAD', True)
     
     # 如果没有指定模型类型，使用配置中的值或默认值
     if model_type is None:

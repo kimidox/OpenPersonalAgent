@@ -646,7 +646,7 @@ pip install -r requirements.txt
 # 方式1：直接运行
 python main.py
 
-# 方式2：打包为exe（见build.bat）
+# 方式2：打包为exe（见下方打包说明）
 # 打包后的exe使用 %APPDATA%/OpenPersonalAgent/ 存储用户数据
 ```
 
@@ -657,6 +657,175 @@ python main.py
 4. 虚拟环境自动创建在 `PersonalData/venv/`
 5. 在左侧Skill列表查看可用技能
 6. 输入问题开始对话
+
+---
+
+## 📦 打包发布
+
+### 打包方式
+
+项目提供两种打包方式：
+
+| 方式 | 特点 | 适用场景 | 体积 |
+|------|------|----------|------|
+| **目录模式 (onedir)** | 启动快，支持UPX压缩 | 本地部署、日常使用 | 100-200 MB |
+| **单文件模式 (onefile)** | 单exe文件，便于分发 | 远程分发、便携使用 | 150-180 MB |
+
+### 打包步骤
+
+#### 1. 安装打包依赖
+
+```bash
+pip install pyinstaller
+```
+
+#### 2. 安装UPX压缩工具（可选）
+
+UPX可以显著减小打包体积（约30-50%压缩率）：
+
+**下载地址**: https://github.com/upx/upx/releases
+
+**安装步骤**:
+1. 下载最新版本的UPX（如 `upx-4.2.2-win64.zip`）
+2. 解压到任意目录（如 `C:\upx`）
+3. 将UPX目录添加到系统PATH环境变量
+4. 或在spec文件中指定UPX路径：`upx_dir = r'C:\upx'`
+
+**验证安装**:
+```bash
+upx --version
+```
+
+#### 3. 运行打包脚本
+
+```bash
+# 运行打包工具
+build.bat
+
+# 选择打包方式：
+# 1 - 目录模式（启用UPX，推荐）
+# 2 - 单文件模式
+# 3 - 目录模式（禁用UPX）
+```
+
+#### 4. 打包结果
+
+- **目录模式**: `dist/OpenPersonalAgent/` 目录
+- **单文件模式**: `dist/OpenPersonalAgent.exe` 文件
+
+### 模型外置说明
+
+**重要**: ASR/TTS模型不打包进exe，运行时自动下载。
+
+| 模型 | 类型 | 大小 | 下载时机 |
+|------|------|------|----------|
+| sherpa-onnx-paraformer-zh-int8 | ASR | ~80 MB | 首次使用语音识别 |
+| sherpa-onnx-vits-zh-ll | TTS (中文) | ~150 MB | 首次使用TTS |
+| vits-melo-tts-zh_en | TTS (中英文) | ~200 MB | 切换到中英文TTS |
+
+**模型存储位置**:
+- 打包exe: `%APPDATA%/OpenPersonalAgent/model/`
+- 开发模式: `PersonalData/model/`
+
+### 提前下载模型
+
+为避免首次运行时等待下载，可以提前下载模型：
+
+```bash
+# 下载所有模型
+python download_models.py --all
+
+# 打包后手动复制模型目录到用户数据目录
+# %APPDATA%/OpenPersonalAgent/model/
+```
+
+### 打包体积优化
+
+| 优化措施 | 效果 | 说明 |
+|----------|------|------|
+| 模型外置 | 减少 ~430 MB | 模型运行时下载 |
+| UPX压缩 | 减少 ~30-50% | 需安装UPX工具 |
+| 排除不必要模块 | 减少 ~50 MB | spec文件已配置 |
+| 排除日志/录音 | 减少 ~不定 | 用户数据不打包 |
+
+### 详细打包指南
+
+查看 [PACKAGING_GUIDE.md](./PACKAGING_GUIDE.md) 了解：
+- 完整打包流程详解
+- UPX压缩配置说明
+- 模型外置机制详解
+- 依赖优化技巧
+- 常见问题解答
+
+---
+
+## 🎙️ 语音功能与模型下载
+
+本项目支持使用 sherpa-onnx ONNX 模型进行本地语音识别（ASR）和文本转语音（TTS）。模型**外置存储**，大幅减小打包体积。
+
+### 可用模型
+
+| 模型 | 类型 | 大小 | 说明 |
+|------|------|------|------|
+| **sherpa-onnx-paraformer-zh-int8** | ASR | ~80 MB | 中文语音识别（INT8量化） |
+| **sherpa-onnx-vits-zh-ll** | TTS (zh) | ~150 MB | 中文TTS，5个音色可选 |
+| **vits-melo-tts-zh_en** | TTS (zh_en) | ~200 MB | 中英文混合TTS |
+
+### 模型下载方法
+
+#### 方法一：使用下载脚本（推荐）
+
+```bash
+# 下载默认模型（ASR + 中文TTS）
+python download_models.py
+
+# 仅下载 ASR 模型
+python download_models.py --asr
+
+# 仅下载 TTS 模型（默认中文）
+python download_models.py --tts
+
+# 下载中文 TTS 模型
+python download_models.py --tts zh
+
+# 下载中英文 TTS 模型
+python download_models.py --tts zh_en
+
+# 下载所有模型
+python download_models.py --all
+
+# 检查已下载的模型
+python download_models.py --check
+
+# 列出可用的模型
+python download_models.py --list
+```
+
+#### 方法二：首次使用时自动下载
+
+首次使用语音功能时，程序会自动下载模型（如果启用）：
+- `ASR_AUTO_DOWNLOAD=true`（默认启用）
+- `TTS_AUTO_DOWNLOAD=true`（默认启用）
+
+#### 方法三：手动下载
+
+从 GitHub 下载并解压到 `PersonalData/model/` 目录：
+- ASR: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-int8-2025-10-07.tar.bz2
+- TTS (zh): https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-vits-zh-ll.tar.bz2
+- TTS (zh_en): https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts-zh_en.tar.bz2
+
+### 模型存储位置
+
+- **开发模式**: `PersonalData/model/`
+- **打包exe**: `%APPDATA%/OpenPersonalAgent/model/`
+
+### 详细文档
+
+查看 [MODEL_DOWNLOAD.md](./MODEL_DOWNLOAD.md) 了解：
+- 完整模型介绍
+- 配置选项说明
+- 音色选择指南
+- 常见问题解答
 
 ---
 

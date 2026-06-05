@@ -280,6 +280,10 @@ ASR_ONNX_MODEL_PATH = _asr_onnx if _asr_onnx not in (None, "") else ""
 _asr_auto_load = get_config("ASR_AUTO_LOAD")
 ASR_AUTO_LOAD = _asr_auto_load.lower() in ("true", "1", "yes") if _asr_auto_load not in (None, "") else False
 
+# 模型不存在时是否自动下载（默认 True）
+_asr_auto_download = get_config("ASR_AUTO_DOWNLOAD")
+ASR_AUTO_DOWNLOAD = _env_bool(_asr_auto_download, True)
+
 # ===== TTS 文本转语音模型配置 =====
 
 # TTS 模型类型（zh=中文，zh_en=中英文）
@@ -301,3 +305,7 @@ TTS_SPEED = float(_tts_speed) if _tts_speed not in (None, "") else 1.0
 # 程序启动自动加载 TTS 模型
 _tts_auto_load = get_config("TTS_AUTO_LOAD")
 TTS_AUTO_LOAD = _tts_auto_load.lower() in ("true", "1", "yes") if _tts_auto_load not in (None, "") else False
+
+# 模型不存在时是否自动下载（默认 True）
+_tts_auto_download = get_config("TTS_AUTO_DOWNLOAD")
+TTS_AUTO_DOWNLOAD = _env_bool(_tts_auto_download, True)
