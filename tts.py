@@ -19,9 +19,26 @@ logger = get_module_logger("tts")
 _tts_engine = None
 _tts_model_path = None
 
-# 默认模型下载配置
-DEFAULT_TTS_MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-vits-zh-ll.tar.bz2"
-DEFAULT_TTS_MODEL_NAME = "sherpa-onnx-vits-zh-ll"
+# 可用的 TTS 模型配置
+TTS_MODEL_OPTIONS = {
+    "zh": {
+        "name": "中文模型（sherpa-onnx-vits-zh-ll）",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-vits-zh-ll.tar.bz2",
+        "model_name": "sherpa-onnx-vits-zh-ll",
+        "description": "纯中文模型，5个音色",
+        "speakers": ["苏映雪（女声）", "顾念（女声）", "付思雨（女声）", "冰娇（女声）", "巴总（男声）"]
+    },
+    "zh_en": {
+        "name": "中英文模型（vits-melo-tts-zh_en）",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts-zh_en.tar.bz2",
+        "model_name": "vits-melo-tts-zh_en",
+        "description": "支持中英文混合朗读",
+        "speakers": ["默认音色"]
+    }
+}
+
+# 默认模型类型
+DEFAULT_TTS_MODEL_TYPE = "zh"
 
 
 def get_default_tts_model_dir() -> Path:
@@ -31,18 +48,27 @@ def get_default_tts_model_dir() -> Path:
     return model_dir
 
 
-def download_tts_model(callback: Callable[[int, str], None] = None) -> Optional[Path]:
+def download_tts_model(model_type: str = "zh", callback: Callable[[int, str], None] = None) -> Optional[Path]:
     """
     自动下载 TTS 模型到 PersonalData/model 目录
     
     Args:
+        model_type: 模型类型，"zh"（中文）或 "zh_en"（中英文）
         callback: 进度回调函数 (progress: int, status: str)
     
     Returns:
         模型目录路径，如果失败则返回 None
     """
+    if model_type not in TTS_MODEL_OPTIONS:
+        logger.error(f"不支持的模型类型: {model_type}")
+        return None
+    
+    model_config = TTS_MODEL_OPTIONS[model_type]
+    model_url = model_config["url"]
+    model_name = model_config["model_name"]
+    
     model_dir = get_default_tts_model_dir()
-    target_dir = model_dir / DEFAULT_TTS_MODEL_NAME
+    target_dir = model_dir / model_name
     
     # 如果模型已存在，直接返回
     if target_dir.exists():
@@ -53,27 +79,27 @@ def download_tts_model(callback: Callable[[int, str], None] = None) -> Optional[
             return target_dir
     
     if callback:
-        callback(5, "正在准备下载 TTS 模型...")
+        callback(5, f"正在准备下载 {model_config['name']}...")
     
     logger.info(f"开始下载 TTS 模型到: {model_dir}")
     
     try:
         # 下载压缩包
-        tar_path = model_dir / f"{DEFAULT_TTS_MODEL_NAME}.tar.bz2"
+        tar_path = model_dir / f"{model_name}.tar.bz2"
         
         if callback:
-            callback(10, "正在下载 TTS 模型文件（约 50MB）...")
+            callback(10, f"正在下载 {model_config['name']}...")
         
         def download_progress(block_num, block_size, total_size):
             if total_size > 0:
                 progress = int(10 + (block_num * block_size / total_size) * 50)
                 if callback and progress <= 60:
-                    callback(progress, f"正在下载 TTS 模型文件...")
+                    callback(progress, f"正在下载 {model_config['name']}...")
         
-        urllib.request.urlretrieve(DEFAULT_TTS_MODEL_URL, tar_path, download_progress)
+        urllib.request.urlretrieve(model_url, tar_path, download_progress)
         
         if callback:
-            callback(65, "正在解压 TTS 模型文件...")
+            callback(65, "正在解压模型文件...")
         
         # 解压
         with tarfile.open(tar_path, 'r:bz2') as tar:
@@ -83,7 +109,7 @@ def download_tts_model(callback: Callable[[int, str], None] = None) -> Optional[
         tar_path.unlink()
         
         if callback:
-            callback(95, "TTS 模型下载完成")
+            callback(95, f"{model_config['name']}下载完成")
         
         logger.info(f"TTS 模型下载并解压完成: {target_dir}")
         return target_dir
@@ -95,12 +121,13 @@ def download_tts_model(callback: Callable[[int, str], None] = None) -> Optional[
         return None
 
 
-def load_tts_model(model_path: str = None, callback: Callable[[int, str], None] = None, auto_download: bool = True) -> bool:
+def load_tts_model(model_path: str = None, model_type: str = None, callback: Callable[[int, str], None] = None, auto_download: bool = True) -> bool:
     """
     加载 sherpa-onnx TTS 模型
     
     Args:
         model_path: TTS 模型目录路径，默认使用配置中的值或自动下载
+        model_type: 模型类型，"zh"（中文）或 "zh_en"（中英文），仅在自动下载时使用
         callback: 进度回调函数 (progress: int, status: str)
         auto_download: 是否在模型不存在时自动下载
     
@@ -109,20 +136,25 @@ def load_tts_model(model_path: str = None, callback: Callable[[int, str], None] 
     """
     global _tts_engine, _tts_model_path
     
+    # 如果没有指定模型类型，使用配置中的值或默认值
+    if model_type is None:
+        model_type = getattr(config, 'TTS_MODEL_TYPE', DEFAULT_TTS_MODEL_TYPE)
+    
     # 如果没有指定路径，尝试使用配置或默认目录
     if model_path is None:
         model_path = getattr(config, 'TTS_MODEL_PATH', '')
         
         # 如果配置中没有路径，使用默认目录
         if not model_path and auto_download:
-            default_dir = get_default_tts_model_dir() / DEFAULT_TTS_MODEL_NAME
+            model_config = TTS_MODEL_OPTIONS.get(model_type, TTS_MODEL_OPTIONS[DEFAULT_TTS_MODEL_TYPE])
+            default_dir = get_default_tts_model_dir() / model_config["model_name"]
             if default_dir.exists():
                 model_path = str(default_dir)
             else:
                 # 自动下载模型
                 if callback:
-                    callback(0, "TTS 模型未找到，正在自动下载...")
-                downloaded_path = download_tts_model(callback)
+                    callback(0, f"TTS 模型未找到，正在自动下载 {model_config['name']}...")
+                downloaded_path = download_tts_model(model_type, callback)
                 if downloaded_path:
                     model_path = str(downloaded_path)
                     # 保存到配置
@@ -143,7 +175,7 @@ def load_tts_model(model_path: str = None, callback: Callable[[int, str], None] 
     if not model_path.exists() and auto_download:
         if callback:
             callback(0, "TTS 模型目录不存在，正在自动下载...")
-        downloaded_path = download_tts_model(callback)
+        downloaded_path = download_tts_model(model_type, callback)
         if downloaded_path:
             model_path = downloaded_path
         else:
@@ -164,7 +196,7 @@ def load_tts_model(model_path: str = None, callback: Callable[[int, str], None] 
         if callback:
             callback(80, "正在加载 TTS 模型...")
         
-        # 查找模型文件
+        # 查找模型文件，优先使用非量化版本
         onnx_files = list(model_path.glob("*.onnx"))
         if not onnx_files:
             if callback:
@@ -172,8 +204,25 @@ def load_tts_model(model_path: str = None, callback: Callable[[int, str], None] 
             logger.error(f"未找到 TTS ONNX 模型文件: {model_path}")
             return False
         
-        # 使用第一个 ONNX 文件
-        model_file = onnx_files[0]
+        # 优先选择 model.onnx（非量化版本），如果没有则使用其他版本
+        model_file = None
+        for f in onnx_files:
+            if f.name == "model.onnx":
+                model_file = f
+                break
+        
+        # 如果没有找到 model.onnx，尝试使用 model.int8.onnx 或其他
+        if model_file is None:
+            for f in onnx_files:
+                if "int8" not in f.name.lower():
+                    model_file = f
+                    break
+        
+        # 最后才使用 int8 版本
+        if model_file is None:
+            model_file = onnx_files[0]
+        
+        logger.info(f"使用模型文件: {model_file.name}")
         
         # 查找 tokens.txt 文件
         tokens_file = model_path / "tokens.txt"
