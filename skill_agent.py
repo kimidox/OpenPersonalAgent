@@ -207,7 +207,7 @@ class SkillAgent:
         conv_type = self._get_conversation_type()
         skills_visible = self._get_skills_for_conversation_type(conv_type)
         catalog = build_skills_catalog_text(skills_visible)
-        
+
         # 获取当前的 active skills
         active_skill_text: list[str] = []
         active_skill_ids: list[str] = []
@@ -220,15 +220,18 @@ class SkillAgent:
                         formatted_skill = format_skill_for_prompt(skill)
                         active_skill_text.append(formatted_skill)
                         active_skill_ids.append(sid)
-        
+
+        # 根据会话类型设置模板
+        self._dynamic_prompt.set_template_for_conversation_type(conv_type)
+
         new_system_prompt = self._build_dynamic_system_prompt(
-            catalog, 
+            catalog,
             active_skill_text=active_skill_text if active_skill_text else None,
             active_skill_ids=active_skill_ids if active_skill_ids else None,
             user_query=self._last_user_query
         )
-        
-        print(f"[DEBUG-exec] 更新系统提示词：{new_system_prompt}")
+
+        print(f"[DEBUG-exec] 更新系统提示词（会话类型: {conv_type}）：{new_system_prompt[:200]}...")
         if messages and messages[0].get("role") == "system":
             messages[0]["content"] = new_system_prompt
         else:
@@ -300,6 +303,10 @@ class SkillAgent:
         user_query: str | None = None,
         tool_catalog: str | None = None,
     ) -> str:
+        # 根据会话类型设置模板
+        conv_type = self._get_conversation_type()
+        self._dynamic_prompt.set_template_for_conversation_type(conv_type)
+
         self._dynamic_prompt.clear_all_placeholders()
         base_info=self.get_base_info()
         self._dynamic_prompt.update_base_info(base_info)
@@ -333,7 +340,7 @@ class SkillAgent:
         if self.memory is None:
             self._conversation_id = ""
             return (self._conversation_id, "")
-        
+
         # 如果没有传入 default_skills，就从全局配置中加载该会话类型的默认技能
         if default_skills is None:
             from skill_agent_preferences import get_default_skills_for_type
@@ -344,7 +351,7 @@ class SkillAgent:
                 if skill:
                     skill_name = getattr(skill, "name", skill_id)
                     default_skills.append({"id": skill_id, "name": skill_name})
-        
+
         self._conversation_id = str(uuid.uuid4())
         title = self.memory.ensure_conversation(
             self._conversation_id,
@@ -352,6 +359,10 @@ class SkillAgent:
             conversation_type=conversation_type,
             default_skills=default_skills
         )
+
+        # 根据会话类型设置模板
+        self._dynamic_prompt.set_template_for_conversation_type(conversation_type)
+
         return (self._conversation_id, title)
 
     def set_conversation_id(self, conversation_id: str) -> None:

@@ -928,15 +928,18 @@ class SkillAgentMainWindow(QMainWindow):
         
         dialog = QDialog(self)
         dialog.setWindowTitle("关闭确认")
-        dialog.setFixedSize(400, 150)
+        dialog.setFixedSize(500, 150)
         
         layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
         
         label = QLabel("请选择关闭方式：")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
         
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
         
         minimize_btn = QPushButton("最小化到托盘")
         minimize_btn.setObjectName("skillAgentCloseDialogMinimizeButton")
@@ -946,7 +949,7 @@ class SkillAgentMainWindow(QMainWindow):
 
         floating_btn = QPushButton("悬浮球模式")
         floating_btn.setObjectName("skillAgentCloseDialogFloatingButton")
-        floating_style = StyleManager.get_style("close_dialog_minimize_button")
+        floating_style = StyleManager.get_style("close_dialog_floating_button")
         if floating_style:
             floating_btn.setStyleSheet(floating_style)
 

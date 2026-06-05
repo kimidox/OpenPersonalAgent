@@ -77,6 +77,15 @@ from recorder import (
     get_onnx_model_path,
     get_recorder,
 )
+from prompt_template_config import (
+    get_template_for_conversation_type,
+    update_template_for_conversation_type,
+    reset_template_for_conversation_type,
+    get_all_placeholder_descriptions,
+    get_all_conversation_types_with_display_names,
+    validate_template,
+)
+from prompt.dynamic_prompt import DynamicSystemPrompt
 
 if TYPE_CHECKING:
     from skill_agent import SkillAgent
@@ -847,7 +856,7 @@ class SettingsDialog(QDialog):
         self._task_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._task_table.setAlternatingRowColors(True)
         self._task_table.verticalHeader().setVisible(False)
-        self._task_table.verticalHeader().setDefaultSectionSize(45)
+        self._task_table.verticalHeader().setDefaultSectionSize(50)
         self._task_table.itemSelectionChanged.connect(self._update_task_button_states)
         task_list_layout.addWidget(self._task_table)
 
@@ -1166,6 +1175,127 @@ class SettingsDialog(QDialog):
         tab_widget.addTab(tts_tab, "语音合成配置")
         
         self._tts_tab = tts_tab
+
+        # ===== 系统提示词配置标签页 =====
+        prompt_tab = QWidget()
+        prompt_tab_layout = QVBoxLayout(prompt_tab)
+        prompt_tab_layout.setContentsMargins(8, 8, 8, 8)
+        prompt_tab_layout.setSpacing(12)
+        
+        prompt_title = QLabel("系统提示词模板配置")
+        prompt_title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        prompt_tab_layout.addWidget(prompt_title)
+        
+        # 说明文字
+        prompt_info_label = QLabel(
+            "配置三种会话类型的系统提示词模板。\n"
+            "模板使用占位符（如 {BASE_INFO}）来动态填充内容。"
+        )
+        prompt_info_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        prompt_info_label.setWordWrap(True)
+        prompt_tab_layout.addWidget(prompt_info_label)
+        
+        # 会话类型选择
+        type_select_group = QGroupBox("会话类型选择")
+        type_select_layout = QHBoxLayout(type_select_group)
+        
+        type_label = QLabel("当前会话类型：")
+        type_select_layout.addWidget(type_label)
+        
+        self._prompt_type_combo = QComboBox()
+        conv_types = get_all_conversation_types_with_display_names()
+        for conv_type, display_name in conv_types.items():
+            self._prompt_type_combo.addItem(display_name, conv_type)
+        self._prompt_type_combo.currentIndexChanged.connect(self._on_prompt_type_changed)
+        type_select_layout.addWidget(self._prompt_type_combo)
+        type_select_layout.addStretch()
+        
+        prompt_tab_layout.addWidget(type_select_group)
+        
+        # 主编辑区域 - 使用分割器
+        prompt_splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # 左侧：模板编辑器
+        template_edit_group = QGroupBox("模板编辑器")
+        template_edit_layout = QVBoxLayout(template_edit_group)
+        
+        self._template_edit = QTextEdit()
+        self._template_edit.setFont(QFont("Consolas", 10))
+        self._template_edit.setPlaceholderText("在此编辑模板内容...")
+        self._template_edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        template_edit_layout.addWidget(self._template_edit)
+        
+        # 操作按钮
+        template_btn_layout = QHBoxLayout()
+        
+        self._save_template_btn = QPushButton("保存模板")
+        self._save_template_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._save_template_btn.clicked.connect(self._on_save_template)
+        template_btn_layout.addWidget(self._save_template_btn)
+        
+        self._reset_template_btn = QPushButton("重置为默认")
+        self._reset_template_btn.setObjectName("skillAgentSettingsDeleteConfigButton")
+        self._reset_template_btn.clicked.connect(self._on_reset_template)
+        template_btn_layout.addWidget(self._reset_template_btn)
+        
+        self._preview_template_btn = QPushButton("预览效果")
+        self._preview_template_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._preview_template_btn.clicked.connect(self._on_preview_template)
+        template_btn_layout.addWidget(self._preview_template_btn)
+        
+        template_btn_layout.addStretch()
+        template_edit_layout.addLayout(template_btn_layout)
+        
+        prompt_splitter.addWidget(template_edit_group)
+        
+        # 右侧：占位符列表
+        placeholder_group = QGroupBox("可用占位符")
+        placeholder_layout = QVBoxLayout(placeholder_group)
+        
+        placeholder_info = QLabel("以下占位符可在模板中使用：")
+        placeholder_info.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        placeholder_layout.addWidget(placeholder_info)
+        
+        self._placeholder_table = QTableWidget()
+        self._placeholder_table.setColumnCount(2)
+        self._placeholder_table.setHorizontalHeaderLabels(["占位符", "说明"])
+        self._placeholder_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self._placeholder_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._placeholder_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._placeholder_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._placeholder_table.setAlternatingRowColors(True)
+        self._placeholder_table.verticalHeader().setVisible(False)
+        self._placeholder_table.verticalHeader().setDefaultSectionSize(30)
+        placeholder_layout.addWidget(self._placeholder_table)
+        
+        # 填充占位符列表
+        placeholder_descriptions = get_all_placeholder_descriptions()
+        self._placeholder_table.setRowCount(len(placeholder_descriptions))
+        for row, (placeholder, description) in enumerate(placeholder_descriptions.items()):
+            placeholder_item = QTableWidgetItem(f"{{{placeholder}}}")
+            placeholder_item.setFont(QFont("Consolas", 9))
+            self._placeholder_table.setItem(row, 0, placeholder_item)
+            desc_item = QTableWidgetItem(description)
+            desc_item.setFont(QFont("Microsoft YaHei", 9))
+            self._placeholder_table.setItem(row, 1, desc_item)
+        
+        prompt_splitter.addWidget(placeholder_group)
+        prompt_splitter.setSizes([700, 200])
+
+        # 验证状态显示
+        self._template_validation_label = QLabel()
+        self._template_validation_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        prompt_tab_layout.addWidget(self._template_validation_label)
+        
+        # 模板内容变化时验证
+        self._template_edit.textChanged.connect(self._on_template_text_changed)
+
+        # 让分割器占据主要空间
+        prompt_tab_layout.addWidget(prompt_splitter, stretch=1)
+
+        tab_widget.addTab(prompt_tab, "系统提示词配置")
+        
+        self._prompt_tab = prompt_tab
 
         self._tab_widget = tab_widget
         layout.addWidget(tab_widget)
@@ -1753,6 +1883,7 @@ class SettingsDialog(QDialog):
         self._update_scheduled_task_show_window_status()
         self._refresh_asr_model_status()
         self._refresh_tts_model_status()
+        self._refresh_prompt_template_status()
     
     def _refresh_asr_model_status(self) -> None:
         """刷新 ASR 模型状态"""
@@ -2060,3 +2191,138 @@ class SettingsDialog(QDialog):
             self._tts_test_status.setText("朗读已停止")
         except Exception as e:
             logger.exception(f"停止朗读时发生错误: {e}")
+
+    # ===== 系统提示词配置相关方法 =====
+
+    def _on_prompt_type_changed(self, index: int) -> None:
+        """会话类型切换时加载对应的模板"""
+        conv_type = self._prompt_type_combo.currentData()
+        if conv_type:
+            self._load_template_for_type(conv_type)
+
+    def _load_template_for_type(self, conv_type: str) -> None:
+        """加载指定会话类型的模板"""
+        template = get_template_for_conversation_type(conv_type)
+        # 阻止信号触发，避免验证时重复触发
+        self._template_edit.blockSignals(True)
+        self._template_edit.setPlainText(template)
+        self._template_edit.blockSignals(False)
+        # 手动触发验证
+        self._validate_current_template()
+
+    def _validate_current_template(self) -> None:
+        """验证当前模板中的占位符"""
+        template = self._template_edit.toPlainText()
+        is_valid, invalid_placeholders = validate_template(template)
+        
+        if is_valid:
+            self._template_validation_label.setText("✓ 模板验证通过，所有占位符均有效")
+            self._template_validation_label.setStyleSheet("color: #10b981; font-size: 9pt;")
+        else:
+            invalid_str = ", ".join(invalid_placeholders)
+            self._template_validation_label.setText(f"⚠ 模板包含无效占位符: {invalid_str}")
+            self._template_validation_label.setStyleSheet("color: #ef4444; font-size: 9pt;")
+
+    def _on_template_text_changed(self) -> None:
+        """模板内容变化时验证"""
+        self._validate_current_template()
+
+    def _on_save_template(self) -> None:
+        """保存当前模板"""
+        conv_type = self._prompt_type_combo.currentData()
+        if not conv_type:
+            return
+        
+        template = self._template_edit.toPlainText()
+        
+        # 验证模板
+        is_valid, invalid_placeholders = validate_template(template)
+        if not is_valid:
+            QMessageBox.warning(
+                self,
+                "警告",
+                f"模板包含无效占位符: {', '.join(invalid_placeholders)}\n请修正后再保存。"
+            )
+            return
+        
+        try:
+            update_template_for_conversation_type(conv_type, template)
+            QMessageBox.information(self, "提示", "模板已保存")
+        except Exception as e:
+            logger.exception(f"保存模板失败: {e}")
+            QMessageBox.warning(self, "警告", f"保存模板失败: {str(e)}")
+
+    def _on_reset_template(self) -> None:
+        """重置当前模板为默认模板"""
+        conv_type = self._prompt_type_combo.currentData()
+        if not conv_type:
+            return
+        
+        reply = QMessageBox.question(
+            self,
+            "确认重置",
+            "确定要将当前模板重置为默认模板吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                reset_template_for_conversation_type(conv_type)
+                self._load_template_for_type(conv_type)
+                QMessageBox.information(self, "提示", "模板已重置为默认")
+            except Exception as e:
+                logger.exception(f"重置模板失败: {e}")
+                QMessageBox.warning(self, "警告", f"重置模板失败: {str(e)}")
+
+    def _on_preview_template(self) -> None:
+        """预览模板填充后的效果"""
+        conv_type = self._prompt_type_combo.currentData()
+        if not conv_type:
+            return
+        
+        template = self._template_edit.toPlainText()
+        
+        # 创建预览对话框
+        preview_dialog = QDialog(self)
+        preview_dialog.setWindowTitle(f"模板预览 - {self._prompt_type_combo.currentText()}")
+        preview_dialog.setModal(True)
+        preview_dialog.resize(600, 500)
+        
+        layout = QVBoxLayout(preview_dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        
+        # 说明文字
+        info_label = QLabel("以下为使用示例数据填充后的模板效果预览：")
+        info_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        layout.addWidget(info_label)
+        
+        # 预览内容
+        preview_text = QTextEdit()
+        preview_text.setReadOnly(True)
+        preview_text.setFont(QFont("Consolas", 10))
+        preview_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        
+        # 使用 DynamicSystemPrompt 的 preview_with_sample_data 方法
+        try:
+            dsp = DynamicSystemPrompt(_template=template, _conversation_type=conv_type)
+            preview_content = dsp.preview_with_sample_data()
+            preview_text.setPlainText(preview_content)
+        except Exception as e:
+            preview_text.setPlainText(f"预览生成失败: {str(e)}")
+        
+        layout.addWidget(preview_text)
+        
+        # 关闭按钮
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(preview_dialog.accept)
+        layout.addWidget(close_btn)
+        
+        preview_dialog.exec()
+
+    def _refresh_prompt_template_status(self) -> None:
+        """刷新系统提示词模板状态"""
+        # 加载当前选中会话类型的模板
+        conv_type = self._prompt_type_combo.currentData()
+        if conv_type:
+            self._load_template_for_type(conv_type)

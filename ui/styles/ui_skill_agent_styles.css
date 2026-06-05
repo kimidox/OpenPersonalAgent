@@ -935,7 +935,7 @@ QLabel#skillAgentMessageContentToolCall {
 }
 
 /* === section:message_card_copy_button === */
-QToolButton#skillAgentCopyButton {
+QToolButton#skillAgentCopyButton, QToolButton#skillAgentSpeakButton {
   background-color: transparent;
   color: #6b7280;
   border: 1px solid #e5e7eb;
@@ -943,12 +943,12 @@ QToolButton#skillAgentCopyButton {
   font-size: 11px;
   padding: 2px 8px;
 }
-QToolButton#skillAgentCopyButton:hover {
+QToolButton#skillAgentCopyButton:hover, QToolButton#skillAgentSpeakButton:hover {
   background-color: #f3f4f6;
   color: #374151;
   border-color: #d1d5db;
 }
-QToolButton#skillAgentCopyButton:pressed {
+QToolButton#skillAgentCopyButton:pressed, QToolButton#skillAgentSpeakButton:pressed {
   background-color: #e5e7eb;
 }
 
@@ -998,9 +998,9 @@ QPushButton#skillAgentCloseDialogMinimizeButton {
   color: #ffffff;
   border: none;
   border-radius: 6px;
-  padding: 8px 22px;
+  padding: 6px 16px;
   font-weight: 600;
-  min-width: 100px;
+  min-width: 80px;
 }
 QPushButton#skillAgentCloseDialogMinimizeButton:hover {
   background-color: #1d4ed8;
@@ -1015,8 +1015,8 @@ QPushButton#skillAgentCloseDialogCloseButton {
   color: #374151;
   border: 1px solid #e5e7eb;
   border-radius: 6px;
-  padding: 8px 22px;
-  min-width: 100px;
+  padding: 6px 16px;
+  min-width: 80px;
 }
 QPushButton#skillAgentCloseDialogCloseButton:hover {
   background-color: #f9fafb;
@@ -1024,6 +1024,24 @@ QPushButton#skillAgentCloseDialogCloseButton:hover {
   color: #2563eb;
 }
 QPushButton#skillAgentCloseDialogCloseButton:pressed {
+  background-color: #f3f4f6;
+}
+
+/* === section:close_dialog_floating_button === */
+QPushButton#skillAgentCloseDialogFloatingButton {
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 6px 16px;
+  min-width: 80px;
+}
+QPushButton#skillAgentCloseDialogFloatingButton:hover {
+  background-color: #f9fafb;
+  border-color: #d1d5db;
+  color: #2563eb;
+}
+QPushButton#skillAgentCloseDialogFloatingButton:pressed {
   background-color: #f3f4f6;
 }
 

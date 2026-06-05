@@ -7,9 +7,12 @@ from typing import Final, Optional
 
 from .template import (
     DEFAULT_SYSTEM_PROMPT_TEMPLATE,
+    DEFAULT_TEMPLATE_MAP,
     EMPTY_PLACEHOLDER_VALUES,
     PLACEHOLDER_NAMES,
     PlaceholderName,
+    ConversationType,
+    CONVERSATION_TYPES,
     UPLOADED_FILES_SECTION_TEMPLATE,
 )
 
@@ -18,6 +21,7 @@ from .template import (
 class DynamicSystemPrompt:
     _template: str = field(default=DEFAULT_SYSTEM_PROMPT_TEMPLATE)
     _placeholders: dict[str, str] = field(default_factory=dict)
+    _conversation_type: str = field(default=ConversationType.AGENT_CONVERSATION.value)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     PLACEHOLDER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\{([A-Z_]+)\}")
@@ -33,12 +37,27 @@ class DynamicSystemPrompt:
             self._template = value
 
     @property
+    def conversation_type(self) -> str:
+        with self._lock:
+            return self._conversation_type
+
+    @conversation_type.setter
+    def conversation_type(self, value: str) -> None:
+        with self._lock:
+            if value not in CONVERSATION_TYPES:
+                raise ValueError(f"Unknown conversation type: {value}. Valid types: {CONVERSATION_TYPES}")
+            self._conversation_type = value
+
+    @property
     def placeholders(self) -> dict[str, str]:
         with self._lock:
             return dict(self._placeholders)
 
     def __post_init__(self) -> None:
         self._placeholders = dict(EMPTY_PLACEHOLDER_VALUES)
+        # 根据 conversation_type 加载对应的模板
+        if self._conversation_type in CONVERSATION_TYPES:
+            self._template = DEFAULT_TEMPLATE_MAP.get(self._conversation_type, DEFAULT_SYSTEM_PROMPT_TEMPLATE)
 
     def update_placeholder(self, name: str, value: str) -> None:
         if name not in PLACEHOLDER_NAMES:
@@ -61,6 +80,53 @@ class DynamicSystemPrompt:
             raise ValueError(f"Unknown placeholder name: {name}. Valid names: {PLACEHOLDER_NAMES}")
         with self._lock:
             return self._placeholders.get(name)
+
+    def set_template_for_conversation_type(self, conversation_type: str) -> None:
+        """
+        根据会话类型设置模板
+
+        Args:
+            conversation_type: 会话类型
+        """
+        if conversation_type not in CONVERSATION_TYPES:
+            raise ValueError(f"Unknown conversation type: {conversation_type}. Valid types: {CONVERSATION_TYPES}")
+
+        with self._lock:
+            self._conversation_type = conversation_type
+            # 从配置文件加载模板，如果不存在则使用默认模板
+            try:
+                from prompt_template_config import get_template_for_conversation_type
+                self._template = get_template_for_conversation_type(conversation_type)
+            except Exception:
+                # 如果加载失败，使用默认模板
+                self._template = DEFAULT_TEMPLATE_MAP.get(conversation_type, DEFAULT_SYSTEM_PROMPT_TEMPLATE)
+
+    def preview_with_sample_data(self) -> str:
+        """
+        使用示例数据预览模板填充后的效果
+
+        Returns:
+            str: 填充后的模板示例
+        """
+        with self._lock:
+            sample_data = {
+                PlaceholderName.BASE_INFO.value: "用户名：示例用户\n当前系统时间：2024-01-01 12:00:00",
+                PlaceholderName.SKILL_CATALOG.value: "## 可用 Skill 目录\n- Skill 1: 示例技能",
+                PlaceholderName.TOOL_CATALOG.value: "## 可用工具目录\n- Tool 1: 示例工具",
+                PlaceholderName.ACTIVE_SKILLS.value: "## 当前已加载的 Skill\n已加载 Skill 1",
+                PlaceholderName.UPLOADED_FILES.value: "## 用户上传的文件\n示例文件内容",
+                PlaceholderName.USER_MEMORY.value: "## 用户长期记忆\n示例记忆内容",
+                PlaceholderName.RECENT_MEMORY_SUMMARY.value: "## 近期记忆摘要\n示例摘要",
+                PlaceholderName.CONVERSATION_CONSTRAINTS.value: "## 本次对话约束\n示例约束",
+            }
+
+            result = self._template
+            for name in PLACEHOLDER_NAMES:
+                placeholder_tag = f"{{{name}}}"
+                value = sample_data.get(name, "")
+                result = result.replace(placeholder_tag, value)
+            return result.strip()
+
     def update_base_info(self, base_info: str) -> None:
         self.update_placeholder(PlaceholderName.BASE_INFO.value, base_info)
     def update_skill_catalog(self, catalog: str) -> None:
@@ -133,9 +199,10 @@ class DynamicSystemPrompt:
             new_instance = DynamicSystemPrompt(
                 _template=self._template,
                 _placeholders=dict(self._placeholders),
+                _conversation_type=self._conversation_type,
             )
             return new_instance
 
     def __repr__(self) -> str:
         with self._lock:
-            return f"DynamicSystemPrompt(placeholders={list(self._placeholders.keys())})"
+            return f"DynamicSystemPrompt(conversation_type={self._conversation_type}, placeholders={list(self._placeholders.keys())})"
