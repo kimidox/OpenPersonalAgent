@@ -284,6 +284,40 @@ ASR_AUTO_LOAD = _asr_auto_load.lower() in ("true", "1", "yes") if _asr_auto_load
 _asr_auto_download = get_config("ASR_AUTO_DOWNLOAD")
 ASR_AUTO_DOWNLOAD = _env_bool(_asr_auto_download, True)
 
+# 最大音频处理时长（秒），默认 3600（1小时）
+_asr_max_duration = get_config("ASR_MAX_AUDIO_DURATION")
+try:
+    ASR_MAX_AUDIO_DURATION = int(_asr_max_duration) if _asr_max_duration not in (None, "") else 3600
+except (TypeError, ValueError):
+    ASR_MAX_AUDIO_DURATION = 3600
+if ASR_MAX_AUDIO_DURATION < 1:
+    ASR_MAX_AUDIO_DURATION = 3600
+
+# 是否显示时长警告提示（默认 True）
+_asr_show_warning = get_config("ASR_SHOW_DURATION_WARNING")
+ASR_SHOW_DURATION_WARNING = _env_bool(_asr_show_warning, True)
+
+# GPU 处理的最大音频时长（秒），超过此时长强制使用 CPU，默认 300 秒（5分钟）
+# 原因：长音频一次性加载到 GPU 可能导致显存溢出和系统崩溃
+_asr_gpu_max_duration = get_config("ASR_GPU_MAX_DURATION")
+try:
+    ASR_GPU_MAX_DURATION = int(_asr_gpu_max_duration) if _asr_gpu_max_duration not in (None, "") else 300
+except (TypeError, ValueError):
+    ASR_GPU_MAX_DURATION = 300
+if ASR_GPU_MAX_DURATION < 1:
+    ASR_GPU_MAX_DURATION = 300
+
+# ===== 文件上传配置 =====
+
+# 文件上传大小限制（MB），默认 10 MB
+_file_upload_max_size = get_config("FILE_UPLOAD_MAX_SIZE_MB")
+try:
+    FILE_UPLOAD_MAX_SIZE_MB = int(_file_upload_max_size) if _file_upload_max_size not in (None, "") else 200
+except (TypeError, ValueError):
+    FILE_UPLOAD_MAX_SIZE_MB = 200
+if FILE_UPLOAD_MAX_SIZE_MB < 1:
+    FILE_UPLOAD_MAX_SIZE_MB = 200
+
 # ===== TTS 文本转语音模型配置 =====
 
 # TTS 模型类型（zh=中文，zh_en=中英文）
@@ -309,3 +343,26 @@ TTS_AUTO_LOAD = _tts_auto_load.lower() in ("true", "1", "yes") if _tts_auto_load
 # 模型不存在时是否自动下载（默认 True）
 _tts_auto_download = get_config("TTS_AUTO_DOWNLOAD")
 TTS_AUTO_DOWNLOAD = _env_bool(_tts_auto_download, True)
+
+# ===== UI Automation 配置 =====
+
+# 是否启用 UI Automation 功能
+_uia_enabled = get_config("UIA_ENABLED")
+UIA_ENABLED = _env_bool(_uia_enabled, True)
+
+# UI Automation 操作超时时间（毫秒）
+_uia_timeout = get_config("UIA_TIMEOUT_MS")
+try:
+    UIA_TIMEOUT_MS = int(_uia_timeout) if _uia_timeout not in (None, "") else 5000
+except (TypeError, ValueError):
+    UIA_TIMEOUT_MS = 5000
+if UIA_TIMEOUT_MS < 100:
+    UIA_TIMEOUT_MS = 5000
+
+# 是否启用 OmniParser V2 视觉 fallback
+_omniparser_enabled = get_config("OMNIPARSER_ENABLED")
+OMNIPARSER_ENABLED = _env_bool(_omniparser_enabled, False)
+
+# OmniParser 模型路径
+_omniparser_path = get_config("OMNIPARSER_MODEL_PATH")
+OMNIPARSER_MODEL_PATH = _omniparser_path if _omniparser_path not in (None, "") else ""

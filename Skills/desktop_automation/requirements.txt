@@ -1,0 +1,9 @@
+# 桌面自动化 Skill 依赖
+
+# UI Automation 库已包含在主项目 requirements.txt 中
+# 此处仅列出可选的额外依赖
+
+# 如果需要 OmniParser V2 视觉 fallback（可选）
+# torch>=2.0.0
+# transformers>=4.30.0
+# ultralytics>=8.0.0

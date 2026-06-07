@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-SUPPORTED_EXTENSIONS = ["docx", "pdf", "md", "txt", "json", "xlsx", "xls"]
+SUPPORTED_EXTENSIONS = ["docx", "pdf", "md", "txt", "json", "xlsx", "xls", "wav", "mp3", "m4a", "flac"]
 
 
 @dataclass
@@ -22,7 +22,23 @@ class UploadedFileInfo:
     parse_error: Optional[str] = None
     is_parsed: bool = False
     is_parsing: bool = False
+    parse_progress: int = 0  # 解析进度 (0-100)
+    parse_status: str = ""  # 解析状态描述
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    mime_map: dict[str, str] = field(default_factory=lambda: {
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "pdf": "application/pdf",
+        "md": "text/markdown",
+        "txt": "text/plain",
+        "json": "application/json",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls": "application/vnd.ms-excel",
+        "wav": "audio/wav",
+        "mp3": "audio/mpeg",
+        "m4a": "audio/mp4",
+        "flac": "audio/flac",
+    }, repr=False)
 
     @property
     def is_success(self) -> bool:

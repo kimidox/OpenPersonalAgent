@@ -9,7 +9,7 @@ from logger import get_module_logger
 
 logger = get_module_logger("settings_dialog")
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -75,6 +75,8 @@ from recorder import (
     release_onnx_model,
     is_onnx_model_loaded,
     get_onnx_model_path,
+    get_onnx_device,
+    check_gpu_available,
     get_recorder,
 )
 from prompt_template_config import (
@@ -89,6 +91,261 @@ from prompt.dynamic_prompt import DynamicSystemPrompt
 
 if TYPE_CHECKING:
     from skill_agent import SkillAgent
+
+
+class ASRTestWorker(QThread):
+    """ASR 测试工作线程"""
+
+    progress_updated = Signal(int, str)  # (progress, status)
+    finished = Signal(str)  # result text
+    error = Signal(str)  # error message
+
+    # 分块处理的阈值（秒）
+    CHUNK_THRESHOLD = 300  # 5 分钟
+
+    def __init__(self, audio_path: str, parent=None) -> None:
+        super().__init__(parent)
+        self._audio_path = audio_path
+
+    def run(self) -> None:
+        """执行 ASR 测试"""
+        import tempfile
+        import wave
+        from pathlib import Path
+
+        try:
+            audio_path = Path(self._audio_path)
+
+            # 发送开始进度
+            self.progress_updated.emit(5, "开始识别...")
+
+            # 检查文件是否存在
+            if not audio_path.exists():
+                self.error.emit(f"文件不存在: {audio_path}")
+                return
+
+            # 检查 ASR 模型是否已加载
+            if not is_onnx_model_loaded():
+                self.error.emit("ASR 模型未加载")
+                return
+
+            # 发送加载进度
+            self.progress_updated.emit(10, "正在加载音频文件...")
+
+            # 如果不是 wav 格式，需要先转换
+            temp_wav_path = None
+            actual_audio_path = audio_path
+
+            if audio_path.suffix.lower() not in [".wav"]:
+                self.progress_updated.emit(20, "正在转换音频格式...")
+                temp_wav_path = self._convert_to_wav(audio_path)
+                if temp_wav_path is None:
+                    self.error.emit("音频格式转换失败，请确保已安装 pydub 和 ffmpeg")
+                    return
+                actual_audio_path = temp_wav_path
+
+            # 获取音频时长
+            duration = self._get_audio_duration(actual_audio_path)
+            if duration is not None:
+                if duration > self.CHUNK_THRESHOLD:
+                    self.progress_updated.emit(30, f"音频时长 {duration/60:.1f} 分钟，启用分块处理...")
+                else:
+                    self.progress_updated.emit(30, f"音频时长 {duration:.1f} 秒，开始识别...")
+
+            # 执行识别
+            self.progress_updated.emit(40, "正在进行语音识别...")
+
+            result = self._transcribe_with_progress(actual_audio_path, duration)
+
+            # 清理临时文件
+            if temp_wav_path is not None:
+                try:
+                    Path(temp_wav_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            if result:
+                self.progress_updated.emit(100, "识别完成")
+                self.finished.emit(result)
+            else:
+                self.error.emit("语音识别失败，未获取到结果")
+
+        except Exception as e:
+            logger.exception(f"ASR 测试时发生错误: {e}")
+            self.error.emit(str(e))
+
+    def _convert_to_wav(self, audio_path: Path) -> Path | None:
+        """将音频文件转换为 WAV 格式"""
+        import tempfile
+
+        try:
+            from pydub import AudioSegment
+
+            # 读取音频文件
+            audio = AudioSegment.from_file(str(audio_path))
+
+            # 转换为 16kHz 单声道 16-bit PCM
+            audio = audio.set_frame_rate(16000)
+            audio = audio.set_channels(1)
+            audio = audio.set_sample_width(2)  # 16-bit
+
+            # 创建临时文件
+            temp_fd, temp_path = tempfile.mkstemp(suffix=".wav")
+
+            # 导出为 WAV 格式
+            audio.export(temp_path, format="wav")
+
+            return Path(temp_path)
+
+        except ImportError:
+            # pydub 未安装，尝试使用 ffmpeg 直接转换
+            return self._convert_to_wav_with_ffmpeg(audio_path)
+        except Exception as e:
+            logger.warning(f"pydub 转换失败: {e}，尝试使用 ffmpeg")
+            return self._convert_to_wav_with_ffmpeg(audio_path)
+
+    def _convert_to_wav_with_ffmpeg(self, audio_path: Path) -> Path | None:
+        """使用 ffmpeg 直接将音频文件转换为 WAV 格式"""
+        import subprocess
+        import tempfile
+
+        try:
+            # 创建临时文件
+            temp_fd, temp_path = tempfile.mkstemp(suffix=".wav")
+
+            # 使用 ffmpeg 转换
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",  # 覆盖输出文件
+                    "-i", str(audio_path),
+                    "-ar", "16000",
+                    "-ac", "1",
+                    "-acodec", "pcm_s16le",
+                    temp_path
+                ],
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                logger.error(f"ffmpeg 转换失败: {result.stderr}")
+                return None
+
+            return Path(temp_path)
+
+        except Exception as e:
+            logger.error(f"ffmpeg 转换时发生错误: {e}")
+            return None
+
+    def _get_audio_duration(self, audio_path: Path) -> float | None:
+        """获取音频文件的时长（秒）"""
+        import wave
+
+        try:
+            with wave.open(str(audio_path), 'rb') as wf:
+                frames = wf.getnframes()
+                rate = wf.getframerate()
+                return frames / float(rate)
+        except Exception:
+            return None
+
+    def _transcribe_with_progress(self, audio_path: Path, duration: float | None) -> str | None:
+        """带进度更新的语音识别"""
+        import wave
+        import numpy as np
+
+        # 如果时长超过阈值，使用分块处理
+        if duration is not None and duration > self.CHUNK_THRESHOLD:
+            return self._transcribe_in_chunks(audio_path, duration)
+
+        # 短音频直接处理
+        try:
+            from recorder import transcribe_audio_with_onnx
+            result = transcribe_audio_with_onnx(audio_path)
+            return result
+        except Exception as e:
+            logger.error(f"语音识别失败: {e}")
+            return None
+
+    def _transcribe_in_chunks(self, audio_path: Path, total_duration: float) -> str | None:
+        """分块处理长音频"""
+        import wave
+        import numpy as np
+        import sherpa_onnx
+
+        try:
+            # 读取 WAV 文件
+            with wave.open(str(audio_path), 'rb') as wf:
+                sample_rate = wf.getframerate()
+                num_channels = wf.getnchannels()
+                num_frames = wf.getnframes()
+                audio_data = wf.readframes(num_frames)
+
+            # 转换为 numpy 数组
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+
+            # 如果是多声道，转换为单声道
+            if num_channels > 1:
+                audio_array = audio_array.reshape(-1, num_channels)
+                audio_array = audio_array.mean(axis=1).astype(np.int16)
+
+            # 重采样到 16kHz（如果需要）
+            if sample_rate != 16000:
+                import scipy.signal
+                audio_array = scipy.signal.resample_poly(
+                    audio_array,
+                    16000,
+                    sample_rate
+                ).astype(np.int16)
+
+            # 计算分块参数
+            chunk_duration = self.CHUNK_THRESHOLD
+            sample_rate = 16000
+            chunk_samples = int(chunk_duration * sample_rate)
+            overlap_samples = int(1.0 * sample_rate)
+            effective_chunk_samples = chunk_samples - overlap_samples
+
+            total_samples = len(audio_array)
+            num_chunks = max(1, int(np.ceil((total_samples - overlap_samples) / effective_chunk_samples)))
+
+            results = []
+
+            # 获取全局识别器
+            from recorder import _onnx_recognizer
+            if _onnx_recognizer is None:
+                self.error.emit("ASR 模型未加载")
+                return None
+
+            for i in range(num_chunks):
+                # 计算当前片段的起始和结束位置
+                start = i * effective_chunk_samples
+                end = min(start + chunk_samples, total_samples)
+
+                # 提取当前片段
+                chunk = audio_array[start:end]
+
+                # 更新进度
+                progress = 40 + int((i + 1) / num_chunks * 50)
+                self.progress_updated.emit(progress, f"正在处理片段 {i+1}/{num_chunks}...")
+
+                # 处理当前片段
+                stream = _onnx_recognizer.create_stream()
+                stream.accept_waveform(16000, chunk)
+                _onnx_recognizer.decode_stream(stream)
+                chunk_result = stream.result.text
+
+                if chunk_result:
+                    results.append(chunk_result.strip())
+
+            if results:
+                return "\n".join(results)
+            else:
+                return None
+
+        except Exception as e:
+            logger.exception(f"分块处理时发生错误: {e}")
+            return None
 
 
 def _llm_request_params_text() -> str:
@@ -972,7 +1229,50 @@ class SettingsDialog(QDialog):
         load_layout.addWidget(self._asr_auto_load_checkbox)
         
         asr_tab_layout.addWidget(load_group)
-        
+
+        # 测试识别
+        test_group = QGroupBox("测试识别")
+        test_layout = QVBoxLayout(test_group)
+
+        # 测试按钮行
+        test_btn_row = QHBoxLayout()
+        self._test_asr_btn = QPushButton("选择音频文件测试")
+        self._test_asr_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._test_asr_btn.clicked.connect(self._on_test_asr)
+        test_btn_row.addWidget(self._test_asr_btn)
+        test_btn_row.addStretch()
+        test_layout.addLayout(test_btn_row)
+
+        # 进度条
+        self._asr_test_progress = QProgressBar()
+        self._asr_test_progress.setVisible(False)
+        test_layout.addWidget(self._asr_test_progress)
+
+        # 状态标签
+        self._asr_test_status = QLabel()
+        self._asr_test_status.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        self._asr_test_status.setWordWrap(True)
+        test_layout.addWidget(self._asr_test_status)
+
+        # 结果显示区域
+        self._asr_test_result = QTextEdit()
+        self._asr_test_result.setReadOnly(True)
+        self._asr_test_result.setPlaceholderText("识别结果将显示在这里...")
+        self._asr_test_result.setMaximumHeight(150)
+        test_layout.addWidget(self._asr_test_result)
+
+        # 复制按钮
+        copy_btn_row = QHBoxLayout()
+        self._copy_asr_result_btn = QPushButton("复制结果")
+        self._copy_asr_result_btn.setObjectName("skillAgentSettingsDeleteConfigButton")
+        self._copy_asr_result_btn.clicked.connect(self._on_copy_asr_result)
+        self._copy_asr_result_btn.setEnabled(False)
+        copy_btn_row.addWidget(self._copy_asr_result_btn)
+        copy_btn_row.addStretch()
+        test_layout.addLayout(copy_btn_row)
+
+        asr_tab_layout.addWidget(test_group)
+
         asr_tab_layout.addStretch()
         
         tab_widget.addTab(asr_tab, "语音识别配置")
@@ -1889,13 +2189,19 @@ class SettingsDialog(QDialog):
         """刷新 ASR 模型状态"""
         is_loaded = is_onnx_model_loaded()
         model_path = get_onnx_model_path()
+        device = get_onnx_device()
+        gpu_available = check_gpu_available()
+        
+        # 显示 GPU 可用状态
+        gpu_status = "GPU 可用" if gpu_available else "GPU 不可用"
         
         if is_loaded:
-            self._asr_model_status.setText(f"状态：模型已加载")
+            device_display = device.upper() if device else "CPU"
+            self._asr_model_status.setText(f"状态：模型已加载 | 运行设备：{device_display} | {gpu_status}")
             self._load_asr_btn.setEnabled(False)
             self._release_asr_btn.setEnabled(True)
         else:
-            self._asr_model_status.setText("状态：模型未加载")
+            self._asr_model_status.setText(f"状态：模型未加载 | {gpu_status}")
             self._load_asr_btn.setEnabled(True)
             self._release_asr_btn.setEnabled(False)
     
@@ -1951,7 +2257,85 @@ class SettingsDialog(QDialog):
         auto_load = state == Qt.CheckState.Checked.value
         config.set_config("ASR_AUTO_LOAD", str(auto_load).lower())
         config.ASR_AUTO_LOAD = auto_load
-    
+
+    # ===== ASR 测试相关方法 =====
+
+    def _on_test_asr(self) -> None:
+        """选择音频文件进行 ASR 测试"""
+        from PySide6.QtWidgets import QFileDialog
+        from PySide6.QtCore import QThread
+
+        # 检查 ASR 模型是否已加载
+        if not is_onnx_model_loaded():
+            QMessageBox.warning(self, "警告", "ASR 模型未加载，请先加载模型后再进行测试")
+            return
+
+        # 打开文件对话框选择音频文件
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择音频文件",
+            "",
+            "音频文件 (*.wav *.mp3 *.m4a *.flac);;所有文件 (*.*)"
+        )
+
+        if not file_path:
+            return
+
+        # 重置状态
+        self._asr_test_result.clear()
+        self._copy_asr_result_btn.setEnabled(False)
+        self._asr_test_progress.setVisible(True)
+        self._asr_test_progress.setValue(0)
+        self._asr_test_status.setText("准备识别...")
+
+        # 禁用测试按钮
+        self._test_asr_btn.setEnabled(False)
+
+        # 创建并启动工作线程
+        self._asr_test_worker = ASRTestWorker(file_path, self)
+        self._asr_test_worker.progress_updated.connect(self._on_asr_test_progress)
+        self._asr_test_worker.finished.connect(self._on_asr_test_finished)
+        self._asr_test_worker.error.connect(self._on_asr_test_error)
+        self._asr_test_worker.start()
+
+    def _on_asr_test_progress(self, progress: int, status: str) -> None:
+        """ASR 测试进度更新"""
+        self._asr_test_progress.setValue(progress)
+        self._asr_test_status.setText(status)
+
+    def _on_asr_test_finished(self, result: str) -> None:
+        """ASR 测试完成"""
+        self._asr_test_progress.setVisible(False)
+        self._asr_test_status.setText("识别完成")
+        self._asr_test_result.setPlainText(result)
+        self._copy_asr_result_btn.setEnabled(True)
+        self._test_asr_btn.setEnabled(True)
+
+        # 清理工作线程
+        if hasattr(self, '_asr_test_worker') and self._asr_test_worker:
+            self._asr_test_worker.deleteLater()
+            self._asr_test_worker = None
+
+    def _on_asr_test_error(self, error: str) -> None:
+        """ASR 测试出错"""
+        self._asr_test_progress.setVisible(False)
+        self._asr_test_status.setText(f"识别失败: {error}")
+        self._test_asr_btn.setEnabled(True)
+
+        # 清理工作线程
+        if hasattr(self, '_asr_test_worker') and self._asr_test_worker:
+            self._asr_test_worker.deleteLater()
+            self._asr_test_worker = None
+
+    def _on_copy_asr_result(self) -> None:
+        """复制 ASR 识别结果到剪贴板"""
+        from PySide6.QtWidgets import QApplication
+        text = self._asr_test_result.toPlainText()
+        if text:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(text)
+            self._asr_test_status.setText("结果已复制到剪贴板")
+
     # ===== TTS 相关方法 =====
     
     def _refresh_tts_model_status(self) -> None:

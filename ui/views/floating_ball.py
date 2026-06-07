@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional, TYPE_CHECKING
 from PySide6.QtCore import Qt, QPoint, Signal, QPropertyAnimation, QEasingCurve, QTimer, QEvent
 from PySide6.QtGui import QIcon, QAction
 from PySide6.QtWidgets import QWidget, QPushButton, QMenu, QApplication
@@ -9,7 +10,10 @@ from resource_path import paths
 from ui.styles import StyleManager
 from ui.views.floating_chat_window import FloatingChatWindow
 from logger import get_logger
-from recorder import get_recorder
+from recorder import get_recorder, AudioTranscribeWorker
+
+if TYPE_CHECKING:
+    pass
 
 
 class FloatingBallButton(QPushButton):
@@ -59,6 +63,10 @@ class FloatingBall(QWidget):
     recording_stopped = Signal(Path)
     create_recording_conversation = Signal(Path, str)
     show_model_not_loaded_warning = Signal()
+    # 转录相关信号
+    transcription_progress = Signal(str)  # 转录进度消息
+    transcription_finished = Signal(Path, str)  # 转录完成 (audio_path, text)
+    transcription_error = Signal(str)  # 转录错误消息
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -68,6 +76,9 @@ class FloatingBall(QWidget):
         self._chat_window = None
         self._is_expanded = False
         self._animation = None
+        # 转录相关属性
+        self._transcribe_worker: Optional[AudioTranscribeWorker] = None
+        self._current_audio_path: Optional[Path] = None
         
         self._logger.info("FloatingBall: 开始初始化")
         self._init_ui()
@@ -162,8 +173,8 @@ class FloatingBall(QWidget):
             
             if audio_path:
                 self.recording_stopped.emit(audio_path)
-                # 只发送音频路径，让主窗口统一处理转文本和创建会话
-                self.create_recording_conversation.emit(audio_path, "")
+                # 使用异步转录
+                self._start_async_transcription(audio_path)
         else:
             # 在开始录音前先检查模型是否已加载
             if not is_onnx_model_loaded():
@@ -174,6 +185,102 @@ class FloatingBall(QWidget):
             if success:
                 self._recording_action.setText("停止录音")
                 self.recording_started.emit()
+    
+    def _start_async_transcription(self, audio_path: Path):
+        """启动异步转录"""
+        from recorder import is_onnx_model_loaded
+        
+        # 检查模型是否已加载
+        if not is_onnx_model_loaded():
+            self._logger.warning("转录模型未加载，无法转录")
+            self._on_transcribe_error(str(audio_path), "语音模型未加载，请先在设置中加载模型")
+            return
+        
+        # 如果已有转录任务在进行，先取消
+        if self._transcribe_worker and self._transcribe_worker.isRunning():
+            self._transcribe_worker.requestInterruption()
+            self._transcribe_worker.wait(1000)
+            self._transcribe_worker = None
+        
+        self._current_audio_path = audio_path
+        
+        # 显示转录进度提示
+        self._show_transcription_progress("正在转录音频...")
+        
+        # 创建转录工作线程
+        recorder = get_recorder()
+        self._transcribe_worker = recorder.transcribe_audio_async(
+            audio_path,
+            callback=self._on_transcribe_callback,
+            progress_callback=self._on_transcribe_progress_callback
+        )
+        
+        if self._transcribe_worker is None:
+            self._on_transcribe_error(str(audio_path), "启动转录任务失败")
+    
+    def _show_transcription_progress(self, message: str):
+        """显示转录进度提示"""
+        # 展开聊天窗口并显示进度消息
+        if not self._is_expanded:
+            self._expand_chat_window()
+        
+        # 添加或更新进度消息
+        if hasattr(self, '_transcription_message_shown') and self._transcription_message_shown:
+            # 更新现有消息
+            self._chat_window.update_last_message(message)
+        else:
+            # 添加新消息
+            self._chat_window.add_message("assistant", message)
+            self._transcription_message_shown = True
+    
+    def _on_transcribe_callback(self, audio_path: str, text: Optional[str], error: Optional[str]):
+        """转录完成回调"""
+        # 使用 QTimer 确保在主线程中处理
+        QTimer.singleShot(0, lambda: self._handle_transcribe_result(audio_path, text, error))
+    
+    def _on_transcribe_progress_callback(self, progress: int, status: str):
+        """转录进度回调"""
+        QTimer.singleShot(0, lambda: self._show_transcription_progress(f"正在转录音频... {progress}%"))
+    
+    def _handle_transcribe_result(self, audio_path: str, text: Optional[str], error: Optional[str]):
+        """处理转录结果（在主线程中执行）"""
+        self._transcription_message_shown = False
+        
+        if error:
+            self._on_transcribe_error(audio_path, error)
+        elif text:
+            self._on_transcribe_finished(Path(audio_path), text)
+        else:
+            self._on_transcribe_error(audio_path, "转录返回空结果")
+    
+    def _on_transcribe_finished(self, audio_path: Path, text: str):
+        """转录完成处理"""
+        self._logger.info(f"转录完成: {audio_path}, 文本长度: {len(text)}")
+        self._transcribe_worker = None
+        self._current_audio_path = None
+        
+        # 发送转录完成信号
+        self.transcription_finished.emit(audio_path, text)
+        
+        # 发送创建录音会话信号给主窗口
+        self.create_recording_conversation.emit(audio_path, text)
+    
+    def _on_transcribe_error(self, audio_path: str, error: str):
+        """转录错误处理"""
+        self._logger.error(f"转录失败: {audio_path}, 错误: {error}")
+        self._transcribe_worker = None
+        self._current_audio_path = None
+        
+        # 发送转录错误信号
+        self.transcription_error.emit(error)
+        
+        # 在聊天窗口显示错误消息
+        if self._chat_window:
+            if hasattr(self, '_transcription_message_shown') and self._transcription_message_shown:
+                self._chat_window.update_last_message(f"❌ 转录失败: {error}")
+            else:
+                self._chat_window.add_message("assistant", f"❌ 转录失败: {error}")
+            self._transcription_message_shown = False
 
     def _toggle_chat_window(self):
         """切换聊天窗口的展开/收起状态"""

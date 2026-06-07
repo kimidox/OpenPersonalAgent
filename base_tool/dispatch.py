@@ -14,6 +14,14 @@ from skill import SkillRegistry
 from skill.loader import load_skill_memory_lazy
 from .context import ToolContext
 
+# UI Automation 模块导入
+try:
+    from automation import AccessibilityTreeParser, ElementFinder, ActionExecutor
+    from automation.uia_client import get_uia_client
+    UIA_AVAILABLE = True
+except ImportError:
+    UIA_AVAILABLE = False
+
 _RUN_COMMAND_DEFAULT_TIMEOUT = 60
 _RUN_COMMAND_MAX_TIMEOUT = 180
 _RUN_COMMAND_MAX_TOTAL_OUT = 12000
@@ -850,6 +858,688 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
 
         else:
             return f"错误: 未知的 action: {action}，支持 list/get_content/get_metadata"
+
+    # ===== UI Automation 工具处理 =====
+
+    if name == "get_accessibility_tree":
+        if not UIA_AVAILABLE:
+            return "错误: UI Automation 模块不可用，请确保已安装 uiautomation 库"
+
+        window_title = args.get("window_title", None)
+        process_id = args.get("process_id", None)
+        max_depth = args.get("max_depth", 5)
+        max_elements = args.get("max_elements", 500)
+
+        try:
+            import uiautomation as auto
+            import time
+
+            start_time = time.time()
+
+            # 如果没有指定窗口，返回所有活跃窗口列表
+            if window_title is None and process_id is None:
+                windows = []
+
+                # 方法1: 使用Win32 API获取所有顶层窗口（更可靠）
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+
+                    # 定义Win32 API函数
+                    user32 = ctypes.windll.user32
+
+                    # EnumWindows回调函数
+                    def enum_windows_callback(hwnd, lParam):
+                        try:
+                            # 获取窗口标题
+                            length = user32.GetWindowTextLengthW(hwnd)
+                            if length > 0:
+                                buffer = ctypes.create_unicode_buffer(length + 1)
+                                user32.GetWindowTextW(hwnd, buffer, length + 1)
+                                title = buffer.value
+                            else:
+                                title = ""
+
+                            # 获取窗口类名
+                            buffer = ctypes.create_unicode_buffer(256)
+                            user32.GetClassNameW(hwnd, buffer, 256)
+                            class_name = buffer.value
+
+                            # 获取进程ID
+                            pid = wintypes.DWORD()
+                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                            process_id = pid.value
+
+                            # 检查窗口是否可见
+                            is_visible = user32.IsWindowVisible(hwnd)
+
+                            # 获取窗口边界
+                            rect = wintypes.RECT()
+                            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+
+                            # 过滤：只保留有标题且可见的窗口
+                            if title and is_visible:
+                                windows.append({
+                                    "name": title,
+                                    "class_name": class_name,
+                                    "process_id": process_id,
+                                    "handle": hwnd,
+                                    "is_visible": is_visible,
+                                    "bounding_rect": f"({rect.left}, {rect.top}, {rect.right}, {rect.bottom})",
+                                    "width": rect.right - rect.left,
+                                    "height": rect.bottom - rect.top,
+                                })
+                        except Exception:
+                            pass
+                        return True  # 继续枚举
+
+                    # 定义回调函数类型
+                    EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+                    # 枚举所有顶层窗口
+                    user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
+
+                except Exception as e:
+                    # 如果Win32 API失败，fallback到uiautomation
+                    try:
+                        root = auto.GetRootControl()
+                        for child in root.GetChildren():
+                            try:
+                                if child.ControlType == auto.ControlType.Window:
+                                    rect = child.BoundingRectangle
+                                    windows.append({
+                                        "name": child.Name or "",
+                                        "class_name": child.ClassName or "",
+                                        "process_id": child.ProcessId,
+                                        "handle": child.NativeWindowHandle if hasattr(child, 'NativeWindowHandle') else 0,
+                                        "is_visible": not child.IsOffscreen,
+                                        "bounding_rect": f"({rect.left}, {rect.top}, {rect.right}, {rect.bottom})",
+                                        "width": rect.right - rect.left,
+                                        "height": rect.bottom - rect.top,
+                                    })
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                # 过滤掉太小或隐藏的窗口（如工具栏、通知区域等）
+                filtered_windows = []
+                for win in windows:
+                    width = win.get("width", 0)
+                    height = win.get("height", 0)
+                    # 只保留宽度>100且高度>100的窗口（过滤掉小窗口）
+                    if width > 100 and height > 100:
+                        filtered_windows.append(win)
+
+                elapsed_ms = int((time.time() - start_time) * 1000)
+
+                # 格式化输出
+                output_lines = [f"当前系统活跃窗口列表（共 {len(filtered_windows)} 个）:"]
+                output_lines.append("")
+                output_lines.append("【窗口列表】")
+                for i, win in enumerate(filtered_windows, 1):
+                    name = win.get("name", "")[:50]  # 截断长标题
+                    pid = win.get("process_id", 0)
+                    handle = win.get("handle", 0)
+                    class_name = win.get("class_name", "")
+                    bounding_rect = win.get("bounding_rect", "")
+                    
+                    output_lines.append(f"{i}. {name}")
+                    output_lines.append(f"   - 进程ID: {pid}")
+                    output_lines.append(f"   - 窗口句柄: {handle} (0x{handle:X})")
+                    output_lines.append(f"   - 类名: {class_name}")
+                    output_lines.append(f"   - 边界: {bounding_rect}")
+                    output_lines.append(f"   - 尺寸: {win.get('width', 0)}x{win.get('height', 0)}")
+                    output_lines.append("")
+
+                output_lines.append("【建议】")
+                output_lines.append("如需查看某个窗口的详细UI结构，请使用:")
+                output_lines.append("get_accessibility_tree(window_title='窗口名称')")
+                output_lines.append("或 get_accessibility_tree(process_id=进程ID)")
+
+                return "\n".join(output_lines) + f"\n\n耗时: {elapsed_ms}ms\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+
+            # 如果指定了窗口，返回该窗口的详细Accessibility Tree
+            parser = AccessibilityTreeParser()
+            result = parser.parse_window(
+                window_title=window_title,
+                process_id=process_id,
+                max_depth=max_depth,
+                max_elements=max_elements,
+            )
+
+            if result.get("success"):
+                # 返回 LLM 易读格式
+                llm_readable = parser.to_llm_readable(result)
+                return llm_readable + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            else:
+                return f"错误: {result.get('error', '未知错误')}"
+        except Exception as e:
+            return f"错误: 获取 Accessibility Tree 失败: {e}"
+
+    if name == "find_element":
+        if not UIA_AVAILABLE:
+            return "错误: UI Automation 模块不可用"
+
+        method = args.get("method", "")
+        query = args.get("query", "")
+        window_title = args.get("window_title", None)
+        max_results = args.get("max_results", 50)
+
+        if not method or not query:
+            return "错误: 缺少 method 或 query 参数"
+
+        try:
+            finder = ElementFinder()
+
+            if method == "by_name":
+                result = finder.find_by_name(
+                    name=query,
+                    window_title=window_title,
+                    max_results=max_results,
+                )
+            elif method == "by_automation_id":
+                result = finder.find_by_automation_id(
+                    automation_id=query,
+                    window_title=window_title,
+                )
+            elif method == "by_control_type":
+                result = finder.find_by_control_type(
+                    control_type=query,
+                    window_title=window_title,
+                    max_results=max_results,
+                )
+            elif method == "by_coordinates":
+                # 解析坐标
+                coords = query.split(",")
+                if len(coords) != 2:
+                    return "错误: 坐标格式应为 x,y"
+                x, y = int(coords[0].strip()), int(coords[1].strip())
+                result = finder.find_by_coordinates(x=x, y=y)
+            elif method == "by_pattern":
+                result = finder.find_by_pattern(
+                    pattern=query,
+                    window_title=window_title,
+                    max_results=max_results,
+                )
+            else:
+                return f"错误: 未知的查找方法: {method}"
+
+            if result.get("success"):
+                # 格式化输出
+                if "results" in result:
+                    elements = result["results"]
+                    output_lines = [f"找到 {len(elements)} 个元素:"]
+                    for elem in elements:
+                        output_lines.append(
+                            f"- [{elem.get('control_type', 'Unknown')}] {elem.get('name', '')}"
+                            f" (id: {elem.get('automation_id', '')})"
+                        )
+                    return "\n".join(output_lines) + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                elif "result" in result:
+                    elem = result["result"]
+                    return (
+                        f"找到元素:\n"
+                        f"- 类型: {elem.get('control_type', 'Unknown')}\n"
+                        f"- 名称: {elem.get('name', '')}\n"
+                        f"- AutomationId: {elem.get('automation_id', '')}\n"
+                        f"- 边界: {elem.get('bounding_rectangle', (0, 0, 0, 0))}\n"
+                        f"- Patterns: {', '.join(elem.get('patterns', []))}\n\n"
+                        f"✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                    )
+            else:
+                return f"错误: {result.get('error', '未找到元素')}"
+        except Exception as e:
+            return f"错误: 查找元素失败: {e}"
+
+    if name == "click_element":
+        if not UIA_AVAILABLE:
+            return "错误: UI Automation 模块不可用"
+
+        element = args.get("element", "")
+        method = args.get("method", "invoke")
+        wait_time = args.get("wait_time", 0.1)
+        window_title = args.get("window_title", None)
+
+        if not element:
+            return "错误: 缺少 element 参数"
+
+        try:
+            executor = ActionExecutor()
+
+            # 解析元素信息
+            element_info = element
+            if element.startswith("{") or element.startswith("["):
+                # JSON 格式
+                element_info = json.loads(element)
+
+            result = executor.click(
+                element=element_info,
+                method=method,
+                wait_time=wait_time,
+            )
+
+            if result.get("success"):
+                return f"点击成功 (方法: {method})\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            else:
+                return f"错误: {result.get('error', '点击失败')}"
+        except Exception as e:
+            return f"错误: 点击元素失败: {e}"
+
+    if name == "type_text":
+        if not UIA_AVAILABLE:
+            return "错误: UI Automation 模块不可用"
+
+        element = args.get("element", "")
+        text = args.get("text", "")
+        method = args.get("method", "value")
+        clear_first = args.get("clear_first", True)
+        wait_time = args.get("wait_time", 0.1)
+        window_title = args.get("window_title", None)
+
+        if not element or not text:
+            return "错误: 缺少 element 或 text 参数"
+
+        try:
+            executor = ActionExecutor()
+
+            # 解析元素信息
+            element_info = element
+            if element.startswith("{") or element.startswith("["):
+                element_info = json.loads(element)
+
+            result = executor.type_text(
+                element=element_info,
+                text=text,
+                method=method,
+                clear_first=clear_first,
+                wait_time=wait_time,
+            )
+
+            if result.get("success"):
+                return f"输入成功 (方法: {method}, 文本长度: {len(text)})\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            else:
+                return f"错误: {result.get('error', '输入失败')}"
+        except Exception as e:
+            return f"错误: 输入文本失败: {e}"
+
+    if name == "scroll_element":
+        if not UIA_AVAILABLE:
+            return "错误: UI Automation 模块不可用"
+
+        element = args.get("element", "")
+        direction = args.get("direction", "down")
+        amount = args.get("amount", "small")
+        count = args.get("count", 1)
+        window_title = args.get("window_title", None)
+
+        if not element or not direction:
+            return "错误: 缺少 element 或 direction 参数"
+
+        try:
+            executor = ActionExecutor()
+
+            # 解析元素信息
+            element_info = element
+            if element.startswith("{") or element.startswith("["):
+                element_info = json.loads(element)
+
+            result = executor.scroll(
+                element=element_info,
+                direction=direction,
+                amount=amount,
+                count=count,
+            )
+
+            if result.get("success"):
+                return f"滚动成功 (方向: {direction}, 次数: {count})\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            else:
+                return f"错误: {result.get('error', '滚动失败')}"
+        except Exception as e:
+            return f"错误: 滚动元素失败: {e}"
+
+    if name == "get_element_state":
+        if not UIA_AVAILABLE:
+            return "错误: UI Automation 模块不可用"
+
+        element = args.get("element", "")
+        window_title = args.get("window_title", None)
+
+        if not element:
+            return "错误: 缺少 element 参数"
+
+        try:
+            executor = ActionExecutor()
+
+            # 解析元素信息
+            element_info = element
+            if element.startswith("{") or element.startswith("["):
+                element_info = json.loads(element)
+
+            result = executor.get_element_state(element=element_info)
+
+            if result.get("success"):
+                state = result.get("state", {})
+                output_lines = ["元素状态:"]
+                for key, value in state.items():
+                    output_lines.append(f"- {key}: {value}")
+                return "\n".join(output_lines) + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+            else:
+                return f"错误: {result.get('error', '获取状态失败')}"
+        except Exception as e:
+            return f"错误: 获取元素状态失败: {e}"
+
+    if name == "start_application":
+        app = args.get("app", "")
+        method = args.get("method", "by_name")
+        wait_time = args.get("wait_time", 2.0)
+        app_args = args.get("args", "")
+
+        if not app:
+            return "错误: 缺少 app 参数"
+
+        try:
+            import subprocess
+            import webbrowser
+            import os
+            import time
+
+            if method == "by_url":
+                # 通过URL启动（打开浏览器）
+                webbrowser.open(app)
+                if wait_time > 0:
+                    time.sleep(wait_time)
+                return f"已打开URL: {app}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+
+            elif method == "by_path":
+                # 通过路径启动
+                # 判断是否是快捷方式
+                if app.lower().endswith('.lnk'):
+                    # 快捷方式使用 os.startfile
+                    os.startfile(app)
+                else:
+                    # 可执行文件使用 subprocess
+                    cmd = [app]
+                    if app_args:
+                        cmd.append(app_args)
+                    subprocess.Popen(cmd, shell=False)
+                if wait_time > 0:
+                    time.sleep(wait_time)
+                return f"已启动程序: {app}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+
+            elif method == "by_name":
+                # 通过程序名启动
+                if sys.platform == "win32":
+                    # Windows: 尝试多种方式启动
+                    
+                    # 方式1: 尝试 os.startfile（适用于快捷方式和PATH中的程序）
+                    try:
+                        os.startfile(app)
+                        if wait_time > 0:
+                            time.sleep(wait_time)
+                        return f"已启动程序: {app}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                    except Exception:
+                        pass
+                    
+                    # 方式2: 使用 subprocess.Popen + shell=True
+                    try:
+                        cmd = app
+                        if app_args:
+                            cmd = f"{app} {app_args}"
+                        subprocess.Popen(cmd, shell=True)
+                        if wait_time > 0:
+                            time.sleep(wait_time)
+                        return f"已启动程序: {app}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                    except Exception:
+                        pass
+                    
+                    # 方式3: 使用 cmd /c start
+                    try:
+                        cmd = f'cmd /c start "" "{app}"'
+                        if app_args:
+                            cmd = f'cmd /c start "" "{app}" "{app_args}"'
+                        subprocess.run(cmd, shell=True, timeout=10)
+                        if wait_time > 0:
+                            time.sleep(wait_time)
+                        return f"已启动程序: {app}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                    except Exception as e:
+                        return f"错误: 所有启动方式都失败: {e}"
+                else:
+                    # Linux/Mac: 直接执行
+                    cmd = [app]
+                    if app_args:
+                        cmd.append(app_args)
+                    subprocess.Popen(cmd)
+                    if wait_time > 0:
+                        time.sleep(wait_time)
+                    return f"已启动程序: {app}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+
+            else:
+                return f"错误: 未知的启动方式: {method}"
+
+        except Exception as e:
+            return f"错误: 启动程序失败: {e}"
+
+    if name == "list_installed_apps":
+        filter_keyword = args.get("filter", "")
+        max_results = args.get("max_results", 50)
+
+        try:
+            import os
+            import subprocess
+            from pathlib import Path
+
+            apps = []
+
+            # 1. 查询 Windows 开始菜单快捷方式（并解析目标路径）
+            if sys.platform == "win32":
+                start_menu_paths = [
+                    Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
+                    Path(os.environ.get("PROGRAMDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
+                ]
+
+                for start_path in start_menu_paths:
+                    if start_path.exists():
+                        for lnk_file in start_path.rglob("*.lnk"):
+                            try:
+                                name = lnk_file.stem
+                                if filter_keyword and filter_keyword.lower() not in name.lower():
+                                    continue
+                                
+                                # 解析快捷方式获取目标路径
+                                target_path = ""
+                                try:
+                                    # 使用 PowerShell 解析快捷方式
+                                    ps_script = f'''
+                                    $shell = New-Object -ComObject WScript.Shell
+                                    $shortcut = $shell.CreateShortcut("{str(lnk_file)}")
+                                    $shortcut.TargetPath
+                                    '''
+                                    result = subprocess.run(
+                                        ["powershell", "-Command", ps_script],
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=5,
+                                    )
+                                    if result.returncode == 0 and result.stdout.strip():
+                                        target_path = result.stdout.strip()
+                                except Exception:
+                                    pass
+                                
+                                apps.append({
+                                    "name": name,
+                                    "shortcut_path": str(lnk_file),
+                                    "target_path": target_path,  # 实际启动路径
+                                    "type": "shortcut",
+                                    "launch_command": target_path if target_path else str(lnk_file),
+                                })
+                                if len(apps) >= max_results:
+                                    break
+                            except Exception:
+                                pass
+
+            # 2. 查询 PATH 环境变量中的可执行程序
+            path_env = os.environ.get("PATH", "")
+            path_dirs = path_env.split(os.pathsep)
+
+            common_apps = {
+                "notepad": ("记事本", "C:\\Windows\\notepad.exe"),
+                "calc": ("计算器", "calc.exe"),
+                "mspaint": ("画图", "mspaint.exe"),
+                "explorer": ("文件资源管理器", "explorer.exe"),
+                "cmd": ("命令提示符", "cmd.exe"),
+                "powershell": ("PowerShell", "powershell.exe"),
+                "chrome": ("Chrome浏览器", "chrome.exe"),
+                "firefox": ("Firefox浏览器", "firefox.exe"),
+                "msedge": ("Edge浏览器", "msedge.exe"),
+                "excel": ("Excel", "excel.exe"),
+                "word": ("Word", "winword.exe"),
+                "powerpnt": ("PowerPoint", "powerpnt.exe"),
+                "outlook": ("Outlook", "outlook.exe"),
+                "code": ("VS Code", "code.exe"),
+                "notepad++": ("Notepad++", "notepad++.exe"),
+                "python": ("Python", "python.exe"),
+                "git": ("Git", "git.exe"),
+            }
+
+            for path_dir in path_dirs:
+                if not path_dir:
+                    continue
+                try:
+                    for exe_file in Path(path_dir).glob("*.exe"):
+                        exe_name = exe_file.stem.lower()
+                        display_name, default_launch = common_apps.get(exe_name, (exe_name, exe_name))
+                        if filter_keyword:
+                            if filter_keyword.lower() not in exe_name.lower() and filter_keyword.lower() not in display_name.lower():
+                                continue
+                        apps.append({
+                            "name": display_name,
+                            "exe_name": exe_name,
+                            "path": str(exe_file),
+                            "type": "exe",
+                            "in_path": True,
+                            "launch_command": exe_name,  # 可以直接用程序名启动
+                        })
+                        if len(apps) >= max_results:
+                            break
+                except Exception:
+                    pass
+
+            # 3. 查询注册表中的已安装程序（Windows）
+            if sys.platform == "win32" and len(apps) < max_results:
+                try:
+                    # 使用 PowerShell 查询注册表，获取更详细的路径信息
+                    ps_script = '''
+                    Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*,
+                                     HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* |
+                    Where-Object { $_.DisplayName } |
+                    Select-Object DisplayName, InstallLocation, DisplayIcon, UninstallString |
+                    ConvertTo-Json -Depth 1
+                    '''
+                    result = subprocess.run(
+                        ["powershell", "-Command", ps_script],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if result.returncode == 0 and result.stdout:
+                        import json
+                        reg_apps = json.loads(result.stdout)
+                        if isinstance(reg_apps, list):
+                            for app in reg_apps:
+                                name = app.get("DisplayName", "")
+                                location = app.get("InstallLocation", "")
+                                icon = app.get("DisplayIcon", "")
+                                uninstall_string = app.get("UninstallString", "")
+                                
+                                if filter_keyword and filter_keyword.lower() not in name.lower():
+                                    continue
+                                
+                                # 尝试从安装路径推断可执行文件
+                                exe_path = ""
+                                if location:
+                                    try:
+                                        # 查找安装目录下的exe文件
+                                        for exe in Path(location).glob("*.exe"):
+                                            exe_path = str(exe)
+                                            break
+                                    except Exception:
+                                        pass
+                                
+                                # 尝试从图标路径推断
+                                if not exe_path and icon:
+                                    exe_path = icon
+                                
+                                apps.append({
+                                    "name": name,
+                                    "install_location": location,
+                                    "exe_path": exe_path,
+                                    "icon": icon,
+                                    "type": "installed",
+                                    "launch_command": exe_path if exe_path else f"需手动查找: {location}",
+                                })
+                                if len(apps) >= max_results:
+                                    break
+                except Exception:
+                    pass
+
+            # 去重并格式化输出
+            seen_names = set()
+            unique_apps = []
+            for app in apps:
+                name_lower = app.get("name", "").lower()
+                if name_lower not in seen_names:
+                    seen_names.add(name_lower)
+                    unique_apps.append(app)
+
+            # 格式化输出（包含启动路径）
+            output_lines = [f"找到 {len(unique_apps)} 个已安装的应用程序:"]
+            output_lines.append("")
+            output_lines.append("【程序列表】")
+            for i, app in enumerate(unique_apps[:max_results], 1):
+                name = app.get("name", "")
+                app_type = app.get("type", "")
+                launch_command = app.get("launch_command", "")
+                
+                if app_type == "exe":
+                    path = app.get("path", "")
+                    output_lines.append(f"{i}. {name}")
+                    output_lines.append(f"   - 类型: PATH可执行文件")
+                    output_lines.append(f"   - 路径: {path}")
+                    output_lines.append(f"   - 启动命令: start_application(app='{launch_command}')")
+                elif app_type == "shortcut":
+                    shortcut_path = app.get("shortcut_path", "")
+                    target_path = app.get("target_path", "")
+                    output_lines.append(f"{i}. {name}")
+                    output_lines.append(f"   - 类型: 快捷方式")
+                    output_lines.append(f"   - 快捷方式路径: {shortcut_path}")
+                    output_lines.append(f"   - 目标路径: {target_path}")
+                    if target_path:
+                        output_lines.append(f"   - 启动命令: start_application(app='{target_path}', method='by_path')")
+                    else:
+                        output_lines.append(f"   - 启动命令: start_application(app='{shortcut_path}', method='by_path')")
+                elif app_type == "installed":
+                    location = app.get("install_location", "")
+                    exe_path = app.get("exe_path", "")
+                    output_lines.append(f"{i}. {name}")
+                    output_lines.append(f"   - 类型: 已安装程序")
+                    output_lines.append(f"   - 安装路径: {location}")
+                    output_lines.append(f"   - 可执行文件: {exe_path}")
+                    if exe_path and exe_path.endswith('.exe'):
+                        output_lines.append(f"   - 启动命令: start_application(app='{exe_path}', method='by_path')")
+                    else:
+                        output_lines.append(f"   - 启动命令: 需手动查找可执行文件")
+                else:
+                    output_lines.append(f"{i}. {name}")
+                output_lines.append("")
+
+            output_lines.append("【建议】")
+            output_lines.append("根据用户意图选择合适的程序，复制上面的启动命令即可启动程序。")
+
+            return "\n".join(output_lines) + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+
+        except Exception as e:
+            return f"错误: 查询已安装程序失败: {e}"
 
     return f"未知原子工具: {name}"
 

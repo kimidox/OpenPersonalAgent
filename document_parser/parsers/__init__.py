@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .audio_parser import AudioParser
 from .excel_parser import ExcelParser
 from .json_parser import JSONParser
 from .markdown_parser import MarkdownParser
@@ -14,4 +15,5 @@ __all__ = [
     "WordParser",
     "PDFParser",
     "ExcelParser",
+    "AudioParser",
 ]

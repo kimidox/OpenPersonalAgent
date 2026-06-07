@@ -72,6 +72,14 @@ TOOL_CATALOG = {
     "list_scheduled_tasks": "列出定时任务。",
     "delete_scheduled_task": "删除定时任务。",
     "uploaded_files": "管理已上传文件。支持三种操作：list(列出文件)、get_content(获取内容)、get_metadata(获取元信息)。",
+    "get_accessibility_tree": "获取窗口的Accessibility Tree（UI元素结构树）。返回窗口中所有UI元素的名称、类型、坐标等信息。",
+    "find_element": "查找UI元素。支持按名称、AutomationId、控件类型、坐标等方式查找。",
+    "click_element": "点击UI元素。使用InvokePattern或鼠标点击。",
+    "type_text": "在UI元素中输入文本。使用ValuePattern或SendKeys。",
+    "scroll_element": "滚动UI元素。支持上下左右滚动。",
+    "get_element_state": "获取UI元素的状态信息。",
+    "start_application": "启动应用程序。支持通过程序名、路径或URL启动应用。",
+    "list_installed_apps": "查询系统已安装的应用程序列表。返回程序名称、安装路径、可执行文件等信息。",
 }
 
 CONTROL_TOOL_DEFINITIONS: list[dict] = [
@@ -452,6 +460,307 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 }
             },
             "required": ["action"]
+        },
+    },
+    {
+        "name": "get_accessibility_tree",
+        "description": (
+            "获取窗口的Accessibility Tree（UI元素结构树）。\n"
+            "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档，了解完整的执行流程和规划要求。\n"
+            "【两种使用方式】\n"
+            "1. 不指定参数：返回当前系统所有活跃窗口列表（窗口句柄、标题、进程ID等）\n"
+            "2. 指定window_title或process_id：返回该窗口的详细UI元素结构树\n"
+            "这是Windows桌面自动化的核心感知工具，通过UI Automation API获取窗口信息。\n"
+            "返回信息包括：元素名称、控件类型、AutomationId、坐标、状态、支持的Pattern等。\n"
+            "使用场景：\n"
+            "- 了解当前系统有哪些活跃窗口\n"
+            "- 需要了解窗口中有哪些可操作的UI元素\n"
+            "- 需要定位按钮、输入框、菜单等控件\n"
+            "- 需要获取元素的精确坐标或ID\n"
+            "参数：window_title(可选，窗口标题)、process_id(可选，进程ID)、max_depth(可选，最大遍历深度，默认5)、max_elements(可选，最大元素数量，默认500)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "window_title": {
+                    "type": "string",
+                    "description": "窗口标题（支持部分匹配），不提供则获取焦点窗口"
+                },
+                "process_id": {
+                    "type": "integer",
+                    "description": "进程ID，用于精确定位窗口"
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "最大遍历深度，默认5"
+                },
+                "max_elements": {
+                    "type": "integer",
+                    "description": "最大元素数量限制，默认500"
+                }
+            },
+            "required": []
+        },
+    },
+    {
+        "name": "find_element",
+        "description": (
+            "查找UI元素。\n"
+            "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档。\n"
+            "支持多种查找策略：\n"
+            "- by_name: 按元素名称查找（支持部分匹配）\n"
+            "- by_automation_id: 按AutomationId精确查找\n"
+            "- by_control_type: 按控件类型查找（如Button、Edit等）\n"
+            "- by_coordinates: 按屏幕坐标查找该位置的元素\n"
+            "- by_pattern: 按支持的Pattern查找（如InvokePattern表示可点击）\n"
+            "使用场景：\n"
+            "- 需要定位特定的按钮、输入框等控件\n"
+            "- 需要找到所有可点击的元素\n"
+            "- 需要确认某个坐标处是什么元素\n"
+            "参数：method(必需，查找方法)、query(必需，查找条件)、window_title(可选，限制搜索范围)、max_results(可选，最大结果数)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "method": {
+                    "type": "string",
+                    "enum": ["by_name", "by_automation_id", "by_control_type", "by_coordinates", "by_pattern"],
+                    "description": "查找方法：by_name按名称、by_automation_id按ID、by_control_type按类型、by_coordinates按坐标、by_pattern按Pattern"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "查找条件：名称、AutomationId、控件类型、坐标(x,y)或Pattern名称"
+                },
+                "window_title": {
+                    "type": "string",
+                    "description": "窗口标题，限制搜索范围"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "最大返回结果数，默认50"
+                }
+            },
+            "required": ["method", "query"]
+        },
+    },
+    {
+        "name": "click_element",
+        "description": (
+            "点击UI元素。\n"
+            "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档。\n"
+            "支持两种点击方式：\n"
+            "- invoke: 使用InvokePattern（推荐，更可靠）\n"
+            "- mouse: 使用鼠标点击坐标\n"
+            "使用场景：\n"
+            "- 点击按钮、菜单项等可交互元素\n"
+            "- 确认对话框\n"
+            "- 选择选项\n"
+            "参数：element(必需，元素信息或元素定位条件)、method(可选，点击方式，默认invoke)、wait_time(可选，点击后等待时间)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "element": {
+                    "type": "string",
+                    "description": "元素定位条件：可以是元素名称、AutomationId，或JSON格式的元素信息"
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["invoke", "mouse"],
+                    "description": "点击方式：invoke使用InvokePattern，mouse使用鼠标点击"
+                },
+                "wait_time": {
+                    "type": "number",
+                    "description": "点击后等待时间（秒），默认0.1"
+                },
+                "window_title": {
+                    "type": "string",
+                    "description": "窗口标题，用于定位元素"
+                }
+            },
+            "required": ["element"]
+        },
+    },
+    {
+        "name": "type_text",
+        "description": (
+            "在UI元素中输入文本。\n"
+            "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档。\n"
+            "支持两种输入方式：\n"
+            "- value: 使用ValuePattern（推荐，更可靠）\n"
+            "- sendkeys: 使用SendKeys模拟键盘输入\n"
+            "使用场景：\n"
+            "- 在文本框中输入内容\n"
+            "- 填写表单\n"
+            "- 搜索框输入关键词\n"
+            "参数：element(必需，元素定位条件)、text(必需，要输入的文本)、method(可选，输入方式)、clear_first(可选，是否先清空)、wait_time(可选，输入后等待时间)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "element": {
+                    "type": "string",
+                    "description": "元素定位条件：可以是元素名称、AutomationId，或JSON格式的元素信息"
+                },
+                "text": {
+                    "type": "string",
+                    "description": "要输入的文本内容"
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["value", "sendkeys"],
+                    "description": "输入方式：value使用ValuePattern，sendkeys使用SendKeys"
+                },
+                "clear_first": {
+                    "type": "boolean",
+                    "description": "是否先清空现有内容，默认true"
+                },
+                "wait_time": {
+                    "type": "number",
+                    "description": "输入后等待时间（秒），默认0.1"
+                },
+                "window_title": {
+                    "type": "string",
+                    "description": "窗口标题，用于定位元素"
+                }
+            },
+            "required": ["element", "text"]
+        },
+    },
+    {
+        "name": "scroll_element",
+        "description": (
+            "滚动UI元素。\n"
+            "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档。\n"
+            "支持四个方向：up/down/left/right\n"
+            "支持两种滚动量：small（小步滚动）、large（大步滚动）\n"
+            "使用场景：\n"
+            "- 滚动列表查看更多内容\n"
+            "- 滚动页面\n"
+            "- 滚动表格\n"
+            "参数：element(必需，元素定位条件)、direction(必需，滚动方向)、amount(可选，滚动量)、count(可选，滚动次数)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "element": {
+                    "type": "string",
+                    "description": "元素定位条件：可以是元素名称、AutomationId，或JSON格式的元素信息"
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["up", "down", "left", "right"],
+                    "description": "滚动方向：up向上、down向下、left向左、right向右"
+                },
+                "amount": {
+                    "type": "string",
+                    "enum": ["small", "large"],
+                    "description": "滚动量：small小步、large大步，默认small"
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "滚动次数，默认1"
+                },
+                "window_title": {
+                    "type": "string",
+                    "description": "窗口标题，用于定位元素"
+                }
+            },
+            "required": ["element", "direction"]
+        },
+    },
+    {
+        "name": "get_element_state",
+        "description": (
+            "获取UI元素的状态信息。\n"
+            "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档。\n"
+            "返回元素当前状态：是否启用、是否可见、是否可聚焦、是否有焦点、值等。\n"
+            "使用场景：\n"
+            "- 确认元素是否可操作\n"
+            "- 检查CheckBox是否已选中\n"
+            "- 检查输入框当前值\n"
+            "参数：element(必需，元素定位条件)、window_title(可选，窗口标题)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "element": {
+                    "type": "string",
+                    "description": "元素定位条件：可以是元素名称、AutomationId，或JSON格式的元素信息"
+                },
+                "window_title": {
+                    "type": "string",
+                    "description": "窗口标题，用于定位元素"
+                }
+            },
+            "required": ["element"]
+        },
+    },
+    {
+        "name": "start_application",
+        "description": (
+            "启动应用程序。\n"
+            "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档，了解完整的执行流程和规划要求。\n"
+            "支持三种启动方式：\n"
+            "- by_name: 通过程序名称启动（如 notepad、chrome、excel）\n"
+            "- by_path: 通过完整路径启动（如 C:\\Program Files\\app.exe）\n"
+            "- by_url: 通过URL启动（会打开默认浏览器）\n"
+            "使用场景：\n"
+            "- 启动记事本、Excel等常用程序\n"
+            "- 启动特定路径的应用程序\n"
+            "- 打开网页链接\n"
+            "参数：app(必需，程序名/路径/URL)、method(可选，启动方式，默认by_name)、wait_time(可选，启动后等待时间)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "app": {
+                    "type": "string",
+                    "description": "程序名称、完整路径或URL"
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["by_name", "by_path", "by_url"],
+                    "description": "启动方式：by_name通过程序名、by_path通过路径、by_url通过URL"
+                },
+                "wait_time": {
+                    "type": "number",
+                    "description": "启动后等待时间（秒），默认2秒"
+                },
+                "args": {
+                    "type": "string",
+                    "description": "启动参数（可选），如打开特定文件"
+                }
+            },
+            "required": ["app"]
+        },
+    },
+    {
+        "name": "list_installed_apps",
+        "description": (
+            "查询系统已安装的应用程序列表。\n"
+            "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档。\n"
+            "【使用时机】在调用 start_application 启动程序前，应先调用本工具查询系统已有的程序，让大模型根据用户意图选择合适的程序。\n"
+            "返回信息包括：程序名称、安装路径、可执行文件、是否在PATH中等。\n"
+            "使用场景：\n"
+            "- 用户想启动某个程序但不知道具体名称或路径\n"
+            "- 需要了解系统有哪些可启动的应用\n"
+            "- 根据用户意图匹配最合适的程序\n"
+            "参数：filter(可选，过滤关键词，如'office'、'browser')、max_results(可选，最大返回数量，默认50)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filter": {
+                    "type": "string",
+                    "description": "过滤关键词，用于筛选特定类型的程序（如'office'、'browser'、'editor'）"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "最大返回数量，默认50"
+                }
+            },
+            "required": []
         },
     },
 ]

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QApplication,
+    QProgressBar,
 )
 
 from ui.styles.style_manager import StyleManager
@@ -117,6 +118,27 @@ class FilePreviewCard(QFrame):
         self._status_label.setStyleSheet("font-size: 8pt; color: #9ca3af;")
         self._info_layout.addWidget(self._status_label)
 
+        # 进度条
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setObjectName("skillAgentFileProgressBar")
+        self._progress_bar.setFixedHeight(4)
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setStyleSheet("""
+            QProgressBar#skillAgentFileProgressBar {
+                background-color: #e5e7eb;
+                border: none;
+                border-radius: 2px;
+            }
+            QProgressBar#skillAgentFileProgressBar::chunk {
+                background-color: #3b82f6;
+                border-radius: 2px;
+            }
+        """)
+        self._progress_bar.setVisible(False)
+        self._info_layout.addWidget(self._progress_bar)
+
         self._main_layout.addWidget(self._info_container, stretch=1)
 
         # Only add remove button if not read-only
@@ -161,15 +183,27 @@ class FilePreviewCard(QFrame):
         self._name_label.setToolTip(self._file_info.original_name)
         
         if self._file_info.is_parsing:
-            self._status_label.setText("解析中...")
+            # 显示进度条
+            self._progress_bar.setVisible(True)
+            self._progress_bar.setValue(self._file_info.parse_progress)
+            
+            # 显示状态文本
+            status_text = self._file_info.parse_status or "解析中..."
+            self._status_label.setText(status_text)
             self._status_label.setStyleSheet("font-size: 8pt; color: #2563eb;")
         elif self._file_info.is_success:
+            # 隐藏进度条
+            self._progress_bar.setVisible(False)
             self._status_label.setText("已解析")
             self._status_label.setStyleSheet("font-size: 8pt; color: #16a34a;")
         elif self._file_info.parse_error:
+            # 隐藏进度条
+            self._progress_bar.setVisible(False)
             self._status_label.setText("解析失败")
             self._status_label.setStyleSheet("font-size: 8pt; color: #ef4444;")
         else:
+            # 隐藏进度条
+            self._progress_bar.setVisible(False)
             self._status_label.setText("待解析")
             self._status_label.setStyleSheet("font-size: 8pt; color: #9ca3af;")
 
