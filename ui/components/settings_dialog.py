@@ -1597,6 +1597,28 @@ class SettingsDialog(QDialog):
         
         self._prompt_tab = prompt_tab
 
+        # ===== 用户自定义Skill管理标签页 =====
+        user_skill_tab = QWidget()
+        user_skill_tab_layout = QVBoxLayout(user_skill_tab)
+        user_skill_tab_layout.setContentsMargins(8, 8, 8, 8)
+        user_skill_tab_layout.setSpacing(12)
+        
+        try:
+            from ui.settings.skill_management_page import SkillManagementPage
+            self._user_skill_page = SkillManagementPage(
+                user_skill_tab,
+            )
+            user_skill_tab_layout.addWidget(self._user_skill_page)
+        except ImportError as e:
+            logger.warning(f"无法加载用户Skill管理页面: {e}")
+            error_label = QLabel(f"用户Skill管理模块加载失败: {e}")
+            error_label.setStyleSheet("color: #ef4444;")
+            user_skill_tab_layout.addWidget(error_label)
+        
+        tab_widget.addTab(user_skill_tab, "用户Skill管理")
+        
+        self._user_skill_tab = user_skill_tab
+
         self._tab_widget = tab_widget
         layout.addWidget(tab_widget)
 
@@ -2184,6 +2206,9 @@ class SettingsDialog(QDialog):
         self._refresh_asr_model_status()
         self._refresh_tts_model_status()
         self._refresh_prompt_template_status()
+        # 刷新用户Skill管理页面
+        if hasattr(self, '_user_skill_page'):
+            self._user_skill_page.refresh()
     
     def _refresh_asr_model_status(self) -> None:
         """刷新 ASR 模型状态"""

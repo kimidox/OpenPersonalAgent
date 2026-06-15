@@ -175,6 +175,12 @@ if MEMORY_MIN_SCORE < 0:
 _msr = get_config("MEMORY_SEARCH_ENABLED")
 MEMORY_SEARCH_ENABLED = _env_bool(_msr, True)
 
+# ===== Skill 执行自动总结配置 =====
+
+# 是否启用 Skill 执行自动总结（true/false，默认 false）
+_sse = get_config("SKILL_SUMMARY_ENABLED")
+SKILL_SUMMARY_ENABLED = _env_bool(_sse, False)
+
 _ww = get_config("WINDOW_WIDTH")
 try:
     WINDOW_WIDTH = int(_ww) if _ww not in (None, "") else 780

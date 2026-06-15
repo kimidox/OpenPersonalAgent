@@ -798,6 +798,13 @@ class SkillAgent:
 
     def _start_summary_in_background(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
         import threading
+        import config
+        
+        # 检查是否启用自动总结
+        if not config.SKILL_SUMMARY_ENABLED:
+            print(f"[SkillSummary] 自动总结已禁用，跳过总结 (conversation_id={conversation_id})")
+            return
+        
         print(f"[SkillSummary] 准备启动后台总结线程: conversation_id={conversation_id}, active_skill_ids={active_skill_ids}")
         
         if not self.memory:

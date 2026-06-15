@@ -13,11 +13,14 @@ from resource_path import paths
 from skill import SkillRegistry
 from skill.loader import load_skill_memory_lazy
 from .context import ToolContext
+from .decorators import atomic_tool
 
 # UI Automation 模块导入
 try:
     from automation import AccessibilityTreeParser, ElementFinder, ActionExecutor
     from automation.uia_client import get_uia_client
+    from automation.task_controller import get_controller, reset_controller, TaskController
+    from automation.success_rate_tracker import get_tracker
     UIA_AVAILABLE = True
 except ImportError:
     UIA_AVAILABLE = False
@@ -865,6 +868,12 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         if not UIA_AVAILABLE:
             return "错误: UI Automation 模块不可用，请确保已安装 uiautomation 库"
 
+        # 检查停止条件
+        controller = get_controller()
+        check_result = controller.check_before_operation("get_accessibility_tree")
+        if not check_result.get("can_continue"):
+            return f"【任务终止】{check_result.get('stop_reason', '达到停止条件')}\n\n请不要再继续尝试，应重新规划任务或放弃。"
+
         window_title = args.get("window_title", None)
         process_id = args.get("process_id", None)
         max_depth = args.get("max_depth", 5)
@@ -997,6 +1006,11 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 output_lines.append("get_accessibility_tree(window_title='窗口名称')")
                 output_lines.append("或 get_accessibility_tree(process_id=进程ID)")
 
+                # 添加任务状态信息
+                status_summary = controller.get_status_summary()
+                output_lines.append("")
+                output_lines.append(f"【任务状态】{status_summary}")
+
                 return "\n".join(output_lines) + f"\n\n耗时: {elapsed_ms}ms\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
 
             # 如果指定了窗口，返回该窗口的详细Accessibility Tree
@@ -1011,15 +1025,27 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
             if result.get("success"):
                 # 返回 LLM 易读格式
                 llm_readable = parser.to_llm_readable(result)
-                return llm_readable + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                # 添加任务状态信息
+                status_summary = controller.get_status_summary()
+                return llm_readable + f"\n\n【任务状态】{status_summary}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
             else:
-                return f"错误: {result.get('error', '未知错误')}"
+                # 记录失败
+                failure_info = controller.record_failure("get_accessibility_tree", result.get("error", "未知错误"))
+                return f"错误: {result.get('error', '未知错误')}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
         except Exception as e:
-            return f"错误: 获取 Accessibility Tree 失败: {e}"
+            # 记录失败
+            failure_info = controller.record_failure("get_accessibility_tree", str(e))
+            return f"错误: 获取 Accessibility Tree 失败: {e}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
 
     if name == "find_element":
         if not UIA_AVAILABLE:
             return "错误: UI Automation 模块不可用"
+
+        # 检查停止条件
+        controller = get_controller()
+        check_result = controller.check_before_operation("find_element")
+        if not check_result.get("can_continue"):
+            return f"【任务终止】{check_result.get('stop_reason', '达到停止条件')}\n\n请不要再继续尝试，应重新规划任务或放弃。"
 
         method = args.get("method", "")
         query = args.get("query", "")
@@ -1031,70 +1057,98 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
 
         try:
             finder = ElementFinder()
+            tracker = get_tracker()
 
-            if method == "by_name":
-                result = finder.find_by_name(
-                    name=query,
-                    window_title=window_title,
-                    max_results=max_results,
-                )
-            elif method == "by_automation_id":
-                result = finder.find_by_automation_id(
-                    automation_id=query,
-                    window_title=window_title,
-                )
-            elif method == "by_control_type":
-                result = finder.find_by_control_type(
-                    control_type=query,
-                    window_title=window_title,
-                    max_results=max_results,
-                )
-            elif method == "by_coordinates":
-                # 解析坐标
-                coords = query.split(",")
-                if len(coords) != 2:
-                    return "错误: 坐标格式应为 x,y"
-                x, y = int(coords[0].strip()), int(coords[1].strip())
-                result = finder.find_by_coordinates(x=x, y=y)
-            elif method == "by_pattern":
-                result = finder.find_by_pattern(
-                    pattern=query,
-                    window_title=window_title,
-                    max_results=max_results,
-                )
-            else:
-                return f"错误: 未知的查找方法: {method}"
+            # 使用带重试的查找方法
+            result = finder.find_element_with_retry(
+                method=method,
+                query=query,
+                window_title=window_title,
+                max_retries=3,
+                element_name=query,
+            )
 
             if result.get("success"):
                 # 格式化输出
+                output_lines = []
+                
                 if "results" in result:
                     elements = result["results"]
-                    output_lines = [f"找到 {len(elements)} 个元素:"]
+                    output_lines.append(f"找到 {len(elements)} 个元素:")
                     for elem in elements:
                         output_lines.append(
                             f"- [{elem.get('control_type', 'Unknown')}] {elem.get('name', '')}"
                             f" (id: {elem.get('automation_id', '')})"
                         )
-                    return "\n".join(output_lines) + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
                 elif "result" in result:
                     elem = result["result"]
-                    return (
-                        f"找到元素:\n"
-                        f"- 类型: {elem.get('control_type', 'Unknown')}\n"
-                        f"- 名称: {elem.get('name', '')}\n"
-                        f"- AutomationId: {elem.get('automation_id', '')}\n"
-                        f"- 边界: {elem.get('bounding_rectangle', (0, 0, 0, 0))}\n"
-                        f"- Patterns: {', '.join(elem.get('patterns', []))}\n\n"
-                        f"✓ 操作成功。如果任务已完成，请调用 finish 结束。"
-                    )
+                    output_lines.append("找到元素:")
+                    output_lines.append(f"- 类型: {elem.get('control_type', 'Unknown')}")
+                    output_lines.append(f"- 名称: {elem.get('name', '')}")
+                    output_lines.append(f"- AutomationId: {elem.get('automation_id', '')}")
+                    output_lines.append(f"- 边界: {elem.get('bounding_rectangle', (0, 0, 0, 0))}")
+                    output_lines.append(f"- Patterns: {', '.join(elem.get('patterns', []))}")
+                
+                # 添加方法信息
+                output_lines.append("")
+                output_lines.append(f"使用方法: {result.get('used_method', method)}")
+                if result.get('retry_count', 0) > 0:
+                    output_lines.append(f"重试次数: {result.get('retry_count', 0)}")
+                
+                # 添加历史统计推荐
+                recommendation = tracker.get_recommendation("find_methods")
+                if recommendation:
+                    output_lines.append("")
+                    output_lines.append(recommendation)
+                
+                # 添加任务状态信息
+                status_summary = controller.get_status_summary()
+                output_lines.append("")
+                output_lines.append(f"【任务状态】{status_summary}")
+                
+                return "\n".join(output_lines) + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
             else:
-                return f"错误: {result.get('error', '未找到元素')}"
+                # 记录失败
+                failure_info = controller.record_failure(f"find_element_{query}", result.get("error", "未找到元素"))
+                
+                output_lines = [f"错误: {result.get('error', '未找到元素')}"]
+                
+                # 显示尝试的方法
+                if result.get("tried_methods"):
+                    output_lines.append("")
+                    output_lines.append("尝试的方法:")
+                    for m in result["tried_methods"]:
+                        output_lines.append(f"- {m['method']}: {m['error']}")
+                
+                # 添加推荐
+                if result.get("recommendation"):
+                    output_lines.append("")
+                    output_lines.append(result["recommendation"])
+                
+                # 添加停止原因和失败统计
+                if failure_info.get("stop_reason"):
+                    output_lines.append("")
+                    output_lines.append(failure_info["stop_reason"])
+                
+                output_lines.append("")
+                output_lines.append(f"【失败统计】{controller.failure_counter.get_status_summary()}")
+                
+                return "\n".join(output_lines)
         except Exception as e:
-            return f"错误: 查找元素失败: {e}"
+            # 记录失败
+            failure_info = controller.record_failure("find_element", str(e))
+            return f"错误: 查找元素失败: {e}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
 
     if name == "click_element":
         if not UIA_AVAILABLE:
             return "错误: UI Automation 模块不可用"
+
+        # 检查停止条件
+        controller = get_controller()
+        step_id = f"click_{args.get('element', '')}"
+        check_result = controller.check_before_operation(step_id)
+        if not check_result.get("can_continue"):
+            return f"【任务终止】{check_result.get('stop_reason', '达到停止条件')}\n\n请不要再继续尝试，应重新规划任务或放弃。"
 
         element = args.get("element", "")
         method = args.get("method", "invoke")
@@ -1106,6 +1160,7 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
 
         try:
             executor = ActionExecutor()
+            tracker = get_tracker()
 
             # 解析元素信息
             element_info = element
@@ -1113,22 +1168,75 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 # JSON 格式
                 element_info = json.loads(element)
 
-            result = executor.click(
-                element=element_info,
-                method=method,
-                wait_time=wait_time,
-            )
+            # 【幻觉检测】先验证操作可行性
+            feasible_result = executor.verify_operation_feasible(element_info, "click")
+            if not feasible_result.get("feasible"):
+                failure_info = controller.record_failure(step_id, feasible_result.get("reason", "操作不可行"))
+                return f"【幻觉检测】{feasible_result.get('reason', '操作不可行')}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
+
+            # 使用带验证的点击方法
+            result = executor.click_with_verification(element_info, method=method, wait_time=wait_time)
+
+            # 记录统计
+            tracker.record_operation_attempt("click", method, result.get("success", False), element)
 
             if result.get("success"):
-                return f"点击成功 (方法: {method})\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                output_lines = [f"点击成功 (方法: {method})"]
+                
+                # 显示验证结果
+                if result.get("verification"):
+                    verify = result["verification"]
+                    if verify.get("verified"):
+                        output_lines.append(f"验证: {verify.get('reason', '已验证')}")
+                    else:
+                        output_lines.append(f"验证: {verify.get('reason', '无法验证，但操作可能已成功')}")
+                
+                # 添加历史统计推荐
+                recommendation = tracker.get_recommendation("operations")
+                if recommendation:
+                    output_lines.append("")
+                    output_lines.append(recommendation)
+                
+                # 添加任务状态信息
+                status_summary = controller.get_status_summary()
+                output_lines.append("")
+                output_lines.append(f"【任务状态】{status_summary}")
+                
+                return "\n".join(output_lines) + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
             else:
-                return f"错误: {result.get('error', '点击失败')}"
+                # 记录失败
+                failure_info = controller.record_failure(step_id, result.get("error", "点击失败"))
+                
+                output_lines = [f"错误: {result.get('error', '点击失败')}"]
+                
+                # 显示验证结果
+                if result.get("verification"):
+                    output_lines.append(f"验证: {result['verification'].get('reason', '')}")
+                
+                # 添加停止原因和失败统计
+                if failure_info.get("stop_reason"):
+                    output_lines.append("")
+                    output_lines.append(failure_info["stop_reason"])
+                
+                output_lines.append("")
+                output_lines.append(f"【失败统计】{controller.failure_counter.get_status_summary()}")
+                
+                return "\n".join(output_lines)
         except Exception as e:
-            return f"错误: 点击元素失败: {e}"
+            # 记录失败
+            failure_info = controller.record_failure(step_id, str(e))
+            return f"错误: 点击元素失败: {e}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
 
     if name == "type_text":
         if not UIA_AVAILABLE:
             return "错误: UI Automation 模块不可用"
+
+        # 检查停止条件
+        controller = get_controller()
+        step_id = f"type_{args.get('element', '')}"
+        check_result = controller.check_before_operation(step_id)
+        if not check_result.get("can_continue"):
+            return f"【任务终止】{check_result.get('stop_reason', '达到停止条件')}\n\n请不要再继续尝试，应重新规划任务或放弃。"
 
         element = args.get("element", "")
         text = args.get("text", "")
@@ -1142,13 +1250,21 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
 
         try:
             executor = ActionExecutor()
+            tracker = get_tracker()
 
             # 解析元素信息
             element_info = element
             if element.startswith("{") or element.startswith("["):
                 element_info = json.loads(element)
 
-            result = executor.type_text(
+            # 【幻觉检测】先验证操作可行性
+            feasible_result = executor.verify_operation_feasible(element_info, "type")
+            if not feasible_result.get("feasible"):
+                failure_info = controller.record_failure(step_id, feasible_result.get("reason", "操作不可行"))
+                return f"【幻觉检测】{feasible_result.get('reason', '操作不可行')}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
+
+            # 使用带验证的输入方法
+            result = executor.type_with_verification(
                 element=element_info,
                 text=text,
                 method=method,
@@ -1156,16 +1272,71 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 wait_time=wait_time,
             )
 
+            # 记录统计
+            tracker.record_operation_attempt("type_text", method, result.get("success", False), element)
+
             if result.get("success"):
-                return f"输入成功 (方法: {method}, 文本长度: {len(text)})\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                output_lines = [f"输入成功 (方法: {method}, 文本长度: {len(text)})"]
+                
+                # 显示验证结果
+                if result.get("verification"):
+                    verify = result["verification"]
+                    if verify.get("verified"):
+                        output_lines.append(f"验证: {verify.get('reason', '已验证')}")
+                        if verify.get("actual_value"):
+                            output_lines.append(f"实际值: {verify['actual_value']}")
+                
+                # 添加历史统计推荐
+                recommendation = tracker.get_recommendation("operations")
+                if recommendation:
+                    output_lines.append("")
+                    output_lines.append(recommendation)
+                
+                # 添加任务状态信息
+                status_summary = controller.get_status_summary()
+                output_lines.append("")
+                output_lines.append(f"【任务状态】{status_summary}")
+                
+                return "\n".join(output_lines) + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
             else:
-                return f"错误: {result.get('error', '输入失败')}"
+                # 记录失败
+                failure_info = controller.record_failure(step_id, result.get("error", "输入失败"))
+                
+                output_lines = [f"错误: {result.get('error', '输入失败')}"]
+                
+                # 显示验证结果
+                if result.get("verification"):
+                    verify = result["verification"]
+                    output_lines.append(f"验证: {verify.get('reason', '')}")
+                    if verify.get("expected"):
+                        output_lines.append(f"期望值: {verify['expected']}")
+                    if verify.get("actual"):
+                        output_lines.append(f"实际值: {verify['actual']}")
+                
+                # 添加停止原因和失败统计
+                if failure_info.get("stop_reason"):
+                    output_lines.append("")
+                    output_lines.append(failure_info["stop_reason"])
+                
+                output_lines.append("")
+                output_lines.append(f"【失败统计】{controller.failure_counter.get_status_summary()}")
+                
+                return "\n".join(output_lines)
         except Exception as e:
-            return f"错误: 输入文本失败: {e}"
+            # 记录失败
+            failure_info = controller.record_failure(step_id, str(e))
+            return f"错误: 输入文本失败: {e}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
 
     if name == "scroll_element":
         if not UIA_AVAILABLE:
             return "错误: UI Automation 模块不可用"
+
+        # 检查停止条件
+        controller = get_controller()
+        step_id = f"scroll_{args.get('element', '')}"
+        check_result = controller.check_before_operation(step_id)
+        if not check_result.get("can_continue"):
+            return f"【任务终止】{check_result.get('stop_reason', '达到停止条件')}\n\n请不要再继续尝试，应重新规划任务或放弃。"
 
         element = args.get("element", "")
         direction = args.get("direction", "down")
@@ -1178,11 +1349,18 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
 
         try:
             executor = ActionExecutor()
+            tracker = get_tracker()
 
             # 解析元素信息
             element_info = element
             if element.startswith("{") or element.startswith("["):
                 element_info = json.loads(element)
+
+            # 【幻觉检测】先验证操作可行性
+            feasible_result = executor.verify_operation_feasible(element_info, "scroll")
+            if not feasible_result.get("feasible"):
+                failure_info = controller.record_failure(step_id, feasible_result.get("reason", "操作不可行"))
+                return f"【幻觉检测】{feasible_result.get('reason', '操作不可行')}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
 
             result = executor.scroll(
                 element=element_info,
@@ -1191,12 +1369,26 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 count=count,
             )
 
+            # 记录统计
+            tracker.record_operation_attempt("scroll", "default", result.get("success", False), element)
+
             if result.get("success"):
-                return f"滚动成功 (方向: {direction}, 次数: {count})\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                output_lines = [f"滚动成功 (方向: {direction}, 次数: {count})"]
+                
+                # 添加任务状态信息
+                status_summary = controller.get_status_summary()
+                output_lines.append("")
+                output_lines.append(f"【任务状态】{status_summary}")
+                
+                return "\n".join(output_lines) + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
             else:
-                return f"错误: {result.get('error', '滚动失败')}"
+                # 记录失败
+                failure_info = controller.record_failure(step_id, result.get("error", "滚动失败"))
+                return f"错误: {result.get('error', '滚动失败')}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
         except Exception as e:
-            return f"错误: 滚动元素失败: {e}"
+            # 记录失败
+            failure_info = controller.record_failure(step_id, str(e))
+            return f"错误: 滚动元素失败: {e}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
 
     if name == "get_element_state":
         if not UIA_AVAILABLE:
@@ -1223,6 +1415,13 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 output_lines = ["元素状态:"]
                 for key, value in state.items():
                     output_lines.append(f"- {key}: {value}")
+                
+                # 添加任务状态信息
+                controller = get_controller()
+                status_summary = controller.get_status_summary()
+                output_lines.append("")
+                output_lines.append(f"【任务状态】{status_summary}")
+                
                 return "\n".join(output_lines) + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
             else:
                 return f"错误: {result.get('error', '获取状态失败')}"
@@ -1234,6 +1433,12 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         method = args.get("method", "by_name")
         wait_time = args.get("wait_time", 2.0)
         app_args = args.get("args", "")
+
+        # 检查停止条件
+        controller = get_controller()
+        check_result = controller.check_before_operation(f"start_{app}")
+        if not check_result.get("can_continue"):
+            return f"【任务终止】{check_result.get('stop_reason', '达到停止条件')}\n\n请不要再继续尝试，应重新规划任务或放弃。"
 
         if not app:
             return "错误: 缺少 app 参数"
@@ -1265,6 +1470,18 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                     subprocess.Popen(cmd, shell=False)
                 if wait_time > 0:
                     time.sleep(wait_time)
+                
+                # 【状态验证】验证启动结果
+                if UIA_AVAILABLE:
+                    executor = ActionExecutor()
+                    verify_result = executor.verify_start_result(app, timeout=wait_time + 2)
+                    if verify_result.get("success"):
+                        return f"已启动程序: {app}\n验证: {verify_result.get('reason', '已验证')}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                    else:
+                        # 记录失败
+                        failure_info = controller.record_failure(f"start_{app}", verify_result.get("reason", "启动验证失败"))
+                        return f"警告: 程序已启动但验证失败: {verify_result.get('reason', '')}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
+                
                 return f"已启动程序: {app}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
 
             elif method == "by_name":
@@ -1277,6 +1494,19 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                         os.startfile(app)
                         if wait_time > 0:
                             time.sleep(wait_time)
+                        
+                        # 【状态验证】验证启动结果
+                        if UIA_AVAILABLE:
+                            executor = ActionExecutor()
+                            verify_result = executor.verify_start_result(app, timeout=wait_time + 2)
+                            if verify_result.get("success"):
+                                status_summary = controller.get_status_summary()
+                                return f"已启动程序: {app}\n验证: {verify_result.get('reason', '已验证')}\n\n【任务状态】{status_summary}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                            else:
+                                # 验证失败但程序可能已启动
+                                status_summary = controller.get_status_summary()
+                                return f"已启动程序: {app}\n警告: 验证失败 - {verify_result.get('reason', '')}\n\n【任务状态】{status_summary}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                        
                         return f"已启动程序: {app}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
                     except Exception:
                         pass
@@ -1303,7 +1533,9 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                             time.sleep(wait_time)
                         return f"已启动程序: {app}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
                     except Exception as e:
-                        return f"错误: 所有启动方式都失败: {e}"
+                        # 记录失败
+                        failure_info = controller.record_failure(f"start_{app}", str(e))
+                        return f"错误: 所有启动方式都失败: {e}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
                 else:
                     # Linux/Mac: 直接执行
                     cmd = [app]
@@ -1318,7 +1550,9 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 return f"错误: 未知的启动方式: {method}"
 
         except Exception as e:
-            return f"错误: 启动程序失败: {e}"
+            # 记录失败
+            failure_info = controller.record_failure(f"start_{app}", str(e))
+            return f"错误: 启动程序失败: {e}\n\n{failure_info.get('stop_reason', '')}\n\n【失败统计】{controller.failure_counter.get_status_summary()}"
 
     if name == "list_installed_apps":
         filter_keyword = args.get("filter", "")
@@ -1541,6 +1775,176 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         except Exception as e:
             return f"错误: 查询已安装程序失败: {e}"
 
+    if name == "send_hotkey":
+        keys = args.get("keys", "")
+        target_window = args.get("target_window", None)
+
+        if not keys:
+            return "错误: 缺少 keys 参数"
+
+        try:
+            import time
+
+            # 键名映射表（将用户输入的键名转换为pyautogui/pydirectinput支持的键名）
+            key_mapping = {
+                "ctrl": "ctrl",
+                "alt": "alt",
+                "shift": "shift",
+                "win": "win",
+                "enter": "enter",
+                "esc": "esc",
+                "escape": "esc",
+                "tab": "tab",
+                "backspace": "backspace",
+                "delete": "delete",
+                "del": "delete",
+                "insert": "insert",
+                "home": "home",
+                "end": "end",
+                "pageup": "pageup",
+                "pagedown": "pagedown",
+                "pgup": "pageup",
+                "pgdn": "pagedown",
+                "f1": "f1",
+                "f2": "f2",
+                "f3": "f3",
+                "f4": "f4",
+                "f5": "f5",
+                "f6": "f6",
+                "f7": "f7",
+                "f8": "f8",
+                "f9": "f9",
+                "f10": "f10",
+                "f11": "f11",
+                "f12": "f12",
+                "up": "up",
+                "down": "down",
+                "left": "left",
+                "right": "right",
+                "space": "space",
+                "printscreen": "printscreen",
+                "prtsc": "printscreen",
+                "pause": "pause",
+                "capslock": "capslock",
+                "numlock": "numlock",
+                "scrolllock": "scrolllock",
+            }
+
+            # 解析热键组合
+            key_parts = keys.lower().split("+")
+            mapped_keys = []
+            for part in key_parts:
+                part = part.strip()
+                mapped_key = key_mapping.get(part, part)
+                mapped_keys.append(mapped_key)
+
+            # 如果指定了目标窗口，先激活该窗口
+            if target_window:
+                try:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+
+                    # 查找窗口
+                    hwnd = user32.FindWindowW(None, target_window)
+                    if hwnd:
+                        # 激活窗口
+                        user32.SetForegroundWindow(hwnd)
+                        time.sleep(0.3)  # 等待窗口激活
+                    else:
+                        return f"警告: 未找到窗口 '{target_window}'，热键将发送到当前焦点窗口"
+                except Exception as e:
+                    return f"警告: 激活窗口失败: {e}，热键将发送到当前焦点窗口"
+
+            # 发送热键
+            # 尝试使用 pyautogui（如果已安装）
+            try:
+                import pyautogui
+
+                # pyautogui 的 hotkey 函数可以直接接收多个键名
+                if len(mapped_keys) == 1:
+                    pyautogui.press(mapped_keys[0])
+                else:
+                    pyautogui.hotkey(*mapped_keys)
+
+                time.sleep(0.1)  # 等待热键生效
+                return f"已发送热键: {keys}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+
+            except ImportError:
+                # 如果 pyautogui 未安装，使用 ctypes 直接调用 Win32 API
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+
+                    user32 = ctypes.windll.user32
+
+                    # 虚拟键码映射
+                    vk_codes = {
+                        "ctrl": 0x11,  # VK_CONTROL
+                        "alt": 0x12,   # VK_MENU
+                        "shift": 0x10, # VK_SHIFT
+                        "win": 0x5B,   # VK_LWIN
+                        "enter": 0x0D, # VK_RETURN
+                        "esc": 0x1B,   # VK_ESCAPE
+                        "tab": 0x09,   # VK_TAB
+                        "backspace": 0x08, # VK_BACK
+                        "delete": 0x2E,    # VK_DELETE
+                        "insert": 0x2D,    # VK_INSERT
+                        "home": 0x24,      # VK_HOME
+                        "end": 0x23,       # VK_END
+                        "pageup": 0x21,    # VK_PRIOR
+                        "pagedown": 0x22,  # VK_NEXT
+                        "f1": 0x70,
+                        "f2": 0x71,
+                        "f3": 0x72,
+                        "f4": 0x73,
+                        "f5": 0x74,
+                        "f6": 0x75,
+                        "f7": 0x76,
+                        "f8": 0x77,
+                        "f9": 0x78,
+                        "f10": 0x79,
+                        "f11": 0x7A,
+                        "f12": 0x7B,
+                        "up": 0x26,    # VK_UP
+                        "down": 0x28,  # VK_DOWN
+                        "left": 0x25,  # VK_LEFT
+                        "right": 0x27, # VK_RIGHT
+                        "space": 0x20, # VK_SPACE
+                        "printscreen": 0x2A, # VK_SNAPSHOT
+                        "pause": 0x13,       # VK_PAUSE
+                        "capslock": 0x14,    # VK_CAPITAL
+                        "numlock": 0x90,     # VK_NUMLOCK
+                    }
+
+                    # 获取虚拟键码
+                    vk_list = []
+                    for key in mapped_keys:
+                        vk = vk_codes.get(key)
+                        if vk:
+                            vk_list.append(vk)
+                        else:
+                            # 对于普通字符键，使用 VkKeyScan
+                            vk = user32.VkKeyScanW(ord(key.upper())) & 0xFF
+                            vk_list.append(vk)
+
+                    # 按下所有键
+                    for vk in vk_list:
+                        user32.keybd_event(vk, 0, 0, 0)  # KEYDOWN
+                        time.sleep(0.05)
+
+                    # 释放所有键（反向顺序）
+                    for vk in reversed(vk_list):
+                        user32.keybd_event(vk, 0, 2, 0)  # KEYUP
+                        time.sleep(0.05)
+
+                    return f"已发送热键: {keys}\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+
+                except Exception as e:
+                    return f"错误: 发送热键失败: {e}"
+
+        except Exception as e:
+            return f"错误: 发送热键失败: {e}"
+
     return f"未知原子工具: {name}"
 
 
@@ -1590,3 +1994,33 @@ def install_skill_dependencies(skill_id: str, registry: SkillRegistry) -> tuple[
 def splice_skill_path(rel_path: str, skill_id: str, registry: SkillRegistry) -> str:
     """将相对路径拼接到 skill 包目录下"""
     return _splice_skill_path(rel_path, skill_id, registry)
+
+
+def _register_all_atomic_tools() -> None:
+    """将所有原子工具的实现注册到统一工具注册表。
+
+    注意：工具定义已在 ToolRegistry.__init__() 的 _load_builtin_tools() 中注册，
+    这里只负责将实现函数绑定到已有工具上，因此使用 overwrite=True。
+    """
+    from .registry import get_tool_registry
+    from .definitions import ATOMIC_TOOL_DEFINITIONS
+
+    registry = get_tool_registry()
+
+    for tool_def in ATOMIC_TOOL_DEFINITIONS:
+        tool_name = tool_def.get("name", "")
+        if tool_name:
+            registry.register_tool(
+                tool_name=tool_name,
+                tool_definition={
+                    "name": tool_name,
+                    "category": "atomic",
+                    "description": tool_def.get("description", ""),
+                    "parameters": tool_def.get("parameters", {}),
+                },
+                implementation=lambda name=tool_name, args=None, ctx=None, reg=None: execute_atomic_tool(name, args or {}, ctx, reg),
+                overwrite=True,
+            )
+
+
+_register_all_atomic_tools()

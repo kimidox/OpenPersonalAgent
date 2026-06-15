@@ -469,7 +469,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档，了解完整的执行流程和规划要求。\n"
             "【两种使用方式】\n"
             "1. 不指定参数：返回当前系统所有活跃窗口列表（窗口句柄、标题、进程ID等）\n"
-            "2. 指定window_title或process_id：返回该窗口的详细UI元素结构树\n"
+            "2. 指定process_id：返回该窗口的详细UI元素结构树\n"
             "这是Windows桌面自动化的核心感知工具，通过UI Automation API获取窗口信息。\n"
             "返回信息包括：元素名称、控件类型、AutomationId、坐标、状态、支持的Pattern等。\n"
             "使用场景：\n"
@@ -477,15 +477,11 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "- 需要了解窗口中有哪些可操作的UI元素\n"
             "- 需要定位按钮、输入框、菜单等控件\n"
             "- 需要获取元素的精确坐标或ID\n"
-            "参数：window_title(可选，窗口标题)、process_id(可选，进程ID)、max_depth(可选，最大遍历深度，默认5)、max_elements(可选，最大元素数量，默认500)。"
+            "参数：process_id(可选，进程ID)、max_depth(可选，最大遍历深度，默认5)、max_elements(可选，最大元素数量，默认500)。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "window_title": {
-                    "type": "string",
-                    "description": "窗口标题（支持部分匹配），不提供则获取焦点窗口"
-                },
                 "process_id": {
                     "type": "integer",
                     "description": "进程ID，用于精确定位窗口"
@@ -763,4 +759,59 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "required": []
         },
     },
+    {
+        "name": "send_hotkey",
+        "description": (
+            "发送热键（快捷键）到当前焦点窗口。\n"
+            "【重要约束】调用本工具前，必须先调用 select_skill(skill_id='desktop_automation') 加载桌面自动化Skill文档。\n"
+            "支持单键和组合键，用于触发快捷键操作。\n"
+            "使用场景：\n"
+            "- 触发应用程序快捷键（如Ctrl+S保存、Ctrl+C复制、Ctrl+V粘贴）\n"
+            "- 发送特殊键（如Enter、Esc、Tab、F1-F12）\n"
+            "- 触发系统快捷键（如Win+E打开文件管理器、Alt+F4关闭窗口）\n"
+            "参数：\n"
+            "- keys: 热键组合，用'+'连接（如'ctrl+c'、'alt+f4'、'win+e'）\n"
+            "- target_window: 可选，目标窗口标题（默认发送到当前焦点窗口）\n"
+            "支持的特殊键：ctrl、alt、shift、win、enter、esc、tab、backspace、delete、insert、home、end、pageup、pagedown、f1-f12、up、down、left、right、space、printscreen、pause、capslock、numlock。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "string",
+                    "description": "热键组合，用'+'连接。例如：'ctrl+c'、'alt+f4'、'ctrl+shift+s'、'enter'、'esc'"
+                },
+                "target_window": {
+                    "type": "string",
+                    "description": "可选，目标窗口标题。如果不指定，发送到当前焦点窗口"
+                }
+            },
+            "required": ["keys"]
+        },
+    },
 ]
+
+
+def get_all_tool_definitions_from_registry() -> list[dict]:
+    """
+    从注册表获取所有工具定义（向后兼容接口）。
+    
+    该函数合并以下来源的工具：
+    1. 装饰器注册的工具（通过 @atomic_tool 和 @control_tool 装饰器）
+    2. 本文件中的旧定义（ATOMIC_TOOL_DEFINITIONS 和 CONTROL_TOOL_DEFINITIONS）
+    
+    Returns:
+        list[dict]: 所有工具定义列表，每个定义包含：
+            - name: 工具名称
+            - category: 工具类别（atomic、control等）
+            - description: 工具描述
+            - parameters: 参数定义（OpenAI function calling格式）
+    """
+    from .registry import get_tool_registry
+    
+    registry = get_tool_registry()
+    
+    # 获取注册表中的所有工具定义
+    all_definitions = registry.get_all_tool_definitions()
+    
+    return all_definitions

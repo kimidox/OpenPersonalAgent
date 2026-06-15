@@ -16,6 +16,7 @@ from .processing import (
 )
 from .registry import SkillRegistry
 from .types import SkillDefinition
+from .skill_manager import SkillManager, SkillMetadata, SkillData, get_manager
 
 __all__ = [
     "SkillDefinition",
@@ -31,4 +32,9 @@ __all__ = [
     "user_query_matches_skill_description",
     "SKILL_CONTROL_TOOL_DEFINITIONS",
     "execute_skill_control_tool",
+    # Markdown格式Skill管理
+    "SkillManager",
+    "SkillMetadata",
+    "SkillData",
+    "get_manager",
 ]
