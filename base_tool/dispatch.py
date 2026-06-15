@@ -1444,9 +1444,7 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
             return "错误: 缺少 app 参数"
 
         try:
-            import subprocess
             import webbrowser
-            import os
             import time
 
             if method == "by_url":
@@ -1559,9 +1557,6 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         max_results = args.get("max_results", 50)
 
         try:
-            import os
-            import subprocess
-            from pathlib import Path
 
             apps = []
 
@@ -1677,7 +1672,6 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                         timeout=30,
                     )
                     if result.returncode == 0 and result.stdout:
-                        import json
                         reg_apps = json.loads(result.stdout)
                         if isinstance(reg_apps, list):
                             for app in reg_apps:
