@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import base64
 import json
+import time as _time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable, Literal, Optional
 
 from openai import OpenAI, APIError, BadRequestError, AuthenticationError, RateLimitError, APIConnectionError
 
@@ -11,6 +14,295 @@ import config
 from executor import Executor
 from base_tool import ATOMIC_TOOL_DEFINITIONS, CONTROL_TOOL_DEFINITIONS, REQUEST_TOOL_DETAILS_DEFINITION
 from llm.token_usage import TokenUsage
+
+
+class StreamResultType(str, Enum):
+    """流式结果类型"""
+    TEXT = "text"
+    TOOL_CALL = "tool_call"
+    ERROR = "error"
+
+
+@dataclass
+class StreamResult:
+    """统一的流式返回结构"""
+    result_type: Literal["text", "tool_call", "error"]
+    content: Optional[str] = None
+    reasoning_content: Optional[str] = None
+    tool_name: Optional[str] = None
+    tool_arguments: Optional[str] = None
+    token_usage: Optional[TokenUsage] = None
+    error_message: Optional[str] = None
+
+    @classmethod
+    def from_text(
+        cls,
+        content: str,
+        reasoning_content: str = "",
+        token_usage: Optional[TokenUsage] = None,
+    ) -> "StreamResult":
+        return cls(
+            result_type="text",
+            content=content,
+            reasoning_content=reasoning_content,
+            token_usage=token_usage,
+        )
+
+    @classmethod
+    def from_tool_call(
+        cls,
+        name: str,
+        arguments: str,
+        reasoning_content: str = "",
+        token_usage: Optional[TokenUsage] = None,
+    ) -> "StreamResult":
+        return cls(
+            result_type="tool_call",
+            tool_name=name,
+            tool_arguments=arguments,
+            reasoning_content=reasoning_content,
+            token_usage=token_usage,
+        )
+
+    @classmethod
+    def from_error(cls, message: str) -> "StreamResult":
+        return cls(
+            result_type="error",
+            error_message=message,
+            content=message,
+        )
+
+    def to_legacy_dict(self) -> Optional[dict[str, str]]:
+        """向后兼容：转换为旧的 dict 返回格式"""
+        if self.result_type == "text":
+            return {
+                "name": None,
+                "arguments": None,
+                "content": self.content,
+                "reasoning_content": self.reasoning_content or "",
+                "token_usage": self.token_usage,
+            }
+        elif self.result_type == "tool_call":
+            return {
+                "name": self.tool_name,
+                "arguments": self.tool_arguments,
+                "reasoning_content": self.reasoning_content or "",
+                "token_usage": self.token_usage,
+            }
+        else:  # error
+            return {
+                "name": "finish",
+                "arguments": json.dumps({"message": self.error_message}, ensure_ascii=False),
+                "token_usage": None,
+            }
+
+    def to_simple_namespace(self):
+        """向后兼容：转换为 SimpleNamespace 对象"""
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            content=self.content or "",
+            reasoning_content=self.reasoning_content or "",
+            token_usage=self.token_usage,
+        )
+
+
+class StreamParser:
+    """
+    统一的流式响应解析器。
+    
+    封装流式响应的解析逻辑：
+    - 缓冲区管理（reasoning, content, tool_calls）
+    - 智能回调机制（50ms / 30 字符触发）
+    - finish_reason 检测（stop / tool_calls / function_call / length）
+    - 流迭代器耗尽兜底
+    """
+
+    def __init__(
+        self,
+        stream_callback: Callable[[str, str], None],
+        messages: list[dict],
+        estimate_tokens: Callable[[list[dict]], int],
+        callback_interval: float = 0.05,
+        min_chars_for_callback: int = 30,
+    ) -> None:
+        self._callback = stream_callback
+        self._messages = messages
+        self._estimate_tokens = estimate_tokens
+        self._callback_interval = callback_interval
+        self._min_chars = min_chars_for_callback
+
+        # Buffers
+        self._reasoning_buffer: list[str] = []
+        self._content_buffer: list[str] = []
+        self._tool_call_chunks: dict[int, dict[str, Any]] = {}
+        self._all_reasoning_parts: list[str] = []
+        self._all_content_parts: list[str] = []
+        self._all_content_chars = 0
+        self._token_usage: Optional[TokenUsage] = None
+
+        # Callback timing
+        self._last_callback_time = _time.time()
+
+    def _flush_buffer(self) -> None:
+        """排空缓冲区并通过回调发送"""
+        if self._reasoning_buffer:
+            text = "".join(self._reasoning_buffer)
+            self._all_reasoning_parts.append(text)
+            self._reasoning_buffer.clear()
+            self._callback(text, "think")
+        if self._content_buffer:
+            text = "".join(self._content_buffer)
+            self._all_content_parts.append(text)
+            self._content_buffer.clear()
+            self._callback(text, "content")
+        self._last_callback_time = _time.time()
+
+    def _should_flush(self) -> bool:
+        """判断是否应该排空缓冲区"""
+        current_time = _time.time()
+        total_buffered = (
+            sum(len(s) for s in self._reasoning_buffer) +
+            sum(len(s) for s in self._content_buffer)
+        )
+        return (
+            (current_time - self._last_callback_time >= self._callback_interval) or
+            (total_buffered >= self._min_chars)
+        )
+
+    def _process_delta(self, delta: Any) -> None:
+        """处理单个 delta 块"""
+        reasoning = getattr(delta, 'reasoning_content', None)
+        if reasoning:
+            self._reasoning_buffer.append(reasoning)
+            self._all_content_chars += len(reasoning)
+        content = getattr(delta, 'content', None)
+        if content:
+            self._content_buffer.append(content)
+            self._all_content_chars += len(content)
+
+        if self._should_flush() and (self._reasoning_buffer or self._content_buffer):
+            self._flush_buffer()
+
+    def _process_tool_calls(self, delta: Any) -> None:
+        """处理工具调用流式拼接（tool_calls 格式）"""
+        if delta.tool_calls:
+            for tc in delta.tool_calls:
+                idx = tc.index
+                if idx not in self._tool_call_chunks:
+                    self._tool_call_chunks[idx] = {
+                        "id": tc.id or "",
+                        "name": "",
+                        "arguments": "",
+                    }
+                if tc.function:
+                    if tc.function.name:
+                        self._tool_call_chunks[idx]["name"] += tc.function.name
+                    if tc.function.arguments:
+                        self._tool_call_chunks[idx]["arguments"] += tc.function.arguments
+
+    def _process_function_call(self, delta: Any) -> None:
+        """处理工具调用流式拼接（function_call 旧格式，GLM 使用）"""
+        function_call = getattr(delta, 'function_call', None)
+        if function_call:
+            if 0 not in self._tool_call_chunks:
+                self._tool_call_chunks[0] = {
+                    "id": "",
+                    "name": "",
+                    "arguments": "",
+                }
+            if hasattr(function_call, 'name') and function_call.name:
+                self._tool_call_chunks[0]["name"] += function_call.name
+            if hasattr(function_call, 'arguments') and function_call.arguments:
+                self._tool_call_chunks[0]["arguments"] += function_call.arguments
+
+    def _build_result(self, finish_reason: Optional[str] = None) -> StreamResult:
+        """将累积数据组装为 StreamResult"""
+        self._flush_buffer()
+
+        if self._token_usage is None:
+            estimated_prompt = self._estimate_tokens(self._messages)
+            estimated_completion = max(1, self._all_content_chars // 4)
+            self._token_usage = TokenUsage(
+                prompt_tokens=estimated_prompt,
+                completion_tokens=estimated_completion,
+                total_tokens=estimated_prompt + estimated_completion,
+            )
+
+        if not self._tool_call_chunks:
+            content_text = "".join(self._all_content_parts).strip()
+            reasoning_text = "".join(self._all_reasoning_parts).strip()
+            if not content_text and not reasoning_text:
+                return StreamResult(
+                    result_type="text",
+                    content="",
+                    reasoning_content="",
+                    token_usage=self._token_usage,
+                )
+            return StreamResult.from_text(
+                content=content_text,
+                reasoning_content=reasoning_text,
+                token_usage=self._token_usage,
+            )
+
+        first_tc = self._tool_call_chunks[min(self._tool_call_chunks.keys())]
+        name = first_tc["name"].strip()
+        arguments = first_tc["arguments"].strip()
+
+        if not name:
+            content_text = "".join(self._all_content_parts).strip()
+            reasoning_text = "".join(self._all_reasoning_parts).strip()
+            return StreamResult.from_text(
+                content=content_text,
+                reasoning_content=reasoning_text,
+                token_usage=self._token_usage,
+            )
+
+        reasoning_content = "".join(self._all_reasoning_parts)
+        return StreamResult.from_tool_call(
+            name=name,
+            arguments=arguments,
+            reasoning_content=reasoning_content,
+            token_usage=self._token_usage,
+        )
+
+    def process_stream(self, stream: Any) -> StreamResult:
+        """
+        遍历流迭代器并返回 StreamResult。
+        
+        优先使用 finish_reason 判断结束，流迭代器耗尽作为兜底。
+        """
+        try:
+            for chunk in stream:
+                # Extract token usage
+                usage = getattr(chunk, 'usage', None)
+                if usage:
+                    self._token_usage = TokenUsage(
+                        prompt_tokens=getattr(usage, 'prompt_tokens', 0) or 0,
+                        completion_tokens=getattr(usage, 'completion_tokens', 0) or 0,
+                        total_tokens=getattr(usage, 'total_tokens', 0) or 0,
+                    )
+
+                if not chunk.choices:
+                    continue
+
+                delta = chunk.choices[0].delta
+                self._process_delta(delta)
+
+                # Check finish_reason - primary end signal
+                finish_reason = getattr(chunk.choices[0], 'finish_reason', None)
+                if finish_reason:
+                    return self._build_result(finish_reason)
+
+                # Process tool_calls and function_call
+                self._process_tool_calls(delta)
+                self._process_function_call(delta)
+        except Exception:
+            # Flush on error, will be handled by caller
+            self._flush_buffer()
+            raise
+
+        # Fallback: stream iterator exhausted without finish_reason
+        return self._build_result()
 
 
 class BaseChatModel(ABC):
@@ -272,34 +564,134 @@ class BaseChatModel(ABC):
     def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
         """请求带工具的补全，返回函数调用信息或 None。"""
 
-    @abstractmethod
     def stream_request_llm_with_tools(
         self,
         messages: list[dict],
         tools: list[dict],
         stream_callback: Callable[[str, str], None],
-    ) -> Optional[dict[str, str]]:
+    ) -> StreamResult:
         """
         流式请求带工具的补全。
         - stream_callback(content: str, type: str) 实时回调：
           - type="think": 推理内容（reasoning_content）
           - type="content": 普通文本内容
-        - 返回完整的 function_call（若有），否则返回 None
+        - 返回 StreamResult，包含文本回复或工具调用信息
         """
+        try:
+            stream = self.get_client().chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                extra_body=self.extra_body,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+        except BadRequestError as e:
+            error_msg = f"请求参数错误: {e}"
+            if "inappropriate content" in str(e).lower() or "data inspection" in str(e).lower():
+                error_msg = "内容审核未通过：输入内容可能包含不适当的内容，请修改后重试。"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except AuthenticationError as e:
+            error_msg = f"API认证失败: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except RateLimitError as e:
+            error_msg = f"API请求频率超限: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except APIConnectionError as e:
+            error_msg = f"API连接失败: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except APIError as e:
+            error_msg = f"API错误: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except Exception as e:
+            error_msg = f"未知错误: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
 
-    @abstractmethod
+        parser = StreamParser(
+            stream_callback=stream_callback,
+            messages=messages,
+            estimate_tokens=self._estimate_tokens_from_messages,
+        )
+
+        try:
+            return parser.process_stream(stream)
+        except Exception as e:
+            error_msg = f"流式响应处理错误: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+
     def stream_complete(
         self,
         messages: list[dict],
         stream_callback: Callable[[str, str], None],
-    ) -> Any:
+    ) -> StreamResult:
         """
         流式纯文本补全。
         - stream_callback(content: str, type: str) 实时回调：
           - type="think": 推理内容（reasoning_content）
           - type="content": 普通文本内容
-        - 返回完整消息对象
+        - 返回 StreamResult，包含完整文本回复
         """
+        try:
+            stream = self.get_client().chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                extra_body=self.extra_body,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+        except BadRequestError as e:
+            error_msg = f"请求参数错误: {e}"
+            if "inappropriate content" in str(e).lower() or "data inspection" in str(e).lower():
+                error_msg = "内容审核未通过：输入内容可能包含不适当的内容，请修改后重试。"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except AuthenticationError as e:
+            error_msg = f"API认证失败: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except RateLimitError as e:
+            error_msg = f"API请求频率超限: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except APIConnectionError as e:
+            error_msg = f"API连接失败: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except APIError as e:
+            error_msg = f"API错误: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+        except Exception as e:
+            error_msg = f"未知错误: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
+
+        parser = StreamParser(
+            stream_callback=stream_callback,
+            messages=messages,
+            estimate_tokens=self._estimate_tokens_from_messages,
+        )
+
+        try:
+            return parser.process_stream(stream)
+        except Exception as e:
+            error_msg = f"流式响应处理错误: {e}"
+            stream_callback(error_msg, "content")
+            return StreamResult.from_error(error_msg)
 
     def execute_function_call(self, fname: str, args: dict, executor: Executor) -> str:
         action = {"action": fname}

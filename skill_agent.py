@@ -18,6 +18,7 @@ from base_tool import (
 from skill_agent_preferences import load_disabled_skill_ids
 from executor import Executor
 from llm import get_chat_model
+from llm.BaseChatModel import StreamResult
 from llm.token_usage import TokenUsage
 from memory import Memory
 from memory.compactor import ContextCompactor, estimate_messages_tokens
@@ -1058,33 +1059,28 @@ class SkillAgent:
                 self._update_system_message(messages)
 
 
-                function_call = model.stream_request_llm_with_tools(messages, tools, _stream_callback)
+                result = model.stream_request_llm_with_tools(messages, tools, _stream_callback)
 
-                print(f"[DEBUG-exec] LLM 返回:")
-                if function_call is None:
-                    print(f"[DEBUG-exec]   - function_call is None")
-                else:
-                    print(f"[DEBUG-exec]   - name: {function_call.get('name')}")
-                    print(f"[DEBUG-exec]   - has content: {function_call.get('content') is not None}")
-                    if function_call.get('arguments'):
-                        args_preview = str(function_call.get('arguments', ''))[:100]
-                        print(f"[DEBUG-exec]   - arguments 前100字: {args_preview}")
+                # Debug output using StreamResult properties
+                print(f"[DEBUG-exec] LLM 返回 StreamResult:")
+                print(f"[DEBUG-exec]   - result_type: {result.result_type}")
+                if result.tool_name:
+                    print(f"[DEBUG-exec]   - tool_name: {result.tool_name}")
+                if result.tool_arguments:
+                    args_preview = str(result.tool_arguments)[:100]
+                    print(f"[DEBUG-exec]   - arguments 前100字: {args_preview}")
+                if result.content:
+                    print(f"[DEBUG-exec]   - has content: True")
 
-                if function_call is not None and function_call.get("token_usage") is not None:
-                    self._token_usage = self._token_usage + function_call["token_usage"]
+                # Accumulate token usage
+                if result.token_usage is not None:
+                    self._token_usage = self._token_usage + result.token_usage
 
                 full_thinking = "".join(thinking_parts).strip()
 
-                is_text_only = (
-                    function_call is not None and
-                    function_call.get("name") is None and
-                    function_call.get("content") is not None
-                )
-
-                if is_text_only or (function_call is None):
-                    final_text = ""
-                    if is_text_only:
-                        final_text = function_call.get("content", "")
+                # Handle text response
+                if result.result_type == "text":
+                    final_text = result.content or ""
                     if not final_text:
                         final_text = "".join(content_parts).strip()
                     if not full_thinking:
@@ -1117,8 +1113,22 @@ class SkillAgent:
                     print(f"[DEBUG-exec] 📤 返回文本内容 (长度: {len(final_text)})")
                     return final_text
 
-                fname = function_call.get("name")
-                arg_str = function_call.get("arguments", "{}")
+                # Handle error response
+                if result.result_type == "error":
+                    err = result.error_message or "模型返回未知错误"
+                    if log_callback:
+                        log_callback(err, "assistant")
+                    if self.memory is not None:
+                        metadata = {"token_usage": asdict(self._token_usage)}
+                        self.memory.append_message(self._conversation_id, "assistant", err, metadata=metadata)
+                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
+                    _emit_token_usage()
+                    print(f"[DEBUG-exec] 📤 返回错误 (长度: {len(err)})")
+                    return err
+
+                # Handle tool call response
+                fname = result.tool_name
+                arg_str = result.tool_arguments or "{}"
                 try:
                     args = json.loads(arg_str)
                 except json.JSONDecodeError:

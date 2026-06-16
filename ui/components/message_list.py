@@ -58,6 +58,8 @@ class MessageListWidget(QScrollArea):
         card = MessageCardWidget(msg_type, content, files)
         if token_usage and msg_type in ("assistant", "think"):
             card.finalize_content(token_usage)
+        elif msg_type in ("tool_call", "tool"):
+            card.finalize_content()
         
         # 设置卡片宽度
         list_width = max(100, self.viewport().width())

@@ -23,7 +23,7 @@ from .llm_config_manager import (
     switch_to_next_config,
 )
 
-from .BaseChatModel import BaseChatModel
+from .BaseChatModel import BaseChatModel, StreamResult, StreamResultType
 from .gemma_chat_model import GemmaChatModel
 from .glm_chat_model import GLMChatModel
 from .qwen_chat_model import QwenChatModel
