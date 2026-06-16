@@ -13,6 +13,7 @@ class PlaceholderName(str, Enum):
     TOOL_CATALOG = "TOOL_CATALOG"
     BASE_INFO = "BASE_INFO"
     UPLOADED_FILES = "UPLOADED_FILES"
+    CLASSIFICATION_RESULT = "CLASSIFICATION_RESULT"
 
 
 class ConversationType(str, Enum):
@@ -51,6 +52,11 @@ AGENT_CONVERSATION_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户的
 3. 根据完整定义正确构造参数，调用工具
 4. 分析返回结果，决定下一步操作
 5. **先调用工具，再输出解释**：必须先调用工具获取结果，再向用户解释。禁止只输出计划或推理文本而不执行工具
+
+【任务执行三步法】（所有任务必须遵守）
+1. **计划**：在执行任何工具前，先在思考中明确"我要做什么 → 用什么工具 → 预期结果是什么"
+2. **执行**：调用工具获取实际结果
+3. **检查**：对照预期结果，判断当前步骤是否成功 → 成功则继续下一步 / 失败则分析原因并调整
 
 【禁止行为】
 - 禁止只输出"让我执行..."、"我将..."等计划文本而不实际调用工具
@@ -196,6 +202,63 @@ CONVERSATION_CONSTRAINTS_SECTION_TEMPLATE: Final[str] = """## 本次对话约束
 UPLOADED_FILES_SECTION_TEMPLATE: Final[str] = """## 用户上传的文件
 以下是用户上传的文件内容，请基于这些内容回答用户问题：
 {files_content}"""
+
+# ===== 复杂任务结构化规划提示词模板 =====
+
+COMPLEX_TASK_PLANNING_TEMPLATE: Final[str] = """你是一个复杂任务规划器。请分析用户输入，制定完整的执行计划。
+
+【输出格式】
+请严格按以下JSON格式输出，不要输出任何其他内容：
+{{
+    "analysis": "简要分析用户需求和任务难度",
+    "plan": [
+        {{
+            "step": 1,
+            "action": "具体要执行的动作描述",
+            "tool": "需要使用的工具名称（如 run_command, read_file 等）",
+            "expected_result": "期望得到的结果",
+            "checkpoint": "如何验证该步骤已成功完成"
+        }}
+    ],
+    "total_steps": 计划总步数,
+    "success_criteria": "任务成功的最终判断标准"
+}}
+
+【规划要求】
+1. 步骤必须具体可执行，每个步骤对应一个明确的工具调用
+2. 每个步骤必须包含 checkpoint，用于验证是否成功
+3. 步骤之间必须有逻辑依赖关系，不能跳跃
+4. 如果任务不确定需要几个步骤，请设计为最小必要步骤数
+5. 如果某些步骤可能失败，请考虑备选方案
+
+【用户的输入】
+{user_query}
+
+【当前可用工具目录】
+{tool_catalog}
+"""
+
+# ===== 输入规划分类提示词模板 =====
+
+INPUT_CLASSIFICATION_TEMPLATE: Final[str] = """你是一个输入分类器。请分析用户的输入，判断其类型。
+
+【分类标准】
+1. **chat**（闲聊/简单问答）：问候语、闲聊、纯知识问答、不需要调用工具就能回答的问题
+   示例："你好"、"今天天气怎么样"、"解释一下Python的装饰器"、"谢谢你"
+   
+2. **simple_task**（简单任务）：明确的单步操作，只需调用1-2个工具即可完成
+   示例："读取文件 config.py"、"运行命令 pip list"、"告诉我当前目录下有哪些文件"
+   
+3. **complex_task**（复杂任务）：需要多步骤完成的复杂任务，需要规划后执行
+   示例："帮我创建一个Python项目，包含main.py、requirements.txt和README.md"、"帮我分析这份数据并生成报告"
+
+【输出格式】
+请严格按以下JSON格式输出，不要输出任何其他内容：
+{"type": "chat|simple_task|complex_task", "reason": "简短说明分类原因"}
+
+【用户的输入】
+{user_query}
+"""
 
 
 EMPTY_PLACEHOLDER_VALUES: Final[dict[str, str]] = {

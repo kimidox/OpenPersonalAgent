@@ -111,6 +111,13 @@ class MessageCardWidget(QWidget):
         self._token_usage_label.hide()
         self._bubble_layout.addWidget(self._token_usage_label)
 
+        # 模式徽章 - 显示在左下角
+        self._mode_badge = QLabel()
+        self._mode_badge.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self._mode_badge.setWordWrap(False)
+        self._mode_badge.hide()
+        self._bubble_layout.addWidget(self._mode_badge)
+
         import config
         self._copy_button = None
         self._speak_button = None
@@ -278,6 +285,44 @@ class MessageCardWidget(QWidget):
                 total_tokens = self._token_usage.get("total_tokens", prompt_tokens + completion_tokens)
                 self._token_usage_label.setText(f"提示词: {prompt_tokens} | 完成: {completion_tokens} | 总计: {total_tokens}")
                 self._token_usage_label.show()
+
+    def set_mode_badge(self, mode_text: str) -> None:
+        """设置模式徽章，显示在消息卡片左下角"""
+        if not mode_text:
+            self._mode_badge.hide()
+            return
+        
+        self._mode_badge.setText(mode_text)
+        self._mode_badge.setObjectName("skillAgentModeBadge")
+        
+        # 根据模式文本设置不同样式
+        style_text = mode_text.lower()
+        if "复杂" in style_text or "complex" in style_text:
+            bg_color = "#3b82f6"  # 蓝色
+            text_color = "#ffffff"
+        elif "简单" in style_text or "simple" in style_text:
+            bg_color = "#9ca3af"  # 灰色
+            text_color = "#ffffff"
+        elif "闲聊" in style_text or "chat" in style_text:
+            bg_color = "#10b981"  # 绿色
+            text_color = "#ffffff"
+        else:
+            bg_color = "#6b7280"  # 默认灰色
+            text_color = "#ffffff"
+        
+        self._mode_badge.setStyleSheet(
+            f"QLabel#skillAgentModeBadge {{ "
+            f"background-color: {bg_color}; "
+            f"color: {text_color}; "
+            f"border-radius: 8px; "
+            f"padding: 2px 8px; "
+            f"font-size: 9pt; "
+            f"font-weight: 500; "
+            f"margin-top: 4px; "
+            f"}} "
+        )
+        self._mode_badge.show()
+        self._mode_badge.adjustSize()
 
     def get_content(self) -> str:
         return self._raw_content

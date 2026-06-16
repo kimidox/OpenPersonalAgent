@@ -211,7 +211,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "要执行的 CMD 命令字符串。避免使用需要交互输入的命令。",
+                    "description": "要执行的命令行指令字符串。\n\n【命令编写规范】（必须遵守）\n1. Windows 系统优先使用 PowerShell 命令：命令以 powershell 开头，如 powershell Get-CimInstance Win32_OperatingSystem\n2. 【禁止模式列表】以下模式会被自动检测并转换/拒绝，请避免使用：\n   - findstr /C:\"...\" → 会被转换为 PowerShell Select-String。正确做法：直接使用 powershell Get-CimInstance 获取结构化数据\n   - wmic <class> get <properties> → 会被转换为 Get-CimInstance。正确做法：直接写 powershell Get-CimInstance Win32_OperatingSystem\n   - %%a, %%i 等批处理变量 → 会被拒绝执行。正确做法：使用 PowerShell 的 $variable 和 ForEach-Object\n   - 复杂 && / || 链 → 建议拆分为多条简单命令\n3. 系统信息查询推荐命令：\n   - 操作系统: powershell Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,TotalVisibleMemorySize\n   - CPU: powershell Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors\n   - 内存: powershell Get-CimInstance Win32_PhysicalMemory | Select-Object Capacity,Speed,Manufacturer\n   - 计算机: powershell Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,TotalPhysicalMemory\n4. 避免在单条命令中混合使用过多管道符(|)、重定向符(>)和逻辑运算符(&&、||)\n5. 复杂的系统信息查询建议拆分为多条简单命令依次执行",
                 },
                 "cwd": {
                     "type": "string",

@@ -153,6 +153,14 @@ except (TypeError, ValueError):
 if REPEAT_DETECTION_WINDOW_SIZE < 1:
     REPEAT_DETECTION_WINDOW_SIZE = 10
 
+# ===== 输入规划分类配置 =====
+
+# 是否启用输入规划分类（true/false，默认 True）
+# 启用后：在工具执行前先判断输入是否需要规划，简单输入直接回复
+# 禁用后：保持原有行为，所有输入直接进入工具执行循环
+_ice = get_config("INPUT_CLASSIFICATION_ENABLED")
+INPUT_CLASSIFICATION_ENABLED = _env_bool(_ice, True)
+
 _tusiu = get_config("TOKEN_USAGE_SHOW_IN_UI")
 TOKEN_USAGE_SHOW_IN_UI = _env_bool(_tusiu, True)
 

@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from sys import platform
+from enum import Enum
 from typing import Any, Callable, Optional
 
 import config
@@ -42,6 +43,13 @@ from skill.memory_summarizer import summarize_skill_execution, save_skill_memory
 from logger import get_module_logger
 
 logger = get_module_logger("SkillAgent")
+
+
+class PlanMode(str, Enum):
+    NO_PLAN = "no_plan"
+    SIMPLE_TASK = "simple_task"
+    COMPLEX_TASK = "complex_task"
+
 
 SKILL_AGENT_AWAITING_USER_REPLY = "__SKILL_AGENT_AWAITING_USER_REPLY__"
 
@@ -144,6 +152,9 @@ class SkillAgent:
         self._consecutive_repeat_count: int = 0
         self._uploaded_files_content: str = ""
         self._enable_thinking: bool = False
+        self._step_plan: list[dict] = []
+        self._current_step: int = 0
+        self._success_criteria: str = ""
 
     def set_file_upload_controller(self, controller: Any) -> None:
         self._tool_ctx.file_upload_controller = controller
@@ -395,6 +406,198 @@ class SkillAgent:
         self._recent_tool_calls.clear()
         self._recent_commands.clear()
         self._dynamic_prompt.clear_all_placeholders()
+
+    def _classify_input(self, user_query: str) -> PlanMode:
+        """对用户输入进行分类，判断是否需要规划。
+        
+        Returns:
+            PlanMode: 分类结果
+        """
+        if not config.INPUT_CLASSIFICATION_ENABLED:
+            return PlanMode.SIMPLE_TASK
+        
+        try:
+            model = get_chat_model()
+            from prompt.template import INPUT_CLASSIFICATION_TEMPLATE
+            
+            prompt = INPUT_CLASSIFICATION_TEMPLATE.format(user_query=user_query.strip()[:2000])
+            
+            messages = [
+                {"role": "system", "content": "你是一个输入分类器，请严格按JSON格式输出。"},
+                {"role": "user", "content": prompt},
+            ]
+            
+            response = model.client.chat.completions.create(
+                model=model.model_name,
+                messages=messages,
+                temperature=0.0,
+                max_tokens=100,
+            )
+            
+            content = response.choices[0].message.content.strip() if response.choices else ""
+            logger.debug("分类器原始响应: %r", content)
+            
+            # 空响应检查
+            if not content:
+                logger.warning("分类器返回空响应，使用默认模式")
+                return PlanMode.SIMPLE_TASK
+            
+            # 去除可能的 markdown code block 包裹
+            original_content = content
+            content = content.strip()
+            if content.startswith("```"):
+                # 处理 ```json 或 ``` 开头的情况
+                first_newline = content.find("\n")
+                if first_newline != -1:
+                    content = content[first_newline+1:]
+                content = content.replace("```", "").strip()
+            if content.lower().startswith("json"):
+                content = content[4:].strip()
+            
+            if content != original_content:
+                logger.debug("去除markdown包裹后: %r", content)
+            
+            # 尝试解析 JSON - 使用更健壮的匹配方式
+            import re
+            # 尝试匹配最外层的完整 JSON 对象
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                json_str = json_match.group()
+                logger.debug("匹配到的JSON字符串: %r", json_str)
+                try:
+                    result = json.loads(json_str)
+                except json.JSONDecodeError as je:
+                    logger.warning("JSON解析失败: %s, JSON内容: %r", je, json_str)
+                    return PlanMode.SIMPLE_TASK
+                
+                # 校验 result 必须是 dict
+                if not isinstance(result, dict):
+                    logger.warning("分类结果不是JSON对象: %s", type(result).__name__)
+                    return PlanMode.SIMPLE_TASK
+                
+                mode_str = result.get("type", "simple_task")
+                # 校验 mode_str 必须是有效的分类值
+                if not isinstance(mode_str, str):
+                    logger.warning("分类type字段类型错误: %s", type(mode_str).__name__)
+                    return PlanMode.SIMPLE_TASK
+                
+                mode_str = mode_str.strip()
+                logger.debug("输入分类结果: %s (原因: %s)", mode_str, result.get("reason", ""))
+                
+                if mode_str == "chat":
+                    return PlanMode.NO_PLAN
+                elif mode_str == "complex_task":
+                    return PlanMode.COMPLEX_TASK
+                else:
+                    return PlanMode.SIMPLE_TASK
+            
+            return PlanMode.SIMPLE_TASK
+        except Exception as e:
+            logger.warning("输入分类失败，使用默认模式: %s", e)
+            return PlanMode.SIMPLE_TASK
+
+    def _direct_reply(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
+        """无需规划模式：直接由 LLM 生成文本回答。"""
+        try:
+            model = get_chat_model(enable_thinking=self._enable_thinking)
+            
+            messages = [
+                {"role": "system", "content": f"你是一个友好的助手。请直接用简洁的语言回答用户问题。\n\n{self.get_base_info()}"},
+                {"role": "user", "content": user_query.strip()},
+            ]
+            
+            response = model.client.chat.completions.create(
+                model=model.model_name,
+                messages=messages,
+            )
+            
+            reply = response.choices[0].message.content or ""
+            
+            if log_callback:
+                log_callback(reply, "assistant")
+                # 发送 token_usage 触发 stream_renderer.complete()，使 badge 被应用到卡片
+                if config.TOKEN_USAGE_ENABLED:
+                    from dataclasses import asdict
+                    tu = self._token_usage
+                    log_callback(json.dumps(asdict(tu), ensure_ascii=False), "token_usage")
+            
+            if self.memory is not None:
+                self.memory.append_message(self._conversation_id, "user", user_query.strip())
+                self.memory.append_message(self._conversation_id, "assistant", reply)
+            
+            logger.debug("直接回复完成，回复长度: %s", len(reply))
+            return reply
+        except Exception as e:
+            err = f"回复出错: {e}"
+            if log_callback:
+                log_callback(err, "assistant")
+            logger.error("直接回复失败: %s", e)
+            return err
+
+    def _plan_steps(self, user_query: str, tool_catalog_text: str = "", log_callback: Optional[Callable[[str, str], Any]] = None) -> Optional[str]:
+        """对复杂任务制定结构化执行计划。
+        
+        Returns:
+            格式化后的计划文本（供日志/展示），如果解析失败则返回 None
+        """
+        if not config.INPUT_CLASSIFICATION_ENABLED:
+            return None
+        
+        try:
+            model = get_chat_model()
+            from prompt.template import COMPLEX_TASK_PLANNING_TEMPLATE
+            
+            prompt = COMPLEX_TASK_PLANNING_TEMPLATE.format(
+                user_query=user_query.strip()[:2000],
+                tool_catalog=tool_catalog_text[:2000] if tool_catalog_text else "（暂无工具目录信息）"
+            )
+            
+            messages = [
+                {"role": "system", "content": "你是一个复杂任务规划器，请严格按JSON格式输出计划。"},
+                {"role": "user", "content": prompt},
+            ]
+            
+            response = model.client.chat.completions.create(
+                model=model.model_name,
+                messages=messages,
+                temperature=0.0,
+                max_tokens=1000,
+            )
+            
+            content = response.choices[0].message.content.strip() if response.choices else ""
+            
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                plan_data = json.loads(json_match.group())
+                
+                # 保存计划到实例变量
+                self._step_plan = plan_data.get("plan", [])
+                self._current_step = 0
+                self._success_criteria = plan_data.get("success_criteria", "")
+                
+                # 格式化计划供日志展示
+                analysis = plan_data.get("analysis", "")
+                steps = self._step_plan
+                total = plan_data.get("total_steps", len(steps))
+                
+                plan_display = f"📋 **执行计划**（共 {total} 步）\n\n{analysis}\n\n"
+                for s in steps:
+                    plan_display += f"**步骤{s.get('step', '?')}**: {s.get('action', '')}\n"
+                    plan_display += f"  工具: {s.get('tool', '?')} | 预期: {s.get('expected_result', '?')}\n"
+                    plan_display += f"  验证: {s.get('checkpoint', '?')}\n\n"
+                plan_display += f"**成功标准**: {self._success_criteria}"
+                
+                if log_callback:
+                    log_callback(plan_display, "plan")
+                
+                logger.debug("执行计划制定完成: %s 步, 成功标准: %s", total, self._success_criteria)
+                return plan_display
+            
+            return None
+        except Exception as e:
+            logger.warning("制定执行计划失败，跳过计划阶段: %s", e)
+            return None
 
     def get_conversation_constraints(self) -> str:
         return self._conversation_constraints
@@ -907,6 +1110,38 @@ class SkillAgent:
             # 保存当前用户查询，用于后续更新系统提示词时的语义检索
             self._last_user_query = user_query
             
+            # 输入分类：判断是否需要规划
+            plan_mode = self._classify_input(user_query)
+            logger.debug("输入分类: %s", plan_mode.value)
+            
+            if log_callback:
+                mode_labels = {
+                    PlanMode.NO_PLAN: "💬 闲聊/问答模式（无需规划，直接回复）",
+                    PlanMode.SIMPLE_TASK: "⚡ 简单任务模式（单步工具调用）",
+                    PlanMode.COMPLEX_TASK: "📋 复杂任务模式（结构化规划+分步执行）",
+                }
+                log_callback(mode_labels.get(plan_mode, plan_mode.value), "mode")
+            
+            if plan_mode == PlanMode.NO_PLAN:
+                logger.debug("无需规划模式，直接回复")
+                return self._direct_reply(user_query, log_callback)
+            
+            if plan_mode == PlanMode.COMPLEX_TASK:
+                planning_instruction = """
+
+【复杂任务执行要求 - 强制执行】
+1. 你必须在执行任何工具调用前，先在思考过程中制定完整的执行计划
+2. 计划必须包含：具体步骤列表、每步使用的工具、期望结果、验证方式
+3. 每执行完一个步骤，必须对照计划检查是否达到预期结果
+4. 如果某步骤失败，请分析原因并调整后续计划
+5. 所有步骤完成后，必须对照计划的 success_criteria 逐项确认任务是否成功
+6. 只有确认所有步骤完成后，才能调用 finish 结束任务"""
+                existing_constraints = self._conversation_constraints
+                if existing_constraints:
+                    self._conversation_constraints = existing_constraints + planning_instruction
+                else:
+                    self._conversation_constraints = planning_instruction.lstrip()
+            
             model = get_chat_model(enable_thinking=self._enable_thinking)
             # 根据会话类型过滤skill目录
             conv_type = self._get_conversation_type()
@@ -917,6 +1152,17 @@ class SkillAgent:
             tool_catalog_text = self._build_tool_catalog_text(tool_catalog)
             system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query, tool_catalog=tool_catalog_text)
             logger.debug("初始系统提示词：%s", system_prompt)
+            
+            # 复杂任务：制定结构化执行计划
+            if plan_mode == PlanMode.COMPLEX_TASK:
+                plan_display = self._plan_steps(user_query, tool_catalog_text, log_callback)
+                if plan_display and self.memory is not None:
+                    self.memory.append_message(
+                        self._conversation_id,
+                        "assistant",
+                        plan_display,
+                        metadata={"type": "plan"},
+                    )
             
             tools = model.build_skill_agent_tools_initial()
             self._supplied_tool_definitions: dict[str, dict] = {}

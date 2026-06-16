@@ -540,6 +540,8 @@ class SkillAgentMainWindow(QMainWindow):
         self.message_handler.skill_content_message.connect(self._on_skill_content_message)
         self.message_handler.tool_call_message.connect(self._on_tool_call_message)
         self.message_handler.token_usage_message.connect(self._on_token_usage_message)
+        self.message_handler.mode_message.connect(self._on_mode_message)
+        self.message_handler.plan_message.connect(self._on_plan_message)
         # 连接侧边栏信号
         self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
         self.sidebar.conversation_selected.connect(self._on_conversation_selected)
@@ -1068,6 +1070,26 @@ class SkillAgentMainWindow(QMainWindow):
         # 同步到悬浮球
         if self._floating_ball:
             self._floating_ball.finalize_last_message(token_usage)
+
+    def _on_mode_message(self, mode_text: str, session_tab: ChatSessionTab) -> None:
+        """处理mode消息，将模式信息传递给stream_renderer以便在卡片上显示"""
+        # 无条件设置徽章，因为 mode 消息在 assistant 之前到达
+        self.stream_renderer.set_mode_badge(mode_text)
+        # 如果 stream_renderer 已激活且会话匹配，也调用 complete 来应用徽章
+        if self.stream_renderer.is_active():
+            conv_id = self.stream_renderer.get_conversation_id()
+            if conv_id == session_tab.conversation_id:
+                # 如果已经有内容但还没 complete，尝试完成以应用徽章
+                if not self.stream_renderer.has_completed_with_token_usage():
+                    # 等待 assistant 内容到达后再 complete
+                    pass
+
+    def _on_plan_message(self, plan_text: str, session_tab: ChatSessionTab) -> None:
+        """处理plan消息，将执行计划作为内容追加到当前流式消息中"""
+        if self.stream_renderer.is_active():
+            conv_id = self.stream_renderer.get_conversation_id()
+            if conv_id == session_tab.conversation_id:
+                self.stream_renderer.append_content("\n\n---\n\n" + plan_text)
 
     def _on_await_user_message(self, spec: dict, session_tab: ChatSessionTab) -> None:
         if self.stream_renderer.is_active():

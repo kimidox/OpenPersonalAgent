@@ -101,11 +101,13 @@ class MessageListWidget(QScrollArea):
         QTimer.singleShot(50, self.scroll_to_bottom)
         return True
 
-    def finalize_last_message(self, token_usage: dict[str, Any] | None = None) -> bool:
+    def finalize_last_message(self, token_usage: dict[str, Any] | None = None, mode_badge: str | None = None) -> bool:
         card = self.get_last_card()
         if card is None:
             return False
         card.finalize_content(token_usage)
+        if mode_badge:
+            card.set_mode_badge(mode_badge)
         list_width = max(100, self.viewport().width())
         card.set_available_width(list_width)
         card.adjustSize()

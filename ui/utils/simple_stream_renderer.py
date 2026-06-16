@@ -15,6 +15,11 @@ class SimpleStreamRenderer(QObject):
         self._state: dict[str, Any] | None = None
         self._has_completed_with_token_usage: bool = False
         self._created_for_conversations: set[str] = set()
+        self._mode_badge_text: str = ""
+
+    def set_mode_badge(self, mode_text: str) -> None:
+        """设置模式徽章文本，将在finalize时显示在卡片上"""
+        self._mode_badge_text = mode_text
         
     def start(
         self, 
@@ -25,6 +30,8 @@ class SimpleStreamRenderer(QObject):
     ) -> None:
         """开始流式渲染"""
         self._has_completed_with_token_usage = False
+        # 保存当前模式徽章，防止被 complete() 重置
+        saved_mode_badge = self._mode_badge_text
         
         # 检查是否已经有同类型同会话的渲染
         if self._state is not None:
@@ -39,6 +46,8 @@ class SimpleStreamRenderer(QObject):
             else:
                 # 类型不同或会话不同或 message_list 不同，强制完成之前的流
                 self.complete()
+                # 恢复模式徽章（complete() 会重置它）
+                self._mode_badge_text = saved_mode_badge
         
         # 直接创建带有内容的消息，而不是空消息
         msg_type = "think" if stream_type == "think" else "assistant"
@@ -69,10 +78,12 @@ class SimpleStreamRenderer(QObject):
             return None
         message_list = self._state["message_list"]
         full_text = self._state["full_text"]
-        message_list.finalize_last_message(token_usage)
+        mode_badge = self._mode_badge_text if self._mode_badge_text else None
+        message_list.finalize_last_message(token_usage, mode_badge=mode_badge)
         if token_usage:
             self._has_completed_with_token_usage = True
         self._state = None
+        self._mode_badge_text = ""
         return full_text
     
     def has_completed_with_token_usage(self) -> bool:
