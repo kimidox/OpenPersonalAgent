@@ -10,7 +10,7 @@ from PySide6.QtGui import QFont, QKeyEvent, QIcon, QAction
 from PySide6.QtWidgets import (
     QHBoxLayout, QPlainTextEdit, QMainWindow, QMessageBox,
     QPushButton, QVBoxLayout, QWidget, QMenu, QSystemTrayIcon, QSplitter,
-    QProgressDialog, QLabel,
+    QProgressDialog, QLabel, QInputDialog, QFileDialog,
 )
 
 import config
@@ -544,6 +544,8 @@ class SkillAgentMainWindow(QMainWindow):
         self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
         self.sidebar.conversation_selected.connect(self._on_conversation_selected)
         self.sidebar.conversation_deleted.connect(self._on_conversation_deleted)
+        self.sidebar.conversation_export_requested.connect(self._on_conversation_export_requested)
+        self.sidebar.conversation_rename_requested.connect(self._on_conversation_rename_requested)
         self.sidebar.settings_requested.connect(self._open_settings)
         # 连接文件上传控制器信号
         self.file_upload_controller.asr_model_not_loaded.connect(self._on_asr_model_not_loaded)
@@ -801,6 +803,89 @@ class SkillAgentMainWindow(QMainWindow):
             tab = self._conversation_tabs[conversation_id]
             tab.deleteLater()
             del self._conversation_tabs[conversation_id]
+
+    def _on_conversation_export_requested(self, conversation_id: str) -> None:
+        """导出会话聊天记录"""
+        records = self.skill_agent.message_records_for_conversation(conversation_id)
+        if not records:
+            QMessageBox.information(self, "提示", "该会话暂无聊天记录。")
+            return
+        
+        # 构建导出文本
+        export_lines = []
+        for m in records:
+            role = str(m.get("role") or "")
+            content = str(m.get("content") or "")
+            meta = m.get("metadata") or {}
+            msg_type = meta.get("type", "")
+            
+            if role == "user":
+                export_lines.append(f"[用户]\n{content}")
+            elif role == "assistant":
+                if msg_type == "think":
+                    export_lines.append(f"[思考]\n{content}")
+                else:
+                    export_lines.append(f"[助手]\n{content}")
+            elif role == "tool":
+                export_lines.append(f"[工具结果]\n{content}")
+            
+            export_lines.append("---")
+        
+        export_text = "\n\n".join(export_lines)
+        
+        # 弹出保存对话框
+        default_name = f"conversation_{conversation_id[:8]}.txt"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "导出聊天记录", default_name, "文本文件 (*.txt);;所有文件 (*)"
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(export_text)
+                QMessageBox.information(self, "成功", f"聊天记录已导出到：\n{file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "导出失败", f"导出聊天记录时出错：{str(e)}")
+
+    def _on_conversation_rename_requested(self, conversation_id: str) -> None:
+        """重命名会话"""
+        # 获取当前会话标题
+        current_title = ""
+        if conversation_id in self._conversation_tabs:
+            tab = self._conversation_tabs[conversation_id]
+            current_title = tab.windowTitle() if hasattr(tab, "windowTitle") else ""
+        
+        # 获取会话信息
+        conv = self._memory.get_conversation(conversation_id)
+        if conv:
+            current_title = conv.title
+        
+        if not current_title:
+            current_title = f"新会话 · {conversation_id[:5]}"
+        
+        # 弹出输入对话框
+        new_title, ok = QInputDialog.getText(
+            self, "编辑会话名称", "请输入新的会话名称：",
+            text=current_title
+        )
+        
+        if ok and new_title and new_title.strip():
+            new_title = new_title.strip()
+            # 更新内存中的会话标题
+            self._memory.update_conversation_title(conversation_id, new_title)
+            
+            # 更新侧边栏显示
+            if conversation_id in self.sidebar._conversation_items:
+                item = self.sidebar._conversation_items[conversation_id]
+                item.set_title(new_title)
+            
+            # 更新会话标签显示
+            if conversation_id in self._conversation_tabs:
+                tab = self._conversation_tabs[conversation_id]
+                if hasattr(tab, "set_display_title"):
+                    tab.set_display_title(new_title)
+                
+                self._logger.info(f"会话 {conversation_id} 已重命名为: {new_title}")
 
     def _sync_input_placeholder(self) -> None:
         tab = self._active_session_tab()

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal, QSize, QRect
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QFontMetrics
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QFontMetrics, QAction
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QLabel, QToolButton, QSizePolicy
+    QWidget, QHBoxLayout, QLabel, QToolButton, QSizePolicy, QMenu
 )
 from ui.styles.style_manager import StyleManager
 
@@ -69,7 +69,10 @@ class ConversationListItem(QWidget):
     
     # 信号定义
     selected = Signal(str)  # 会话被选中，参数为conversation_id
-    delete_requested = Signal(str)  # 请求删除会话，参数为conversation_id
+    delete_requested = Signal(str)  # 请求删除会话（删除按钮），参数为conversation_id
+    export_requested = Signal(str)  # 请求导出聊天记录，参数为conversation_id
+    rename_requested = Signal(str)  # 请求重命名会话，参数为conversation_id
+    delete_from_menu_requested = Signal(str)  # 请求删除会话（右键菜单），参数为conversation_id
     
     def __init__(
         self,
@@ -156,6 +159,38 @@ class ConversationListItem(QWidget):
             self.set_selected(True)
             self.selected.emit(self._conversation_id)
         super().mousePressEvent(event)
+    
+    def contextMenuEvent(self, event) -> None:
+        """右键菜单事件"""
+        menu = QMenu(self)
+        
+        export_action = QAction("导出聊天记录", self)
+        export_action.triggered.connect(self._on_export_requested)
+        menu.addAction(export_action)
+        
+        rename_action = QAction("编辑会话名称", self)
+        rename_action.triggered.connect(self._on_rename_requested)
+        menu.addAction(rename_action)
+        
+        menu.addSeparator()
+        
+        delete_action = QAction("删除会话", self)
+        delete_action.triggered.connect(self._on_delete_from_menu_requested)
+        menu.addAction(delete_action)
+        
+        menu.exec(event.globalPos())
+    
+    def _on_export_requested(self) -> None:
+        """导出聊天记录请求"""
+        self.export_requested.emit(self._conversation_id)
+    
+    def _on_rename_requested(self) -> None:
+        """重命名会话请求"""
+        self.rename_requested.emit(self._conversation_id)
+    
+    def _on_delete_from_menu_requested(self) -> None:
+        """右键删除会话请求"""
+        self.delete_from_menu_requested.emit(self._conversation_id)
         
     def _on_delete_clicked(self) -> None:
         """删除按钮点击事件"""

@@ -97,6 +97,18 @@ class SqliteMemory(Memory):
             db.refresh(row)
             return str(row.title) if row.title else cid
 
+    def update_conversation_title(self, conversation_id: str, title: str) -> None:
+        """更新会话标题"""
+        cid = (conversation_id or "").strip()
+        if not cid:
+            return
+        with get_session() as db:
+            row = db.query(Conversations).filter(Conversations.conversation_id == cid).first()
+            if row:
+                row.title = title
+                row.updated_at = datetime.now()
+                db.commit()
+
     def append_message(
         self,
         conversation_id: str,

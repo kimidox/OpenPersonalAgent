@@ -50,6 +50,10 @@ class Memory(ABC):
         """保证 `conversations` 中存在该会话行并提交；返回采用的展示标题（未指定时与 id 相同）。"""
 
     @abstractmethod
+    def update_conversation_title(self, conversation_id: str, title: str) -> None:
+        """更新会话标题。"""
+
+    @abstractmethod
     def list_user_conversations(self) -> list[Conversation]:
         """列出当前 Memory 所绑定用户的全部会话（顺序由实现决定，建议按 `updated_at` 新近优先）。"""
 

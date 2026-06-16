@@ -17,6 +17,8 @@ class ConversationSidebar(QWidget):
     conversation_selected = Signal(str)
     conversation_deleted = Signal(str)
     settings_requested = Signal()
+    conversation_export_requested = Signal(str)  # 请求导出聊天记录
+    conversation_rename_requested = Signal(str)  # 请求重命名会话
     
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -103,6 +105,9 @@ class ConversationSidebar(QWidget):
         item = ConversationListItem(conversation_id, display_title)
         item.selected.connect(self._on_conversation_selected)
         item.delete_requested.connect(self._on_conversation_deleted)
+        item.export_requested.connect(self._on_conversation_export_requested)
+        item.rename_requested.connect(self._on_conversation_rename_requested)
+        item.delete_from_menu_requested.connect(self._on_conversation_deleted)
         
         self._list_layout.insertWidget(self._list_layout.count() - 1, item)
         self._conversation_items[conversation_id] = item
@@ -147,3 +152,11 @@ class ConversationSidebar(QWidget):
     def _on_conversation_deleted(self, conversation_id: str) -> None:
         """会话删除请求事件"""
         self.conversation_deleted.emit(conversation_id)
+    
+    def _on_conversation_export_requested(self, conversation_id: str) -> None:
+        """会话导出请求事件"""
+        self.conversation_export_requested.emit(conversation_id)
+    
+    def _on_conversation_rename_requested(self, conversation_id: str) -> None:
+        """会话重命名请求事件"""
+        self.conversation_rename_requested.emit(conversation_id)
