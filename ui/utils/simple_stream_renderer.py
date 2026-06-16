@@ -14,6 +14,7 @@ class SimpleStreamRenderer(QObject):
         super().__init__(parent)
         self._state: dict[str, Any] | None = None
         self._has_completed_with_token_usage: bool = False
+        self._created_for_conversations: set[str] = set()
         
     def start(
         self, 
@@ -53,6 +54,7 @@ class SimpleStreamRenderer(QObject):
             "stream_type": stream_type,
             "full_text": initial_text
         }
+        self._created_for_conversations.add(conversation_id)
         
     def append(self, text: str) -> None:
         """追加文本到当前流"""
@@ -108,4 +110,16 @@ class SimpleStreamRenderer(QObject):
         
     def cancel(self) -> None:
         """取消当前流"""
+        if self._state is not None:
+            conv_id = self._state.get("conversation_id")
+            if conv_id:
+                self._created_for_conversations.discard(conv_id)
         self._state = None
+
+    def had_started_for(self, conversation_id: str) -> bool:
+        """检查是否为指定会话创建过消息卡片"""
+        return conversation_id in self._created_for_conversations
+
+    def clear_history(self, conversation_id: str) -> None:
+        """清除指定会话的创建记录（在清空对话历史时调用）"""
+        self._created_for_conversations.discard(conversation_id)

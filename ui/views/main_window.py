@@ -997,24 +997,22 @@ class SkillAgentMainWindow(QMainWindow):
     def _on_worker_finished(self, result: str, session_tab) -> None:
         self.ui_state.set_task_running(False)
         if isinstance(session_tab, ChatSessionTab):
-            stream_text = ""
+            # 先完成可能活跃的流
             if self.stream_renderer.is_active():
                 conv_id = self.stream_renderer.get_conversation_id()
                 if conv_id == session_tab.conversation_id:
-                    stream_text = self.stream_renderer.complete() or ""
+                    self.stream_renderer.complete()
             
-            logger.debug(f"finish: result={result!r}, stream_text={stream_text!r}")
+            logger.debug(f"finish: result={result!r}")
             
             if result != SKILL_AGENT_AWAITING_USER_REPLY:
                 session_tab.clear_await_user_ui()
                 # 同步到悬浮球
                 if self._floating_ball:
                     self._floating_ball.clear_await_user_ui()
-                # 检查是否需要添加最终结果
+                # 检查是否需要添加最终结果：只有当流渲染未为该会话创建过卡片时才添加
                 if result and result.strip():
-                    # 如果流式渲染没有内容或者内容只有"(完成)"这类提示，或者已经通过token_usage完成了渲染
-                    has_stream_content = (stream_text.strip() and "(完成)" not in stream_text) or self.stream_renderer.has_completed_with_token_usage()
-                    if not has_stream_content:
+                    if not self.stream_renderer.had_started_for(session_tab.conversation_id):
                         session_tab.add_message("assistant", result)
                         # 同步到悬浮球
                         if self._floating_ball:

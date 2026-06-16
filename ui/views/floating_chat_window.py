@@ -536,18 +536,17 @@ class FloatingChatWindow(QWidget):
     def _on_worker_finished(self, result: str, session_tab):
         """工作线程完成回调"""
         self._ui_state.set_task_running(False)
-        stream_text = ""
+        # 先完成可能活跃的流
         if self._stream_renderer.is_active():
             conv_id = self._stream_renderer.get_conversation_id()
             if conv_id == self._conversation_id:
-                stream_text = self._stream_renderer.complete() or ""
+                self._stream_renderer.complete()
                 
         if result != SKILL_AGENT_AWAITING_USER_REPLY:
             self.clear_await_user_ui()
-            # 检查是否需要添加最终结果
+            # 检查是否需要添加最终结果：只有当流渲染未为该会话创建过卡片时才添加
             if result and result.strip():
-                has_stream_content = (stream_text.strip() and "(完成)" not in stream_text) or self._stream_renderer.has_completed_with_token_usage()
-                if not has_stream_content:
+                if not self._stream_renderer.had_started_for(self._conversation_id):
                     self.add_message("assistant", result)
         
         # 更新输入框提示
