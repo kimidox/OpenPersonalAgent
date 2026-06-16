@@ -8,6 +8,9 @@ from memory.searcher import MemorySearcher
 from memory.long_term_memory import LongTermMemory
 from skill.memory_summarizer import migrate_skill_memory_from_file
 from skill.loader import discover_skill_files, load_skill_from_path
+from logger import get_module_logger
+
+logger = get_module_logger("Migration")
 
 
 MIGRATION_FLAG_FILE = ".memory_migration_completed"
@@ -39,10 +42,10 @@ def run_migration(
         迁移结果统计
     """
     if is_migration_completed():
-        print("[Migration] 迁移已完成，跳过")
+        logger.info("迁移已完成，跳过")
         return {"long_term_memory": 0, "skill_memory": 0, "status": "skipped"}
 
-    print("[Migration] 开始数据迁移...")
+    logger.info("开始数据迁移...")
     _searcher = searcher or MemorySearcher()
     result = {
         "long_term_memory": 0,
@@ -58,7 +61,7 @@ def run_migration(
             searcher=_searcher,
         )
         result["long_term_memory"] = ltm.migrate_from_file()
-        print(f"[Migration] 长期记忆迁移完成: {result['long_term_memory']} 条")
+        logger.info(f"长期记忆迁移完成: {result['long_term_memory']} 条")
 
     skills_dir = paths.get_skills_dir()
     if skills_dir.exists():
@@ -77,12 +80,12 @@ def run_migration(
                     )
                     if migrated > 0:
                         result["skill_memory"] += migrated
-                        print(f"[Migration] Skill {skill.skill_id} 记忆迁移完成: {migrated} 条")
+                        logger.info(f"Skill {skill.skill_id} 记忆迁移完成: {migrated} 条")
             except Exception as e:
-                print(f"[Migration] 迁移 Skill {skill_path} 失败: {e}")
+                logger.error(f"迁移 Skill {skill_path} 失败: {e}")
 
     mark_migration_completed()
-    print(f"[Migration] 迁移完成: {result}")
+    logger.info(f"迁移完成: {result}")
     return result
 
 

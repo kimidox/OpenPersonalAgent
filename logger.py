@@ -107,20 +107,30 @@ class LoggerAdapter:
             self._logger = get_logger()
         return self._logger
     
-    def debug(self, msg: str):
-        self.logger.debug(f"[{self._module_name}] {msg}" if self._module_name else msg)
+    def debug(self, msg: str, *args, **kwargs):
+        if self._module_name:
+            msg = f"[{self._module_name}] {msg}"
+        self.logger.debug(msg, *args, **kwargs)
     
-    def info(self, msg: str):
-        self.logger.info(f"[{self._module_name}] {msg}" if self._module_name else msg)
+    def info(self, msg: str, *args, **kwargs):
+        if self._module_name:
+            msg = f"[{self._module_name}] {msg}"
+        self.logger.info(msg, *args, **kwargs)
     
-    def warning(self, msg: str):
-        self.logger.warning(f"[{self._module_name}] {msg}" if self._module_name else msg)
+    def warning(self, msg: str, *args, **kwargs):
+        if self._module_name:
+            msg = f"[{self._module_name}] {msg}"
+        self.logger.warning(msg, *args, **kwargs)
     
-    def error(self, msg: str):
-        self.logger.error(f"[{self._module_name}] {msg}" if self._module_name else msg)
+    def error(self, msg: str, *args, **kwargs):
+        if self._module_name:
+            msg = f"[{self._module_name}] {msg}"
+        self.logger.error(msg, *args, **kwargs)
     
-    def exception(self, msg: str):
-        self.logger.exception(f"[{self._module_name}] {msg}" if self._module_name else msg)
+    def exception(self, msg: str, *args, **kwargs):
+        if self._module_name:
+            msg = f"[{self._module_name}] {msg}"
+        self.logger.exception(msg, *args, **kwargs)
 
 
 def get_module_logger(module_name: str) -> LoggerAdapter:

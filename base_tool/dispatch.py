@@ -12,8 +12,11 @@ import scheduled_tasks as st_module
 from resource_path import paths
 from skill import SkillRegistry
 from skill.loader import load_skill_memory_lazy
+from logger import get_module_logger
 from .context import ToolContext
 from .decorators import atomic_tool
+
+logger = get_module_logger("ToolDispatch")
 
 # UI Automation 模块导入
 try:
@@ -114,7 +117,7 @@ def _ensure_venv_exists() -> bool:
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
                 )
             except Exception as e:
-                print(f"安装pip失败: {e}")
+                logger.error(f"安装pip失败: {e}")
             finally:
                 try:
                     os.unlink(temp_file)
@@ -123,7 +126,7 @@ def _ensure_venv_exists() -> bool:
         
         return True
     except Exception as e:
-        print(f"创建虚拟环境异常: {e}")
+        logger.error(f"创建虚拟环境异常: {e}")
         return False
 
 

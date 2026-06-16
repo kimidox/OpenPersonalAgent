@@ -38,6 +38,9 @@ from skill import (
     format_skill_for_prompt,
 )
 from skill.memory_summarizer import summarize_skill_execution, save_skill_memory
+from logger import get_module_logger
+
+logger = get_module_logger("SkillAgent")
 
 SKILL_AGENT_AWAITING_USER_REPLY = "__SKILL_AGENT_AWAITING_USER_REPLY__"
 
@@ -232,7 +235,7 @@ class SkillAgent:
             user_query=self._last_user_query
         )
 
-        print(f"[DEBUG-exec] 更新系统提示词（会话类型: {conv_type}）：{new_system_prompt[:200]}...")
+        logger.debug(f"更新系统提示词（会话类型: {conv_type}）：{new_system_prompt[:200]}...")
         if messages and messages[0].get("role") == "system":
             messages[0]["content"] = new_system_prompt
         else:
@@ -508,9 +511,9 @@ class SkillAgent:
 
     def _check_repeated_write_success(self, command: str, result: str) -> Optional[str]:
         """检查是否为重复的写入操作（特例优化：包含文件验证）"""
-        print(f"[DEBUG-write] _check_repeated_write_success 被调用")
-        print(f"[DEBUG-write]   注意：这是写入操作的专用检测，与通用重复检测(_check_repeated_tool_call)协同工作")
-        print(f"[DEBUG-write]   command: {command[:80]}...")
+        logger.debug("_check_repeated_write_success 被调用")
+        logger.debug("  注意：这是写入操作的专用检测，与通用重复检测(_check_repeated_tool_call)协同工作")
+        logger.debug(f"  command: {command[:80]}...")
 
         if "exit_code: 0" not in result:
             return None
@@ -536,7 +539,7 @@ class SkillAgent:
             for cmd in self._recent_commands:
                 if cmd in seen:
                     msg = "检测到重复的文件写入操作且已成功完成，任务自动结束。"
-                    print(f"[DEBUG-write] ✅ 触发写入重复检测: {msg}")
+                    logger.debug(f"触发写入重复检测: {msg}")
                     return msg
                 seen.add(cmd)
 
@@ -555,12 +558,12 @@ class SkillAgent:
         import json
 
         max_repeats = config.MAX_CONSECUTIVE_REPEATS
-        print(f"[DEBUG-repeat] 配置信息: 去重启用={config.TOOL_CALL_DEDUPLICATION_ENABLED}, 最大重复次数={max_repeats}, 历史窗口大小={config.REPEAT_DETECTION_WINDOW_SIZE}")
+        logger.debug(f"配置信息: 去重启用={config.TOOL_CALL_DEDUPLICATION_ENABLED}, 最大重复次数={max_repeats}, 历史窗口大小={config.REPEAT_DETECTION_WINDOW_SIZE}")
 
         args_hash = hashlib.md5(json.dumps({"name": tool_name, **args}, sort_keys=True).encode()).hexdigest()
 
-        print(f"[DEBUG-repeat] 检查工具调用重复: {tool_name}, args_hash={args_hash[:8]}...")
-        print(f"[DEBUG-repeat] 历史记录数: {len(self._recent_tool_calls)}")
+        logger.debug(f"检查工具调用重复: {tool_name}, args_hash={args_hash[:8]}...")
+        logger.debug(f"历史记录数: {len(self._recent_tool_calls)}")
 
         for record in self._recent_tool_calls:
             if record["name"] == tool_name and record["args_hash"] == args_hash:
@@ -573,14 +576,14 @@ class SkillAgent:
                     f"上次执行结果：\n{last_result}"
                 )
 
-                print(f"[DEBUG-repeat] ✓ 发现重复调用: {tool_name}")
-                print(f"[DEBUG-repeat]   连续重复次数: {self._consecutive_repeat_count}")
-                print(f"[DEBUG-repeat]   上次结果长度: {len(last_result)}")
+                logger.debug(f"✓ 发现重复调用: {tool_name}")
+                logger.debug(f"连续重复次数: {self._consecutive_repeat_count}")
+                logger.debug(f"上次结果长度: {len(last_result)}")
 
                 return (True, warning_msg, last_result)
 
         self._consecutive_repeat_count = 0
-        print(f"[DEBUG-repeat] ✗ 未发现重复调用: {tool_name}")
+        logger.debug(f"✗ 未发现重复调用: {tool_name}")
         return (False, None, None)
 
     def _record_tool_call(self, tool_name: str, args: dict, result: str) -> None:
@@ -602,7 +605,7 @@ class SkillAgent:
         if len(self._recent_tool_calls) > window_size:
             self._recent_tool_calls.pop(0)
 
-        print(f"[DEBUG-repeat] 记录工具调用: {tool_name}, args_hash={args_hash[:8]}, result长度={min(len(result), 500)}, 当前历史数={len(self._recent_tool_calls)}")
+        logger.debug(f"记录工具调用: {tool_name}, args_hash={args_hash[:8]}, result长度={min(len(result), 500)}, 当前历史数={len(self._recent_tool_calls)}")
 
     @staticmethod
     def _format_tool_result(success: bool, content: str, error_msg: str = "", suggestion: str = "") -> str:
@@ -745,57 +748,56 @@ class SkillAgent:
             for i, msg in enumerate(messages):
                 if msg.get("role") == "system":
                     messages[i] = {"role": "system", "content": self._dynamic_prompt.build()}
-                    print(f"[DEBUG-exec] 更新系统提示词_dynamic_prompt：{self._dynamic_prompt.build()}")
+                    logger.debug("更新系统提示词_dynamic_prompt：%s", self._dynamic_prompt.build())
                     break
 
     def _summarize_session_skills(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
         import threading
         current_thread = threading.current_thread()
-        print(f"[SkillSummary] _summarize_session_skills 开始: thread={current_thread.name}, conversation_id={conversation_id}")
+        logger.info("_summarize_session_skills 开始: thread=%s, conversation_id=%s", current_thread.name, conversation_id)
         
         if not self.memory:
-            print(f"[SkillSummary] 跳过总结: memory 为空 (conversation_id={conversation_id})")
+            logger.warning("跳过总结: memory 为空 (conversation_id=%s)", conversation_id)
             return
 
         if active_skill_ids is None:
-            print(f"[SkillSummary] 获取活跃 skill_ids (conversation_id={conversation_id})")
+            logger.debug("获取活跃 skill_ids (conversation_id=%s)", conversation_id)
             active_skill_ids = self.memory.get_active_skills(conversation_id)
 
-        print(f"[SkillSummary] 开始总结: conversation_id={conversation_id}, active_skill_ids={active_skill_ids}")
+        logger.info("开始总结: conversation_id=%s, active_skill_ids=%s", conversation_id, active_skill_ids)
 
         if not active_skill_ids:
-            print(f"[SkillSummary] 跳过总结: 无活跃 skill (conversation_id={conversation_id})")
+            logger.warning("跳过总结: 无活跃 skill (conversation_id=%s)", conversation_id)
             return
 
         messages = self.memory.get_message_records(conversation_id)
         if not messages:
-            print(f"[SkillSummary] 跳过总结: 无会话消息 (conversation_id={conversation_id})")
+            logger.warning("跳过总结: 无会话消息 (conversation_id=%s)", conversation_id)
             return
 
-        print(f"[SkillSummary] 加载会话消息完成: count={len(messages)}, conversation_id={conversation_id}")
+        logger.info("加载会话消息完成: count=%s, conversation_id=%s", len(messages), conversation_id)
         
         model = get_chat_model()
-        print(f"[SkillSummary] 获取 LLM 模型完成, conversation_id={conversation_id}")
+        logger.debug("获取 LLM 模型完成, conversation_id=%s", conversation_id)
 
         success_count = 0
         for idx, skill_id in enumerate(active_skill_ids):
             try:
-                print(f"[SkillSummary] 正在总结 skill: {skill_id} ({idx+1}/{len(active_skill_ids)})")
+                logger.debug("正在总结 skill: %s (%s/%s)", skill_id, idx+1, len(active_skill_ids))
                 memory = summarize_skill_execution(skill_id, messages, model)
                 if memory:
                     saved_path = save_skill_memory(skill_id, memory, self.registry)
-                    print(f"[SkillSummary] skill {skill_id} 总结完成, 保存至: {saved_path}")
+                    logger.debug("skill %s 总结完成, 保存至: %s", skill_id, saved_path)
                     success_count += 1
                 else:
-                    print(f"[SkillSummary] skill {skill_id} 总结结果为空, 未保存")
+                    logger.debug("skill %s 总结结果为空, 未保存", skill_id)
             except Exception as e:
                 import traceback
-                print(f"[SkillSummary] ❌ 总结 skill {skill_id} 执行经验失败: {e}")
-                print(f"[SkillSummary] 📋 异常堆栈:\n{traceback.format_exc()}")
+                logger.error("总结 skill %s 执行经验失败: %s", skill_id, e)
+                logger.error("异常堆栈:\n%s", traceback.format_exc())
         
-        print(f"[SkillSummary] 总结会话完成: conversation_id={conversation_id}, "
-              f"total={len(active_skill_ids)}, success={success_count}")
-        print(f"[SkillSummary] 后台线程退出: thread={current_thread.name}")
+        logger.info("总结会话完成: conversation_id=%s, total=%s, success=%s", conversation_id, len(active_skill_ids), success_count)
+        logger.debug("后台线程退出: thread=%s", current_thread.name)
 
     def _start_summary_in_background(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
         import threading
@@ -803,24 +805,24 @@ class SkillAgent:
         
         # 检查是否启用自动总结
         if not config.SKILL_SUMMARY_ENABLED:
-            print(f"[SkillSummary] 自动总结已禁用，跳过总结 (conversation_id={conversation_id})")
+            logger.debug("自动总结已禁用，跳过总结 (conversation_id=%s)", conversation_id)
             return
         
-        print(f"[SkillSummary] 准备启动后台总结线程: conversation_id={conversation_id}, active_skill_ids={active_skill_ids}")
+        logger.info("准备启动后台总结线程: conversation_id=%s, active_skill_ids=%s", conversation_id, active_skill_ids)
         
         if not self.memory:
-            print(f"[SkillSummary] 跳过总结: memory 为空 (conversation_id={conversation_id})")
+            logger.warning("跳过总结: memory 为空 (conversation_id=%s)", conversation_id)
             return
         
         if active_skill_ids is None:
-            print(f"[SkillSummary] 获取活跃 skill_ids (conversation_id={conversation_id})")
+            logger.debug("获取活跃 skill_ids (conversation_id=%s)", conversation_id)
             active_skill_ids = self.memory.get_active_skills(conversation_id)
         
         if not active_skill_ids:
-            print(f"[SkillSummary] 跳过总结: 无活跃 skill (conversation_id={conversation_id})")
+            logger.warning("跳过总结: 无活跃 skill (conversation_id=%s)", conversation_id)
             return
         
-        print(f"[SkillSummary] 构建总结线程: conversation_id={conversation_id}, active_skill_ids={active_skill_ids}")
+        logger.debug("构建总结线程: conversation_id=%s, active_skill_ids=%s", conversation_id, active_skill_ids)
         
         t = threading.Thread(
             target=self._summarize_session_skills,
@@ -830,14 +832,14 @@ class SkillAgent:
         )
         t.start()
         
-        print(f"[SkillSummary] 后台线程已启动: name={t.name}, ident={t.ident}, active_skill_ids={active_skill_ids}")
-        print(f"[SkillSummary] 主线程继续执行 (总结线程独立运行)")
+        logger.info("后台线程已启动: name=%s, ident=%s, active_skill_ids=%s", t.name, t.ident, active_skill_ids)
+        logger.debug("主线程继续执行 (总结线程独立运行)")
 
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None, stop_check_callback: Optional[Callable[[], bool]] = None) -> str:
         import traceback
-        print(f"[DEBUG-exec] ===== run() 开始执行 =====")
-        print(f"[DEBUG-exec] user_query 长度: {len(user_query)}, 前50字: {user_query[:50]}")
-        print(f"[DEBUG-exec] conversation_id: {self._conversation_id}")
+        logger.debug("===== run() 开始执行 =====")
+        logger.debug("user_query 长度: %s, 前50字: %s", len(user_query), user_query[:50])
+        logger.debug("conversation_id: %s", self._conversation_id)
         
         self._stop_event.clear()
         self._recent_commands = []
@@ -871,15 +873,15 @@ class SkillAgent:
             tool_catalog = model.build_tool_catalog()
             tool_catalog_text = self._build_tool_catalog_text(tool_catalog)
             system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query, tool_catalog=tool_catalog_text)
-            print(f"[DEBUG-exec] 初始系统提示词：{system_prompt}")
+            logger.debug("初始系统提示词：%s", system_prompt)
             
             tools = model.build_skill_agent_tools_initial()
             self._supplied_tool_definitions: dict[str, dict] = {}
             
-            print(f"[DEBUG-tool-catalog] ===== 目录+补发 渐进披露机制初始化 =====")
-            print(f"[DEBUG-tool-catalog] 工具目录已构建，包含 {len(tool_catalog)} 个工具的简要描述")
-            print(f"[DEBUG-tool-catalog] 初始工具集已准备，包含 request_tool_details + CONTROL 工具")
-            print(f"[DEBUG-tool-catalog] 原子工具将按需通过 request_tool_details 获取")
+            logger.debug("===== 目录+补发 渐进披露机制初始化 =====")
+            logger.debug("工具目录已构建，包含 %s 个工具的简要描述", len(tool_catalog))
+            logger.debug("初始工具集已准备，包含 request_tool_details + CONTROL 工具")
+            logger.debug("原子工具将按需通过 request_tool_details 获取")
             
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -902,7 +904,7 @@ class SkillAgent:
                     if active_skill_text and active_skill_ids:
                         active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
                         self._dynamic_prompt.update_active_skills(active_skills_section)
-                        print(f"[DEBUG-exec] 恢复 active skills: {active_skill_ids}")
+                        logger.debug("恢复 active skills: %s", active_skill_ids)
                 else:
                     # 如果没有保存的 active skills，从全局配置动态读取该会话类型的默认技能
                     conv = self.memory.get_conversation(self._conversation_id)
@@ -921,12 +923,12 @@ class SkillAgent:
                             self.memory.set_active_skills(self._conversation_id, active_skill_ids)
                             active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
                             self._dynamic_prompt.update_active_skills(active_skills_section)
-                            print(f"[DEBUG-exec] 加载默认技能: {active_skill_ids}")
+                            logger.debug("加载默认技能: %s", active_skill_ids)
 
             if self.memory is not None:
                 self._append_model_messages(messages, system_prompt=system_prompt, user_query=user_query)
                 prior_messages = self.memory.get_message_records(self._conversation_id)
-                print(f"[DEBUG-exec] 加载历史消息: {len(prior_messages)} 条")
+                logger.debug("加载历史消息: %s 条", len(prior_messages))
                 if prior_messages and len(prior_messages) >= 2:
                     last_msg = prior_messages[-1]
                     prev_msg = prior_messages[-2]
@@ -934,7 +936,7 @@ class SkillAgent:
                         prev_meta = prev_msg.get("metadata") or {}
                         if prev_meta.get("name") == "ask_user":
                             user_choice = user_query.strip()
-                            print(f"[DEBUG-exec] 检测到 ask_user 历史，用户选择: {user_choice}")
+                            logger.debug("检测到 ask_user 历史，用户选择: %s", user_choice)
                             if user_choice == "确认执行":
                                 for record in reversed(prior_messages[:-2]):
                                     if record.get("role") == "assistant":
@@ -979,7 +981,7 @@ class SkillAgent:
                                                         metadata = {"token_usage": asdict(self._token_usage)}
                                                         self.memory.append_message(self._conversation_id, "assistant", err_msg, metadata=metadata)
                                                         _emit_token_usage()
-                                                        print(f"[DEBUG-exec] 📤 返回 (依赖安装失败): {err_msg}")
+                                                        logger.debug("返回 (依赖安装失败): %s", err_msg)
                                                         return err_msg
                                                     if log_callback:
                                                         log_callback(f"依赖安装成功: {msg}", "base_tool")
@@ -1000,7 +1002,7 @@ class SkillAgent:
                                                         log_callback(f"执行命令: {command}", "base_tool")
                                                         log_callback(str(result), "base_tool")
                                                 _emit_token_usage()
-                                                print(f"[DEBUG-exec] 📤 返回 (确认安装后执行结果): {str(result)[:100]}")
+                                                logger.debug("返回 (确认安装后执行结果): %s", str(result)[:100])
                                                 return result
                             elif user_choice == "取消":
                                 cancel_msg = "操作已取消"
@@ -1010,7 +1012,7 @@ class SkillAgent:
                                     metadata = {"token_usage": asdict(self._token_usage)}
                                     self.memory.append_message(self._conversation_id, "assistant", cancel_msg, metadata=metadata)
                                 _emit_token_usage()
-                                print(f"[DEBUG-exec] 📤 返回 (操作已取消)")
+                                logger.debug("返回 (操作已取消)")
                                 return cancel_msg
 
             if self._should_compact(messages):
@@ -1019,8 +1021,8 @@ class SkillAgent:
                 messages = self._perform_compaction(messages, log_callback)
 
             for step in range(self.max_steps):
-                print(f"[DEBUG-exec] ===== Step {step}/{self.max_steps} 开始 =====")
-                print(f"[DEBUG-exec] messages 数量: {len(messages)}")
+                logger.debug("===== Step %s/%s 开始 =====", step, self.max_steps)
+                logger.debug("messages 数量: %s", len(messages))
                 
                 if _check_stop():
                     stop_msg = "用户已停止推理"
@@ -1031,7 +1033,7 @@ class SkillAgent:
                         self.memory.append_message(self._conversation_id, "assistant", stop_msg, metadata=metadata)
                     self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     _emit_token_usage()
-                    print(f"[DEBUG-exec] 📤 用户停止推理，退出循环")
+                    logger.debug("用户停止推理，退出循环")
                     return stop_msg
                 
                 thinking_parts: list[str] = []
@@ -1051,10 +1053,10 @@ class SkillAgent:
                     elif msg_type == "content":
                         content_parts.append(content)
 
-                print(f"[DEBUG-exec] 准备调用 LLM, 当前消息数: {len(messages)}")
+                logger.debug("准备调用 LLM, 当前消息数: %s", len(messages))
                 if len(messages) > 0:
                     last_msg = messages[-1]
-                    print(f"[DEBUG-exec] 最后一条消息: role={last_msg.get('role')}, content 前50字={str(last_msg.get('content', ''))[:50]}")
+                    logger.debug("最后一条消息: role=%s, content 前50字=%s", last_msg.get('role'), str(last_msg.get('content', ''))[:50])
 
                 self._update_system_message(messages)
 
@@ -1062,15 +1064,15 @@ class SkillAgent:
                 result = model.stream_request_llm_with_tools(messages, tools, _stream_callback)
 
                 # Debug output using StreamResult properties
-                print(f"[DEBUG-exec] LLM 返回 StreamResult:")
-                print(f"[DEBUG-exec]   - result_type: {result.result_type}")
+                logger.debug("LLM 返回 StreamResult:")
+                logger.debug("  - result_type: %s", result.result_type)
                 if result.tool_name:
-                    print(f"[DEBUG-exec]   - tool_name: {result.tool_name}")
+                    logger.debug("  - tool_name: %s", result.tool_name)
                 if result.tool_arguments:
                     args_preview = str(result.tool_arguments)[:100]
-                    print(f"[DEBUG-exec]   - arguments 前100字: {args_preview}")
+                    logger.debug("  - arguments 前100字: %s", args_preview)
                 if result.content:
-                    print(f"[DEBUG-exec]   - has content: True")
+                    logger.debug("  - has content: True")
 
                 # Accumulate token usage
                 if result.token_usage is not None:
@@ -1110,7 +1112,7 @@ class SkillAgent:
                         self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
                     self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     _emit_token_usage()
-                    print(f"[DEBUG-exec] 📤 返回文本内容 (长度: {len(final_text)})")
+                    logger.debug("返回文本内容 (长度: %s)", len(final_text))
                     return final_text
 
                 # Handle error response
@@ -1123,7 +1125,7 @@ class SkillAgent:
                         self.memory.append_message(self._conversation_id, "assistant", err, metadata=metadata)
                     self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     _emit_token_usage()
-                    print(f"[DEBUG-exec] 📤 返回错误 (长度: {len(err)})")
+                    logger.debug("返回错误 (长度: %s)", len(err))
                     return err
 
                 # Handle tool call response
@@ -1133,7 +1135,7 @@ class SkillAgent:
                     args = json.loads(arg_str)
                 except json.JSONDecodeError:
                     args = {}
-                print(f"[DEBUG-exec] 解析工具调用: fname={fname}, args keys={list(args.keys()) if isinstance(args, dict) else type(args)}")
+                logger.debug("解析工具调用: fname=%s, args keys=%s", fname, list(args.keys()) if isinstance(args, dict) else type(args))
 
                 if full_thinking and self.memory is not None:
                     self.memory.append_message(
@@ -1148,9 +1150,9 @@ class SkillAgent:
                     if not isinstance(tool_names, list):
                         tool_names = [str(tool_names)]
                     
-                    print(f"[DEBUG-exec] request_tool_details: 请求工具定义 {tool_names}")
-                    print(f"[DEBUG-tool-catalog] ===== 目录+补发 渐进披露机制 - 补发阶段 =====")
-                    print(f"[DEBUG-tool-catalog] LLM 请求获取工具的完整定义: {tool_names}")
+                    logger.debug("request_tool_details: 请求工具定义 %s", tool_names)
+                    logger.debug("===== 目录+补发 渐进披露机制 - 补发阶段 =====")
+                    logger.debug("LLM 请求获取工具的完整定义: %s", tool_names)
                     
                     definitions_found = []
                     definitions_missing = []
@@ -1160,11 +1162,11 @@ class SkillAgent:
                         if tool_def:
                             definitions_found.append(tool_def)
                             self._supplied_tool_definitions[tool_name] = tool_def
-                            print(f"[DEBUG-exec]   ✓ 找到工具定义: {tool_name}")
-                            print(f"[DEBUG-tool-catalog]   工具定义已缓存到 _supplied_tool_definitions")
+                            logger.debug("  ✓ 找到工具定义: %s", tool_name)
+                            logger.debug("  工具定义已缓存到 _supplied_tool_definitions")
                         else:
                             definitions_missing.append(tool_name)
-                            print(f"[DEBUG-exec]   ✗ 未找到工具定义: {tool_name}")
+                            logger.debug("  ✗ 未找到工具定义: %s", tool_name)
                     
                     result_parts = []
                     if definitions_found:
@@ -1186,9 +1188,9 @@ class SkillAgent:
                         )
                         if not already_in_tools:
                             tools.append(tool_schema)
-                            print(f"[DEBUG-exec] 添加工具到 tools 列表: {tool_name}")
-                            print(f"[DEBUG-tool-catalog]   工具 [{tool_name}] 已动态添加到可用工具集")
-                            print(f"[DEBUG-tool-catalog]   当前 tools 列表大小: {len(tools)}")
+                            logger.debug("添加工具到 tools 列表: %s", tool_name)
+                            logger.debug("  工具 [%s] 已动态添加到可用工具集", tool_name)
+                            logger.debug("  当前 tools 列表大小: %s", len(tools))
                     
                     if self.memory is not None:
                         self.memory.append_message(
@@ -1347,10 +1349,10 @@ class SkillAgent:
                         _emit_token_usage()
                         return SKILL_AGENT_AWAITING_USER_REPLY
                 
-                print(f"[DEBUG-exec] 准备执行工具: {fname}")
+                logger.debug("准备执行工具: %s", fname)
                 if fname == "run_command":
                     cmd = str(args.get("command", ""))[:80]
-                    print(f"[DEBUG-exec]   命令: {cmd}...")
+                    logger.debug("  命令: %s...", cmd)
 
                 # 检测重复工具调用（可通过配置禁用）
                 _control_tools = ("select_skill", "finish", "ask_user", "load_skill_memory")
@@ -1361,8 +1363,8 @@ class SkillAgent:
                 if config.TOOL_CALL_DEDUPLICATION_ENABLED and fname not in _control_tools:
                     is_repeated, repeat_warning, last_result = self._check_repeated_tool_call(fname, args)
                     if is_repeated:
-                        print(f"[DEBUG-repeat] ⚠️ 检测到重复工具调用: {fname}")
-                        print(f"[DEBUG-repeat]   连续重复次数: {self._consecutive_repeat_count}")
+                        logger.warning("检测到重复工具调用: %s", fname)
+                        logger.debug("连续重复次数: %s", self._consecutive_repeat_count)
 
                         result = repeat_warning or f"检测到重复的 {fname} 调用"
                         terminate = False
@@ -1374,7 +1376,7 @@ class SkillAgent:
                                 f"检测到连续 {self._consecutive_repeat_count} 次重复执行工具 [{fname}]，已自动结束任务。\n\n"
                                 f"最后一次执行结果摘要：\n{(last_result or '')[:200]}"
                             )
-                            print(f"[DEBUG-repeat] 🚨 触发自动终止: {auto_finish_msg}")
+                            logger.warning("触发自动终止: %s", auto_finish_msg)
 
                             if log_callback:
                                 log_callback(auto_finish_msg, "assistant")
@@ -1411,18 +1413,18 @@ class SkillAgent:
                         original_len = len(result_str)
                         if is_success and len(result_str.strip()) > 0:
                             result = self._format_tool_result(True, result_str)
-                            print(f"[DEBUG-format] 格式化工具结果: {fname}, 成功=True, 原始长度={original_len}, 格式化后长度={len(str(result))}")
+                            logger.debug("格式化工具结果: %s, 成功=True, 原始长度=%s, 格式化后长度=%s", fname, original_len, len(str(result)))
                         elif not is_success:
                             # 保持原始错误信息，但添加前缀
                             if not result_str.startswith("错误"):
                                 result = f"❌ 操作失败\n\n{result}"
-                                print(f"[DEBUG-format] 格式化工具结果: {fname}, 成功=False, 原始长度={original_len}, 添加失败前缀")
+                                logger.debug("格式化工具结果: %s, 成功=False, 原始长度=%s, 添加失败前缀", fname, original_len)
 
-                print(f"[DEBUG-exec] 工具执行完成:")
-                print(f"[DEBUG-exec]   - result 长度: {len(str(result))}")
-                print(f"[DEBUG-exec]   - result 前100字: {str(result)[:100]}")
-                print(f"[DEBUG-exec]   - terminate: {terminate}")
-                print(f"[DEBUG-exec]   - final: {final is not None}")
+                logger.debug("工具执行完成:")
+                logger.debug("  - result 长度: %s", len(str(result)))
+                logger.debug("  - result 前100字: %s", str(result)[:100])
+                logger.debug("  - terminate: %s", terminate)
+                logger.debug("  - final: %s", final is not None)
 
                 if log_callback and fname == "select_skill":
                     if str(result).startswith("错误"):
@@ -1454,24 +1456,24 @@ class SkillAgent:
                                 stdout = stdout_match[1].split("--- stderr ---")[0].strip()
                             
                             if not stdout and self._is_write_operation(command):
-                                print(f"[DEBUG-write] 检测到写入操作: {command[:80]}...")
+                                logger.debug("检测到写入操作: %s...", command[:80])
                                 file_path = self._extract_file_path(command)
                                 if file_path:
-                                    print(f"[DEBUG-write] 提取到文件路径: {file_path}")
+                                    logger.debug("提取到文件路径: %s", file_path)
                                     check_result = self._verify_file_exists(file_path, args.get("cwd", "."))
                                     if log_callback:
                                         log_callback(f"检查结果: {check_result}", "base_tool")
                                     r = r + "\n\n" + check_result
                                     result = r
-                                    print(f"[DEBUG-write] 验证结果已合并到工具结果")
+                                    logger.debug("验证结果已合并到工具结果")
                                 else:
-                                    print(f"[DEBUG-write] 无法提取文件路径，跳过验证")
+                                    logger.debug("无法提取文件路径，跳过验证")
                         
                         # 写入操作特例检测（保留原有逻辑）
                         # 此检测与通用重复检测协同工作，专门针对写入操作提供更严格的保护
                         auto_end_msg = self._check_repeated_write_success(command, str(result))
                         if auto_end_msg:
-                            print(f"[DEBUG-write] 检测到重复写入，自动结束: {auto_end_msg}")
+                            logger.debug(f"检测到重复写入，自动结束: {auto_end_msg}")
                             log_callback(auto_end_msg, "assistant")
                             metadata = {"token_usage": asdict(self._token_usage)}
                             self.memory.append_message(self._conversation_id, "assistant", auto_end_msg, metadata=metadata)
@@ -1490,7 +1492,7 @@ class SkillAgent:
                     if log_callback:
                         log_callback(str(final), "assistant")
                     _emit_token_usage()
-                    print(f"[DEBUG-exec] 📤 工具要求终止 (terminate=True), 返回 final (长度: {len(str(final))})")
+                    logger.debug(f"工具要求终止 (terminate=True), 返回 final (长度: {len(str(final))})")
                     return final
 
                 if fname == "ask_user" and not str(result).startswith("错误"):
@@ -1509,7 +1511,7 @@ class SkillAgent:
                     if log_callback:
                         log_callback(_ask_user_ui_log_payload(args), "await_user")
                     _emit_token_usage()
-                    print(f"[DEBUG-exec] 📤 等待用户回复 (ask_user)")
+                    logger.debug("等待用户回复 (ask_user)")
                     return SKILL_AGENT_AWAITING_USER_REPLY
 
                 if self.memory is not None:
@@ -1522,10 +1524,10 @@ class SkillAgent:
                         for i, msg in enumerate(messages):
                             if msg.get("role") == "system":
                                 messages[i] = {"role": "system", "content": self._dynamic_prompt.build()}
-                                print(f"[DEBUG-exec] 更新系统提示词_dynamic_prompt：{self._dynamic_prompt.build()}")
+                                logger.debug("更新系统提示词_dynamic_prompt：%s", self._dynamic_prompt.build())
                                 break
 
-            print(f"[DEBUG-exec] ⚠️  达到最大步数限制 ({self.max_steps})，退出循环")
+            logger.debug(f"达到最大步数限制 ({self.max_steps})，退出循环")
             tail = f"已达到最大执行步数限制（{self.max_steps}），已停止。"
             if log_callback:
                 log_callback(tail, "assistant")
@@ -1534,12 +1536,12 @@ class SkillAgent:
                 self.memory.append_message(self._conversation_id, "assistant", tail, metadata=metadata)
             self._start_summary_in_background(self._conversation_id, active_skill_ids)
             _emit_token_usage()
-            print(f"[DEBUG-exec] 📤 正常退出循环，返回 tail 消息")
+            logger.debug("正常退出循环，返回 tail 消息")
             return tail
         
         except Exception as e:
-            print(f"[DEBUG-exec] ❌ 发生未捕获异常: {type(e).__name__}: {e}")
-            print(f"[DEBUG-exec] 📋 堆栈跟踪:\n{traceback.format_exc()}")
+            logger.error(f"发生未捕获异常: {type(e).__name__}: {e}")
+            logger.error(f"堆栈跟踪:\n{traceback.format_exc()}")
             
             err_msg = f"执行出错: {type(e).__name__}: {e}"
             if log_callback:
@@ -1552,11 +1554,11 @@ class SkillAgent:
             try:
                 self._start_summary_in_background(self._conversation_id, active_skill_ids)
             except Exception as summary_err:
-                print(f"[DEBUG-exec] ⚠️  尝试启动总结线程时出错: {summary_err}")
+                logger.warning(f"尝试启动总结线程时出错: {summary_err}")
             
             _emit_token_usage()
-            print(f"[DEBUG-exec] 📤 异常退出，返回 err_msg")
+            logger.debug("异常退出，返回 err_msg")
             return err_msg
         finally:
             self._uploaded_files_content = ""
-            print(f"[DEBUG-exec] ===== run() 结束执行 =====")
+            logger.debug("===== run() 结束执行 =====")

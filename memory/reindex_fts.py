@@ -2,6 +2,9 @@ from database import init_db, get_session, engine
 from sqlalchemy import text
 from memory.searcher import MemorySearcher
 from database.models import MemorySegment
+from logger import get_module_logger
+
+logger = get_module_logger("MemoryReindex")
 
 
 def reindex_all_memory_segments():
@@ -15,7 +18,7 @@ def reindex_all_memory_segments():
         segments = db.query(MemorySegment).all()
         total = len(segments)
         
-        print(f"找到 {total} 条记忆片段，开始重新索引...")
+        logger.info(f"找到 {total} 条记忆片段，开始重新索引...")
         
         # 清空 FTS 表
         with engine.connect() as conn:
@@ -37,18 +40,18 @@ def reindex_all_memory_segments():
                 
                 indexed += 1
                 if indexed % 10 == 0:
-                    print(f"已索引 {indexed}/{total} 条...")
+                    logger.debug(f"已索引 {indexed}/{total} 条...")
             
             except Exception as e:
-                print(f"索引 segment {seg.segment_id} 时出错: {e}")
+                logger.error(f"索引 segment {seg.segment_id} 时出错: {e}")
         
-        print(f"\n完成！成功索引 {indexed}/{total} 条记忆片段")
+        logger.info(f"完成！成功索引 {indexed}/{total} 条记忆片段")
         
         # 验证
         with engine.connect() as conn:
             result = conn.execute(text("SELECT COUNT(*) FROM memory_segments_fts"))
             count = result.scalar()
-            print(f"FTS 表中现在有 {count} 条记录")
+            logger.info(f"FTS 表中现在有 {count} 条记录")
 
 
 if __name__ == "__main__":

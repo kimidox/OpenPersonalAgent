@@ -16,6 +16,10 @@ try:
 except ImportError:
     auto = None
 
+from logger import get_module_logger
+
+logger = get_module_logger("UIClient")
+
 
 @dataclass
 class UIElementInfo:
@@ -83,7 +87,7 @@ class UIAClient:
                 if info:
                     elements.append(info)
         except Exception as e:
-            print(f"获取桌面元素失败: {e}")
+            logger.error(f"获取桌面元素失败: {e}")
         return elements
 
     def get_window_by_title(self, title: str, exact: bool = False) -> Optional[UIElementInfo]:
@@ -110,7 +114,7 @@ class UIAClient:
             if window and window.Exists(maxSearchSeconds=self.timeout_ms / 1000):
                 return self._element_to_info(window, depth=0)
         except Exception as e:
-            print(f"查找窗口失败: {e}")
+            logger.error(f"查找窗口失败: {e}")
         return None
 
     def get_window_by_process_id(self, process_id: int) -> Optional[UIElementInfo]:
@@ -128,7 +132,7 @@ class UIAClient:
             if window and window.Exists(maxSearchSeconds=self.timeout_ms / 1000):
                 return self._element_to_info(window, depth=0)
         except Exception as e:
-            print(f"查找窗口失败: {e}")
+            logger.error(f"查找窗口失败: {e}")
         return None
 
     def get_focused_window(self) -> Optional[UIElementInfo]:
@@ -148,7 +152,7 @@ class UIAClient:
                 if window:
                     return self._element_to_info(window, depth=0)
         except Exception as e:
-            print(f"获取焦点窗口失败: {e}")
+            logger.error(f"获取焦点窗口失败: {e}")
         return None
 
     def get_element_tree(
@@ -197,7 +201,7 @@ class UIAClient:
             if element:
                 return self._element_to_info(element, depth=0)
         except Exception as e:
-            print(f"查找元素失败: {e}")
+            logger.error(f"查找元素失败: {e}")
         return None
 
     def find_element_by_name(
@@ -233,7 +237,7 @@ class UIAClient:
             if element:
                 return self._element_to_info(element, depth=0)
         except Exception as e:
-            print(f"查找元素失败: {e}")
+            logger.error(f"查找元素失败: {e}")
         return None
 
     def find_elements_by_control_type(
@@ -265,7 +269,7 @@ class UIAClient:
                     if len(elements) >= max_results:
                         break
         except Exception as e:
-            print(f"查找元素失败: {e}")
+            logger.error(f"查找元素失败: {e}")
         return elements
 
     def activate_window(self, window_element: Any) -> bool:
@@ -283,7 +287,7 @@ class UIAClient:
                 window_element.SetActive()
                 return True
         except Exception as e:
-            print(f"激活窗口失败: {e}")
+            logger.error(f"激活窗口失败: {e}")
         return False
 
     def _element_to_info(
@@ -329,7 +333,7 @@ class UIAClient:
 
             return info
         except Exception as e:
-            print(f"转换元素信息失败: {e}")
+            logger.error(f"转换元素信息失败: {e}")
             return None
 
     def _build_tree(

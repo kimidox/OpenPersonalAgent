@@ -11,6 +11,9 @@ from io import BytesIO
 import base64
 
 import config
+from logger import get_module_logger
+
+logger = get_module_logger("Executor")
 
 
 pyautogui.FAILSAFE = True
@@ -126,7 +129,7 @@ def translate_grid_xy_to_screen_coord(
     screen_y = gy * step + step // 2
     screen_x = max(0, min(screen_x, screen_width - 1))
     screen_y = max(0, min(screen_y, screen_height - 1))
-    print(f"网格 ({grid_x}, {grid_y}) -> 屏幕像素 ({screen_x}, {screen_y}), step={step}")
+    logger.debug(f"网格 ({grid_x}, {grid_y}) -> 屏幕像素 ({screen_x}, {screen_y}), step={step}")
     return (screen_x, screen_y)
 
 class Executor:
@@ -153,7 +156,7 @@ class Executor:
         w, h = self._last_screenshot_size or pyautogui.size()
         pw, ph = pyautogui.size()
         if self._last_screenshot_size and (w, h) != (pw, ph):
-            print(
+            logger.debug(
                 f"警告: 截图像素 {w}x{h} 与 pyautogui.size() {pw}x{ph} 不一致，"
                 f"点击坐标按截图像素换算；若点击偏移请检查多显示器/DPI。"
             )

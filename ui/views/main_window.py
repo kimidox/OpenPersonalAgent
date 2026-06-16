@@ -34,6 +34,8 @@ from ui.views.worker_thread import SkillAgentWorkerThread
 if TYPE_CHECKING:
     pass
 
+logger = get_logger()
+
 
 class MultiLineInputEdit(QPlainTextEdit):
     def __init__(self, parent=None):
@@ -1001,7 +1003,7 @@ class SkillAgentMainWindow(QMainWindow):
                 if conv_id == session_tab.conversation_id:
                     stream_text = self.stream_renderer.complete() or ""
             
-            print(f"[DEBUG-finish] main_window: result={result!r}, stream_text={stream_text!r}")
+            logger.debug(f"finish: result={result!r}, stream_text={stream_text!r}")
             
             if result != SKILL_AGENT_AWAITING_USER_REPLY:
                 session_tab.clear_await_user_ui()

@@ -7,9 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import config
+from logger import get_module_logger
 from resource_path import paths
 from memory.searcher import MemorySearcher
 from .registry import SkillRegistry
+
+logger = get_module_logger("SkillSummary")
 
 
 @dataclass
@@ -67,28 +70,28 @@ def summarize_skill_execution(
     import json
     import traceback
     
-    print(f"[SkillSummary] summarize_skill_execution 开始: skill_id={skill_id}, messages_count={len(conversation_messages)}")
+    logger.info(f"summarize_skill_execution 开始: skill_id={skill_id}, messages_count={len(conversation_messages)}")
     
     conversation_text = _format_conversation(conversation_messages)
-    print(f"[SkillSummary] 格式化会话文本完成: length={len(conversation_text)}")
+    logger.info(f"格式化会话文本完成: length={len(conversation_text)}")
     
     prompt = SUMMARIZE_PROMPT.format(
         skill_id=skill_id,
         conversation=conversation_text,
     )
-    print(f"[SkillSummary] 准备调用 LLM 进行总结 (skill_id={skill_id})")
+    logger.info(f"准备调用 LLM 进行总结 (skill_id={skill_id})")
 
     try:
         messages = [{"role": "user", "content": prompt}]
         response_msg = llm_model.complete(messages)
         response_text = getattr(response_msg, "content", "") or str(response_msg)
-        print(f"[SkillSummary] LLM 响应接收完成 (skill_id={skill_id}), length={len(response_text)}")
+        logger.debug(f"LLM 响应接收完成 (skill_id={skill_id}), length={len(response_text)}")
         
         result = _parse_llm_response(response_text)
-        print(f"[SkillSummary] JSON 解析成功 (skill_id={skill_id}), success={result.get('success')}")
+        logger.debug(f"JSON 解析成功 (skill_id={skill_id}), success={result.get('success')}")
     except Exception as e:
-        print(f"[SkillSummary] ❌ LLM 分析异常 (skill_id={skill_id}): {type(e).__name__}: {e}")
-        print(f"[SkillSummary] 📋 异常堆栈:\n{traceback.format_exc()}")
+        logger.error(f"LLM 分析异常 (skill_id={skill_id}): {type(e).__name__}: {e}")
+        logger.error(f"异常堆栈:\n{traceback.format_exc()}")
         
         result = {
             "success": False,
@@ -107,7 +110,7 @@ def summarize_skill_execution(
         summary=result.get("summary", ""),
     )
     
-    print(f"[SkillSummary] summarize_skill_execution 完成: skill_id={skill_id}, success={memory.success}")
+    logger.info(f"summarize_skill_execution 完成: skill_id={skill_id}, success={memory.success}")
     return memory
 
 
@@ -196,76 +199,76 @@ def _parse_llm_response(response: str) -> dict:
     import json
     import re
 
-    print(f"[SkillSummary] 开始解析 LLM 响应, 长度={len(response)}")
-    print(f"[SkillSummary] 原始响应内容 (前500字符): {response[:500]}")
+    logger.debug(f"开始解析 LLM 响应, 长度={len(response)}")
+    logger.debug(f"原始响应内容 (前500字符): {response[:500]}")
 
     # 记录解析失败的详细信息
     parse_errors = []
 
     # 策略 1：代码块提取
-    print(f"[SkillSummary] 尝试提取 JSON (策略1: 代码块提取)")
+    logger.debug(f"尝试提取 JSON (策略1: 代码块提取)")
     try:
         result = _extract_json_from_code_block(response)
         if result is not None:
-            print(f"[SkillSummary] ✅ 策略1(代码块提取)成功")
+            logger.debug(f"✅ 策略1(代码块提取)成功")
             return result
         parse_errors.append("策略1(代码块提取): 未找到有效JSON代码块")
     except Exception as e:
         error_msg = f"策略1(代码块提取)异常: {type(e).__name__}: {e}"
-        print(f"[SkillSummary] ⚠️ {error_msg}")
+        logger.warning(f"{error_msg}")
         parse_errors.append(error_msg)
-    print(f"[SkillSummary] ⚠️ 策略1(代码块提取)失败，尝试下一策略")
+    logger.warning(f"策略1(代码块提取)失败，尝试下一策略")
 
     # 策略 2：精确 JSON 对象匹配
-    print(f"[SkillSummary] 尝试提取 JSON (策略2: 精确JSON匹配)")
+    logger.debug(f"尝试提取 JSON (策略2: 精确JSON匹配)")
     try:
         result = _extract_json_precise(response)
         if result is not None:
-            print(f"[SkillSummary] ✅ 策略2(精确JSON匹配)成功")
+            logger.debug(f"✅ 策略2(精确JSON匹配)成功")
             return result
         parse_errors.append("策略2(精确JSON匹配): 未找到有效JSON对象")
     except Exception as e:
         error_msg = f"策略2(精确JSON匹配)异常: {type(e).__name__}: {e}"
-        print(f"[SkillSummary] ⚠️ {error_msg}")
+        logger.warning(f"{error_msg}")
         parse_errors.append(error_msg)
-    print(f"[SkillSummary] ⚠️ 策略2(精确JSON匹配)失败，尝试下一策略")
+    logger.warning(f"策略2(精确JSON匹配)失败，尝试下一策略")
 
     # 策略 3：逐行查找
-    print(f"[SkillSummary] 尝试提取 JSON (策略3: 逐行查找)")
+    logger.debug(f"尝试提取 JSON (策略3: 逐行查找)")
     try:
         result = _extract_json_line_by_line(response)
         if result is not None:
-            print(f"[SkillSummary] ✅ 策略3(逐行查找)成功")
+            logger.debug(f"✅ 策略3(逐行查找)成功")
             return result
         parse_errors.append("策略3(逐行查找): 未找到有效JSON结构")
     except Exception as e:
         error_msg = f"策略3(逐行查找)异常: {type(e).__name__}: {e}"
-        print(f"[SkillSummary] ⚠️ {error_msg}")
+        logger.warning(f"{error_msg}")
         parse_errors.append(error_msg)
-    print(f"[SkillSummary] ⚠️ 策略3(逐行查找)失败，尝试下一策略")
+    logger.warning(f"策略3(逐行查找)失败，尝试下一策略")
 
     # 策略 4：宽松匹配（兜底）
-    print(f"[SkillSummary] 尝试提取 JSON (策略4: 宽松匹配)")
+    logger.debug(f"尝试提取 JSON (策略4: 宽松匹配)")
     try:
         result = _extract_json_loose(response)
         if result is not None:
-            print(f"[SkillSummary] ✅ 策略4(宽松匹配)成功")
+            logger.debug(f"✅ 策略4(宽松匹配)成功")
             return result
         parse_errors.append("策略4(宽松匹配): 未找到有效JSON结构")
     except Exception as e:
         error_msg = f"策略4(宽松匹配)异常: {type(e).__name__}: {e}"
-        print(f"[SkillSummary] ⚠️ {error_msg}")
+        logger.warning(f"{error_msg}")
         parse_errors.append(error_msg)
 
     # 所有策略都失败，执行降级处理
-    print(f"[SkillSummary] ❌ 所有策略都失败，执行降级处理")
-    print(f"[SkillSummary] 📋 解析错误汇总:")
+    logger.error(f"所有策略都失败，执行降级处理")
+    logger.error(f"解析错误汇总:")
     for i, error in enumerate(parse_errors, 1):
-        print(f"[SkillSummary]   {i}. {error}")
+        logger.error(f"  {i}. {error}")
 
     # 降级处理：返回默认结构，确保流程不中断
     fallback_result = _create_fallback_response(response, parse_errors)
-    print(f"[SkillSummary] 🔄 已生成降级响应，流程将继续执行")
+    logger.warning(f"已生成降级响应，流程将继续执行")
     return fallback_result
 
 
@@ -319,7 +322,7 @@ def _fix_json_format(json_str: str) -> str:
     fixes_applied = []
     fix_details = []  # 记录详细的修复信息
 
-    print(f"[SkillSummary] 开始 JSON 格式修复, 原始长度={len(json_str)}")
+    logger.debug(f"开始 JSON 格式修复, 原始长度={len(json_str)}")
 
     # 策略 1：修复属性名缺少双引号
     # 匹配模式：{key: 或 ,key: 其中 key 是标识符（字母、数字、下划线）
@@ -348,9 +351,9 @@ def _fix_json_format(json_str: str) -> str:
         if fixed != json_str:
             fixes_applied.append("添加属性名双引号")
             fix_details.append(f"添加了 {fixed_count} 处属性名双引号")
-            print(f"[SkillSummary] 修复操作: 添加属性名双引号 ({fixed_count} 处)")
-            print(f"[SkillSummary] 修复前片段: {json_str[max(0, matches[0].start() - 20):matches[0].end() + 20]}")
-            print(f"[SkillSummary] 修复后片段: {fixed[max(0, matches[0].start() - 20):matches[0].end() + 22]}")
+            logger.debug(f"修复操作: 添加属性名双引号 ({fixed_count} 处)")
+            logger.debug(f"修复前片段: {json_str[max(0, matches[0].start() - 20):matches[0].end() + 20]}")
+            logger.debug(f"修复后片段: {fixed[max(0, matches[0].start() - 20):matches[0].end() + 22]}")
             json_str = fixed
 
     # 策略 2：将单引号替换为双引号
@@ -368,7 +371,7 @@ def _fix_json_format(json_str: str) -> str:
     if fixed != json_str:
         fixes_applied.append("单引号替换为双引号")
         fix_details.append("将单引号替换为双引号")
-        print(f"[SkillSummary] 修复操作: 单引号替换为双引号")
+        logger.debug(f"修复操作: 单引号替换为双引号")
         json_str = fixed
 
     # 策略 3：移除尾随逗号
@@ -378,7 +381,7 @@ def _fix_json_format(json_str: str) -> str:
     if fixed != json_str:
         fixes_applied.append("移除尾随逗号")
         fix_details.append("移除了尾随逗号")
-        print(f"[SkillSummary] 修复操作: 移除尾随逗号")
+        logger.debug(f"修复操作: 移除尾随逗号")
         json_str = fixed
 
     # 策略 4：移除控制字符
@@ -388,7 +391,7 @@ def _fix_json_format(json_str: str) -> str:
     if fixed != json_str:
         fixes_applied.append("移除控制字符")
         fix_details.append("移除了控制字符")
-        print(f"[SkillSummary] 修复操作: 移除控制字符")
+        logger.debug(f"修复操作: 移除控制字符")
         json_str = fixed
 
     # 策略 5：移除注释
@@ -400,16 +403,16 @@ def _fix_json_format(json_str: str) -> str:
     if fixed != json_str:
         fixes_applied.append("移除注释")
         fix_details.append("移除了注释内容")
-        print(f"[SkillSummary] 修复操作: 移除注释")
+        logger.debug(f"修复操作: 移除注释")
         json_str = fixed
 
     # 记录修复日志
     if fixes_applied:
-        print(f"[SkillSummary] JSON 格式修复完成: {', '.join(fixes_applied)}")
-        print(f"[SkillSummary] 修复前 (前100字符): {original_str[:100]}")
-        print(f"[SkillSummary] 修复后 (前100字符): {json_str[:100]}")
+        logger.debug(f"JSON 格式修复完成: {', '.join(fixes_applied)}")
+        logger.debug(f"修复前 (前100字符): {original_str[:100]}")
+        logger.debug(f"修复后 (前100字符): {json_str[:100]}")
     else:
-        print(f"[SkillSummary] 未检测到需要修复的 JSON 格式问题")
+        logger.debug(f"未检测到需要修复的 JSON 格式问题")
 
     return json_str
 
@@ -430,49 +433,49 @@ def _try_parse_json(json_str: str) -> dict | None:
     """
     import json
 
-    print(f"[SkillSummary] 尝试解析 JSON, 内容长度={len(json_str)}")
+    logger.debug(f"尝试解析 JSON, 内容长度={len(json_str)}")
 
     # 策略 1：直接解析
     try:
         result = json.loads(json_str)
         if isinstance(result, dict):
-            print(f"[SkillSummary] ✅ JSON 直接解析成功")
+            logger.debug(f"✅ JSON 直接解析成功")
             return result
-        print(f"[SkillSummary] ⚠️ JSON 解析结果不是字典类型: {type(result)}")
+        logger.debug(f"⚠️ JSON 解析结果不是字典类型: {type(result)}")
         return None
     except json.JSONDecodeError as e:
-        print(f"[SkillSummary] 直接解析失败: {e.msg}")
-        print(f"[SkillSummary] 错误类型: {type(e).__name__}")
-        print(f"[SkillSummary] 错误位置: 行 {e.lineno}, 列 {e.colno}, 字符位置 {e.pos}")
+        logger.debug(f"直接解析失败: {e.msg}")
+        logger.debug(f"错误类型: {type(e).__name__}")
+        logger.debug(f"错误位置: 行 {e.lineno}, 列 {e.colno}, 字符位置 {e.pos}")
         # 显示错误上下文，用 [HERE] 标记错误位置
         context_start = max(0, e.pos - 30)
         context_end = min(len(json_str), e.pos + 30)
-        print(f"[SkillSummary] 错误上下文: ...{json_str[context_start:e.pos]}[HERE]{json_str[e.pos:context_end]}...")
+        logger.debug(f"错误上下文: ...{json_str[context_start:e.pos]}[HERE]{json_str[e.pos:context_end]}...")
 
     # 策略 2：尝试修复后解析
-    print(f"[SkillSummary] 尝试修复 JSON 格式后重新解析...")
+    logger.debug(f"尝试修复 JSON 格式后重新解析...")
     fixed_json = _fix_json_format(json_str)
 
     # 检查是否有修复
     if fixed_json == json_str:
-        print(f"[SkillSummary] 未进行任何修复，解析失败")
+        logger.debug(f"未进行任何修复，解析失败")
         return None
 
     try:
         result = json.loads(fixed_json)
         if isinstance(result, dict):
-            print(f"[SkillSummary] ✅ JSON 修复后解析成功")
+            logger.debug(f"✅ JSON 修复后解析成功")
             return result
-        print(f"[SkillSummary] ⚠️ JSON 解析结果不是字典类型: {type(result)}")
+        logger.debug(f"⚠️ JSON 解析结果不是字典类型: {type(result)}")
         return None
     except json.JSONDecodeError as e:
-        print(f"[SkillSummary] 修复后解析仍然失败: {e.msg}")
-        print(f"[SkillSummary] 错误类型: {type(e).__name__}")
-        print(f"[SkillSummary] 错误位置: 行 {e.lineno}, 列 {e.colno}, 字符位置 {e.pos}")
+        logger.debug(f"修复后解析仍然失败: {e.msg}")
+        logger.debug(f"错误类型: {type(e).__name__}")
+        logger.debug(f"错误位置: 行 {e.lineno}, 列 {e.colno}, 字符位置 {e.pos}")
         # 显示修复后的错误上下文
         context_start = max(0, e.pos - 30)
         context_end = min(len(fixed_json), e.pos + 30)
-        print(f"[SkillSummary] 修复后错误上下文: ...{fixed_json[context_start:e.pos]}[HERE]{fixed_json[e.pos:context_end]}...")
+        logger.debug(f"修复后错误上下文: ...{fixed_json[context_start:e.pos]}[HERE]{fixed_json[e.pos:context_end]}...")
         return None
 
 
@@ -490,26 +493,26 @@ def _extract_json_from_code_block(response: str) -> dict | None:
     """
     import re
 
-    print(f"[SkillSummary] 尝试提取 JSON (策略1: 代码块提取)")
+    logger.debug(f"尝试提取 JSON (策略1: 代码块提取)")
 
     # 匹配 ```json ... ``` 或 ``` ... ``` 代码块
     pattern = r"```(?:json)?\s*\n([\s\S]*?)\n```"
     matches = re.findall(pattern, response)
 
     if not matches:
-        print(f"[SkillSummary] 策略1: 未找到代码块")
+        logger.debug(f"策略1: 未找到代码块")
         return None
 
-    print(f"[SkillSummary] 策略1: 找到 {len(matches)} 个代码块候选")
+    logger.debug(f"策略1: 找到 {len(matches)} 个代码块候选")
 
     for i, code_content in enumerate(matches):
-        print(f"[SkillSummary] 策略1: 尝试解析候选 {i + 1} (长度: {len(code_content)})")
+        logger.debug(f"策略1: 尝试解析候选 {i + 1} (长度: {len(code_content)})")
         result = _try_parse_json(code_content.strip())
         if result is not None:
-            print(f"[SkillSummary] ✅ 策略1: JSON 解析成功")
+            logger.debug(f"✅ 策略1: JSON 解析成功")
             return result
 
-    print(f"[SkillSummary] 策略1: 所有代码块候选都无法解析为有效 JSON")
+    logger.debug(f"策略1: 所有代码块候选都无法解析为有效 JSON")
     return None
 
 
@@ -527,7 +530,7 @@ def _extract_json_precise(response: str) -> dict | None:
     """
     import re
 
-    print(f"[SkillSummary] 尝试提取 JSON (策略2: 精确JSON匹配)")
+    logger.debug(f"尝试提取 JSON (策略2: 精确JSON匹配)")
 
     # 匹配完整的 JSON 对象（支持一层嵌套）
     # 这个正则表达式匹配从 { 开始，到对应的 } 结束
@@ -536,22 +539,22 @@ def _extract_json_precise(response: str) -> dict | None:
     matches = re.findall(pattern, response)
 
     if not matches:
-        print(f"[SkillSummary] 策略2: 未找到 JSON 对象模式")
+        logger.debug(f"策略2: 未找到 JSON 对象模式")
         return None
 
-    print(f"[SkillSummary] 策略2: 找到 {len(matches)} 个可能的 JSON 对象候选")
+    logger.debug(f"策略2: 找到 {len(matches)} 个可能的 JSON 对象候选")
 
     # 优先尝试最长的匹配（通常是最完整的 JSON）
     matches_sorted = sorted(matches, key=len, reverse=True)
 
     for i, json_candidate in enumerate(matches_sorted):
-        print(f"[SkillSummary] 策略2: 尝试解析候选 {i + 1} (长度: {len(json_candidate)})")
+        logger.debug(f"策略2: 尝试解析候选 {i + 1} (长度: {len(json_candidate)})")
         result = _try_parse_json(json_candidate)
         if result is not None:
-            print(f"[SkillSummary] ✅ 策略2: JSON 解析成功")
+            logger.debug(f"✅ 策略2: JSON 解析成功")
             return result
 
-    print(f"[SkillSummary] 策略2: 所有候选都无法解析为有效 JSON")
+    logger.debug(f"策略2: 所有候选都无法解析为有效 JSON")
     return None
 
 
@@ -567,7 +570,7 @@ def _extract_json_line_by_line(response: str) -> dict | None:
     Returns:
         解析成功返回字典，失败返回 None
     """
-    print(f"[SkillSummary] 尝试提取 JSON (策略3: 逐行查找)")
+    logger.debug(f"尝试提取 JSON (策略3: 逐行查找)")
 
     lines = response.split('\n')
     json_candidates = []
@@ -578,20 +581,20 @@ def _extract_json_line_by_line(response: str) -> dict | None:
             json_candidates.append((i, line))
 
     if not json_candidates:
-        print(f"[SkillSummary] 策略3: 未找到包含 JSON 结构的行")
+        logger.debug(f"策略3: 未找到包含 JSON 结构的行")
         return None
 
-    print(f"[SkillSummary] 策略3: 找到 {len(json_candidates)} 个包含 JSON 结构的行候选")
+    logger.debug(f"策略3: 找到 {len(json_candidates)} 个包含 JSON 结构的行候选")
 
     for line_num, candidate in json_candidates:
-        print(f"[SkillSummary] 策略3: 尝试解析第 {line_num + 1} 行 (长度: {len(candidate)})")
+        logger.debug(f"策略3: 尝试解析第 {line_num + 1} 行 (长度: {len(candidate)})")
         result = _try_parse_json(candidate)
         if result is not None:
-            print(f"[SkillSummary] ✅ 策略3: JSON 解析成功")
+            logger.debug(f"✅ 策略3: JSON 解析成功")
             return result
 
     # 尝试合并多行
-    print(f"[SkillSummary] 策略3: 尝试合并多行查找 JSON")
+    logger.debug(f"策略3: 尝试合并多行查找 JSON")
     start_idx = None
     end_idx = None
 
@@ -604,13 +607,13 @@ def _extract_json_line_by_line(response: str) -> dict | None:
 
     if start_idx is not None and end_idx is not None:
         merged_content = '\n'.join(lines[start_idx:end_idx + 1])
-        print(f"[SkillSummary] 策略3: 合并行 {start_idx + 1} 到 {end_idx + 1} (长度: {len(merged_content)})")
+        logger.debug(f"策略3: 合并行 {start_idx + 1} 到 {end_idx + 1} (长度: {len(merged_content)})")
         result = _try_parse_json(merged_content)
         if result is not None:
-            print(f"[SkillSummary] ✅ 策略3: JSON 解析成功 (合并多行)")
+            logger.debug(f"✅ 策略3: JSON 解析成功 (合并多行)")
             return result
 
-    print(f"[SkillSummary] 策略3: 所有尝试都失败")
+    logger.debug(f"策略3: 所有尝试都失败")
     return None
 
 
@@ -628,24 +631,24 @@ def _extract_json_loose(response: str) -> dict | None:
     """
     import re
 
-    print(f"[SkillSummary] 尝试提取 JSON (策略4: 宽松匹配)")
+    logger.debug(f"尝试提取 JSON (策略4: 宽松匹配)")
 
     pattern = r"\{[\s\S]*\}"
     match = re.search(pattern, response)
 
     if not match:
-        print(f"[SkillSummary] 策略4: 未找到任何 JSON 结构")
+        logger.debug(f"策略4: 未找到任何 JSON 结构")
         return None
 
     json_str = match.group()
-    print(f"[SkillSummary] 策略4: 找到宽松匹配候选 (长度: {len(json_str)})")
+    logger.debug(f"策略4: 找到宽松匹配候选 (长度: {len(json_str)})")
 
     result = _try_parse_json(json_str)
     if result is not None:
-        print(f"[SkillSummary] ✅ 策略4: JSON 解析成功")
+        logger.debug(f"✅ 策略4: JSON 解析成功")
         return result
 
-    print(f"[SkillSummary] 策略4: 宽松匹配候选无法解析为有效 JSON")
+    logger.debug(f"策略4: 宽松匹配候选无法解析为有效 JSON")
     return None
 
 
@@ -686,10 +689,10 @@ def save_skill_memory(
             related_id=skill_id,
             metadata=metadata,
         )
-        print(f"[SkillSummary] save_skill_memory: 已保存到数据库 skill_id={skill_id}, segment_id={segment_id}")
+        logger.debug(f"save_skill_memory: 已保存到数据库 skill_id={skill_id}, segment_id={segment_id}")
         return segment_id
     except Exception as e:
-        print(f"[SkillSummary] save_skill_memory: 保存到数据库失败 skill_id={skill_id}, error={e}")
+        logger.error(f"save_skill_memory: 保存到数据库失败 skill_id={skill_id}, error={e}")
         return None
 
 

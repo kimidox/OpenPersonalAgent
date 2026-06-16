@@ -3,6 +3,9 @@ from __future__ import annotations
 from .loader import load_skill_memory_lazy
 from .processing import format_skill_for_prompt, normalize_skill_id
 from .registry import SkillRegistry
+from logger import get_module_logger
+
+logger = get_module_logger("SkillExecution")
 
 SKILL_CONTROL_TOOL_DEFINITIONS: list[dict] = [
     {
@@ -90,7 +93,7 @@ def execute_skill_control_tool(
     should_terminate 为 True 且 final_user_message 非空时表示正常结束。
     """
     if name == "select_skill":
-        print(f"select_skill: {args}")
+        logger.debug(f"select_skill: {args}")
         sid = normalize_skill_id(str(args.get("skill_id", "")))
         if sid in active_skill_ids:
             i = active_skill_ids.index(sid)
@@ -111,7 +114,7 @@ def execute_skill_control_tool(
 
     if name == "finish":
         msg = str(args.get("message", "")).strip()
-        print(f"[DEBUG-finish] execution.py: message 原始值={args.get('message', '')!r}, strip 后={msg!r}")
+        logger.debug(f"finish: message 原始值={args.get('message', '')!r}, strip 后={msg!r}")
         if not msg:
             return ("错误：finish 的 message 参数不能为空。你必须先通过正常文本输出完整回复内容，然后再调用 finish(message='你的完整回复') 结束任务。请重新输出回复。", False, None)
         return (msg, True, msg)
