@@ -1,2 +1,3 @@
 baidusearch
 requests
+trafilatura
