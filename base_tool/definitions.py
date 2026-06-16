@@ -191,18 +191,27 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "   - PowerShell: 使用 -Encoding UTF8 参数（如 Set-Content -Path file.txt -Value \"内容\" -Encoding UTF8）\n"
             "   - 禁止使用裸重定向 > 或不带编码参数的 Set-Content、Out-File 等命令\n"
             "3. 违反编码规范会导致文件乱码，影响后续处理\n\n"
-            "【错误处理规范】执行后如果满足以下任一条件，必须立即调用 load_skill_memory：\n"
-            "- exit_code ≠ 0（命令执行失败）\n"
-            "- 返回 stderr 有错误信息\n"
-            "- 文件未找到或路径错误\n"
-            "- 连续失败次数 ≥ 1 次"
+            "【错误处理规范】执行后根据错误类型决定处理方式：\n"
+            "- 简单错误（命令拼写错误、路径笔误等）：直接修正参数后重试 run_command\n"
+            "- 复杂错误（依赖缺失、配置问题等）或连续失败 ≥ 1 次：先调用 load_skill_memory 获取相关经验，再尝试修正\n"
+            "- 同一命令重试超过 2 次仍失败：放弃该方案并重新规划任务\n\n"
+            "【错误反馈和重试流程】\n"
+            "1. 命令执行失败时，返回结果会包含【重试引导】段落，请根据其中的提示分析错误原因\n"
+            "2. 返回中会针对常见错误类型提供具体建议（如命令不存在、权限不足、文件找不到、缺少模块等）\n"
+            "3. 重试步骤：分析【错误输出】→ 参考【重试引导】建议 → 修正命令参数 → 重新调用 run_command\n"
+            "4. 同一命令重试超过 2 次仍失败时，应放弃该方案并重新规划任务\n"
+            "5. 超时命令会返回已捕获的部分输出，可增加 timeout_sec 参数或检查命令是否需要交互输入\n\n"
+            "【注意事项】\n"
+            "- 避免使用需要用户交互输入的命令（如 ping 不带 -n 参数、pause 等）\n"
+            "- 超时后子进程会被自动清理，不会产生僵尸进程\n"
+            "- 输出超过 12000 字符时会被截断"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "要执行的 CMD 命令字符串",
+                    "description": "要执行的 CMD 命令字符串。避免使用需要交互输入的命令。",
                 },
                 "cwd": {
                     "type": "string",
@@ -214,7 +223,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 },
                 "timeout_sec": {
                     "type": "number",
-                    "description": "超时秒数，默认 60，最大 180",
+                    "description": "超时秒数，默认 60，最大 180。对于长时间运行的命令请适当增加此值。",
                 },
             },
             "required": ["command","cwd"],

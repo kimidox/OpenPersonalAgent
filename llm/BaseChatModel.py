@@ -21,12 +21,13 @@ class StreamResultType(str, Enum):
     TEXT = "text"
     TOOL_CALL = "tool_call"
     ERROR = "error"
+    TRUNCATED = "truncated"  # 新增：被截断的响应
 
 
 @dataclass
 class StreamResult:
     """统一的流式返回结构"""
-    result_type: Literal["text", "tool_call", "error"]
+    result_type: Literal["text", "tool_call", "error", "truncated"]
     content: Optional[str] = None
     reasoning_content: Optional[str] = None
     tool_name: Optional[str] = None
@@ -60,6 +61,20 @@ class StreamResult:
             result_type="tool_call",
             tool_name=name,
             tool_arguments=arguments,
+            reasoning_content=reasoning_content,
+            token_usage=token_usage,
+        )
+
+    @classmethod
+    def from_truncated(
+        cls,
+        content: str,
+        reasoning_content: str = "",
+        token_usage: Optional[TokenUsage] = None,
+    ) -> "StreamResult":
+        return cls(
+            result_type="truncated",
+            content=content,
             reasoning_content=reasoning_content,
             token_usage=token_usage,
         )
@@ -218,6 +233,30 @@ class StreamParser:
     def _build_result(self, finish_reason: Optional[str] = None) -> StreamResult:
         """将累积数据组装为 StreamResult"""
         self._flush_buffer()
+
+        # 处理被截断的情况：finish_reason="length" 表示输出被 max_tokens 截断
+        if finish_reason == "length":
+            content_text = "".join(self._all_content_parts).strip()
+            reasoning_text = "".join(self._all_reasoning_parts).strip()
+            # 如果有部分工具调用内容，仍然返回 tool_call 类型让 agent 尝试执行
+            if self._tool_call_chunks:
+                first_tc = self._tool_call_chunks[min(self._tool_call_chunks.keys())]
+                name = first_tc["name"].strip()
+                arguments = first_tc["arguments"].strip()
+                if name:
+                    reasoning_content = "".join(self._all_reasoning_parts)
+                    return StreamResult.from_tool_call(
+                        name=name,
+                        arguments=arguments,
+                        reasoning_content=reasoning_content,
+                        token_usage=self._token_usage,
+                    )
+            # 否则返回 truncated 类型，让 agent 给 LLM 第二轮机会
+            return StreamResult.from_truncated(
+                content=content_text,
+                reasoning_content=reasoning_text,
+                token_usage=self._token_usage,
+            )
 
         if self._token_usage is None:
             estimated_prompt = self._estimate_tokens(self._messages)
@@ -587,6 +626,7 @@ class BaseChatModel(ABC):
                 top_p=self.top_p,
                 frequency_penalty=self.frequency_penalty,
                 extra_body=self.extra_body,
+                max_tokens=8192,
                 stream=True,
                 stream_options={"include_usage": True},
             )

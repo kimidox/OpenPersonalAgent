@@ -6,6 +6,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from sys import platform
 from typing import Any, Callable, Optional
 
 import config
@@ -296,8 +297,10 @@ class SkillAgent:
         return "\n".join(lines)
 
     def get_base_info(self) -> str:
+        import platform
         base_info = f"用户名：{self.username}\n"
-        base_info+=f"当前系统时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        base_info+=f"当前系统时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        base_info+=f"当前系统类型：{platform.system()}"
         return base_info
     def _build_dynamic_system_prompt(
         self,
@@ -835,6 +838,46 @@ class SkillAgent:
         logger.info("后台线程已启动: name=%s, ident=%s, active_skill_ids=%s", t.name, t.ident, active_skill_ids)
         logger.debug("主线程继续执行 (总结线程独立运行)")
 
+    def _is_reasoning_text(self, text: str) -> bool:
+        """判断文本是否为"计划/推理文本"而非最终回答。
+        
+        识别模式：包含"让我执行"、"我将"、"计划"等关键词，且没有明确的结论性回答。
+        """
+        if not text or not text.strip():
+            return False
+        
+        text_lower = text.lower()
+        
+        # 推理/计划关键词
+        reasoning_keywords = [
+            "让我执行",
+            "让我调用",
+            "我将执行",
+            "我将调用",
+            "我将使用",
+            "我需要执行",
+            "让我来获取",
+            "让我来查询",
+            "让我来获取",
+            "让我先",
+            "首先让我",
+            "我先",
+            "让我分析一下",
+            "让我查看",
+            "让我搜索",
+            "让我运行",
+            "让我尝试",
+            "我来执行",
+            "我来获取",
+            "我来调用",
+        ]
+        
+        for keyword in reasoning_keywords:
+            if keyword in text:
+                return True
+        
+        return False
+
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None, stop_check_callback: Optional[Callable[[], bool]] = None) -> str:
         import traceback
         logger.debug("===== run() 开始执行 =====")
@@ -1020,6 +1063,8 @@ class SkillAgent:
                     log_callback("检测到上下文过长，正在自动压缩...", "info")
                 messages = self._perform_compaction(messages, log_callback)
 
+            reasoning_turn_count = 0  # 推理文本轮次计数器
+
             for step in range(self.max_steps):
                 logger.debug("===== Step %s/%s 开始 =====", step, self.max_steps)
                 logger.debug("messages 数量: %s", len(messages))
@@ -1081,7 +1126,8 @@ class SkillAgent:
                 full_thinking = "".join(thinking_parts).strip()
 
                 # Handle text response
-                if result.result_type == "text":
+                if result.result_type in ("text", "truncated"):
+                    is_truncated = result.result_type == "truncated"
                     final_text = result.content or ""
                     if not final_text:
                         final_text = "".join(content_parts).strip()
@@ -1107,13 +1153,39 @@ class SkillAgent:
                         _emit_token_usage()
                         return err
 
-                    if self.memory is not None:
-                        metadata = {"token_usage": asdict(self._token_usage)}
-                        self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
-                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
-                    _emit_token_usage()
-                    logger.debug("返回文本内容 (长度: %s)", len(final_text))
-                    return final_text
+                    # 判断是否为推理/计划文本（而非最终回答）
+                    is_reasoning = self._is_reasoning_text(final_text)
+                    
+                    if is_reasoning or is_truncated:
+                        # 推理文本或被截断的响应：将文本加入上下文，给 LLM 再一轮机会
+                        logger.debug("检测到推理文本或被截断的响应 (长度: %s, truncated: %s)", len(final_text), is_truncated)
+                        if self.memory is not None:
+                            metadata = {"token_usage": asdict(self._token_usage)}
+                            self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
+                        # 继续循环，让 LLM 有机会输出工具调用
+                        reasoning_turn_count += 1
+                        if reasoning_turn_count >= 2:
+                            # 超过最大推理轮次，终止并提示
+                            logger.warning("LLM 连续 %d 次输出推理文本，终止对话", reasoning_turn_count)
+                            warning_msg = "LLM 未能执行计划，请重新描述您的需求。"
+                            if log_callback:
+                                log_callback(warning_msg, "assistant")
+                            if self.memory is not None:
+                                metadata = {"token_usage": asdict(self._token_usage)}
+                                self.memory.append_message(self._conversation_id, "assistant", warning_msg, metadata=metadata)
+                            self._start_summary_in_background(self._conversation_id, active_skill_ids)
+                            _emit_token_usage()
+                            return warning_msg
+                        continue
+                    else:
+                        # 正常文本响应：结束对话
+                        if self.memory is not None:
+                            metadata = {"token_usage": asdict(self._token_usage)}
+                            self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
+                        self._start_summary_in_background(self._conversation_id, active_skill_ids)
+                        _emit_token_usage()
+                        logger.debug("返回文本内容 (长度: %s)", len(final_text))
+                        return final_text
 
                 # Handle error response
                 if result.result_type == "error":
@@ -1404,7 +1476,10 @@ class SkillAgent:
                 # 标准化工具返回结果格式（排除控制类工具和已经是标准格式的结果）
                 if fname not in ("select_skill", "finish", "ask_user", "load_skill_memory"):
                     result_str = str(result)
-                    if not result_str.startswith(("✅", "❌", "⚠️")):
+                    # 保护结构化返回格式（如 run_command 的【执行结果】... 格式）
+                    if result_str.startswith("【执行结果】"):
+                        pass  # 保持原有结构化格式不变
+                    elif not result_str.startswith(("✅", "❌", "⚠️")):
                         # 判断是否为成功结果（简单启发式规则）
                         is_success = (
                             "exit_code: 0" in result_str or  # 命令执行成功

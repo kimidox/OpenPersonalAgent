@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+# psutil 可选导入，用于超时时的进程树清理
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 import config
 import scheduled_tasks as st_module
@@ -31,6 +39,19 @@ except ImportError:
 _RUN_COMMAND_DEFAULT_TIMEOUT = 60
 _RUN_COMMAND_MAX_TIMEOUT = 180
 _RUN_COMMAND_MAX_TOTAL_OUT = 12000
+
+_DANGEROUS_COMMAND_PATTERNS = [
+    r'^\s*rm\s+(-rf?|--force)\s+/',          # rm -rf /
+    r'^\s*format\s+',                          # format C:
+    r'^\s*del\s+(/f|/s|/q)*\s+\*\.?\s*$',     # del *.* /f
+    r'^\s*rd\s+(/s|/q)*\s+[a-zA-Z]:\\$',      # rd /s /q C:\
+    r'^\s*shutdown\s+(/a)',                    # shutdown abort
+    r'^\s*diskpart\s+',                        # diskpart
+    r'^\s*fsutil\s+usn\s+deletejournal',       # fsutil usn deletejournal
+    r'^\s*cipher\s+(/w)',                      # cipher /w
+    r'^\s*reg\s+delete\s+.*\s+(/f)',          # reg delete ... /f
+    r'^\s*net\s+user\s+',                      # net user (user management)
+]
 
 _VENV_DIR = paths.get_venv_dir()
 
@@ -306,6 +327,47 @@ def _splice_skill_path(rel_path: str, skill_id: str, registry: SkillRegistry) ->
     raise ValueError(f"未找到 Skill: {skill_id}")
 
 
+def _detect_dangerous_command(command: str) -> bool:
+    """检测命令是否匹配危险命令模式"""
+    for pattern in _DANGEROUS_COMMAND_PATTERNS:
+        if re.match(pattern, command, re.IGNORECASE):
+            return True
+    return False
+
+
+def _get_error_suggestions(stderr: str, stdout: str = "") -> str:
+    """根据错误内容返回针对性的建议"""
+    combined = (stderr or "") + (stdout or "")
+    if not combined:
+        return ""
+
+    suggestions = []
+
+    # 命令不存在
+    if "不是内部或外部命令" in combined or "'不是内部或外部命令" in combined:
+        suggestions.append("提示: 命令不存在，请检查命令拼写或确保程序已安装并加入PATH")
+
+    # 权限不足
+    if "拒绝访问" in combined or "Access is denied" in combined:
+        suggestions.append("提示: 权限不足，请尝试以管理员权限运行或使用其他命令")
+
+    # 文件/路径不存在
+    if "系统找不到指定的文件" in combined or "The system cannot find the file" in combined:
+        suggestions.append("提示: 文件或路径不存在，请检查路径是否正确")
+
+    # 超时
+    if "timeout" in combined.lower() or "超时" in combined:
+        suggestions.append("提示: 命令执行超时，可能需要增加 timeout_sec 参数")
+
+    # Python 模块缺失
+    if "ModuleNotFoundError" in combined or "No module named" in combined:
+        suggestions.append("提示: 缺少Python模块，请使用 pip install 安装所需依赖")
+
+    if suggestions:
+        return "\n" + "\n".join(suggestions)
+    return ""
+
+
 def _truncate_run_output(text: str, limit: int = _RUN_COMMAND_MAX_TOTAL_OUT) -> str:
     t = text or ""
     if len(t) <= limit:
@@ -427,17 +489,27 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
     if name == "run_command":
         command = str(args.get("command", "") or "").strip()
         if not command:
-            return "错误: 缺少 command 参数"
-        
+            return "错误: 缺少 command 参数。请提供要执行的命令行指令。"
+
+        # 危险命令检测
+        if _detect_dangerous_command(command):
+            return (
+                f"【安全警告】检测到可能具有破坏性的命令: {command}\n\n"
+                f"该命令可能对系统造成不可逆的影响。请确认：\n"
+                f"1. 这是否是您真正想要执行的命令？\n"
+                f"2. 是否有更安全的替代方案？\n\n"
+                f"如果确认需要执行，请将命令修改为明确安全的版本后重试。"
+            )
+
         raw_cwd = args.get("cwd", "")
         skill_id = args.get("skill_id", "")
-        
+
         if skill_id and registry:
             try:
                 skill_relative_path = _splice_skill_path(raw_cwd or ".", str(skill_id), registry)
                 cwd_path = _resolve_safe(ctx, skill_relative_path)
                 cwd_str = str(cwd_path)
-                
+
                 skill = registry.get(str(skill_id))
                 if skill and skill.relative_path.parent:
                     skill_dir = Path(config.WORKER_DIR) / skill.relative_path.parent
@@ -455,16 +527,19 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         else:
             cwd_str = str(Path(ctx.work_dir).resolve())
 
+        # 超时值处理
+        invalid_timeout_flag = False
         try:
             timeout_raw = args.get("timeout_sec", _RUN_COMMAND_DEFAULT_TIMEOUT)
             timeout_sec = int(float(timeout_raw))
         except (TypeError, ValueError):
             timeout_sec = _RUN_COMMAND_DEFAULT_TIMEOUT
+            invalid_timeout_flag = True
         timeout_sec = max(1, min(timeout_sec, _RUN_COMMAND_MAX_TIMEOUT))
 
         # 使用虚拟环境执行命令
         venv_python = _get_venv_python()
-        
+
         # 构建使用虚拟环境的命令
         if sys.platform == "win32":
             # Windows: 对于Python脚本，直接使用虚拟环境的Python解释器
@@ -484,28 +559,21 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
             else:
                 # 非Python命令直接执行，不需要虚拟环境
                 if command.lower().startswith("powershell"):
-                    import shlex
+                    # PowerShell 命令始终使用 -Command 参数传递完整字符串
+                    # 不使用 shlex.split，因为 shlex 是为 POSIX shell 设计的，会破坏 PowerShell 的管道和引号语法
                     remaining = command[len("powershell"):].strip()
-                    try:
-                        parsed = shlex.split(remaining)
-                        cmd = ["powershell.exe"] + parsed
-                    except:
-                        cmd = ["powershell.exe", "-Command", remaining]
+                    cmd = ["powershell.exe", "-Command", remaining]
                 else:
                     cmd = ["cmd.exe", "/c", command]
         else:
             # Unix-like 系统
             if command.lower().startswith("powershell"):
-                import shlex
+                # 同上，始终使用 -Command 传递完整字符串
                 remaining = command[len("powershell"):].strip()
-                try:
-                    parsed = shlex.split(remaining)
-                    cmd = ["powershell.exe"] + parsed
-                except:
-                    cmd = ["powershell.exe", "-Command", remaining]
+                cmd = ["powershell.exe", "-Command", remaining]
             else:
                 cmd = ["cmd.exe", "/c", command]
-        
+
         # 验证和处理 cwd 路径
         valid_cwd = str(Path(ctx.work_dir).resolve())
         try:
@@ -515,39 +583,119 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         except Exception:
             # 如果路径验证失败，回退到默认工作目录
             pass
-        
+
+        # 构建 Popen 参数（注意：不再包含 timeout，改用 communicate() 的 timeout）
+        # capture_output 仅适用于 subprocess.run，Popen 需使用 PIPE
         popen_kw: dict = {
             "cwd": valid_cwd,
-            "capture_output": True,
-            "text": False,
-            "timeout": timeout_sec,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
         }
         if sys.platform == "win32":
             popen_kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        
+
         # 设置环境变量，确保 Python 脚本输出使用 UTF-8 编码
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         popen_kw["env"] = env
 
         try:
-            proc = subprocess.run(cmd, **popen_kw)
-        except subprocess.TimeoutExpired as e:
-            out = _decode_output(e.stdout or b"") + _decode_output(e.stderr or b"")
-            tail = _truncate_run_output(out)
-            return f"错误: 命令执行超时({timeout_sec}s)\n{tail}".strip()
+            proc = subprocess.Popen(cmd, **popen_kw)
+            try:
+                stdout_raw, stderr_raw = proc.communicate(timeout=timeout_sec)
+                returncode = proc.returncode
+            except subprocess.TimeoutExpired:
+                # 超时：尝试捕获部分输出
+                try:
+                    stdout_raw, stderr_raw = proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    stdout_raw = proc.stdout.read() if proc.stdout else b""
+                    stderr_raw = proc.stderr.read() if proc.stderr else b""
 
-        stdout = _decode_output(proc.stdout or b"")
-        stderr = _decode_output(proc.stderr or b"")
-        merged = (
-            f"exit_code: {proc.returncode}\n"
-            f"--- stdout ---\n{stdout}\n"
-            f"--- stderr ---\n{stderr}"
-        )
-        result = _truncate_run_output(merged)
-        if proc.returncode == 0:
-            result = result + "\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
-        return result
+                # 终止进程树
+                try:
+                    if PSUTIL_AVAILABLE:
+                        parent = psutil.Process(proc.pid)
+                        children = parent.children(recursive=True)
+                        for child in children:
+                            try:
+                                child.kill()
+                            except Exception:
+                                pass
+                        parent.kill()
+                    else:
+                        proc.kill()
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+
+                # 格式化超时返回
+                captured_output = ""
+                if stdout_raw:
+                    captured_output += _decode_output(stdout_raw)
+                if stderr_raw:
+                    captured_output += _decode_output(stderr_raw)
+                captured_output = _truncate_run_output(captured_output) if captured_output else "(无)"
+
+                timeout_note = ""
+                if invalid_timeout_flag:
+                    timeout_note = "\n注意: timeout_sec 参数无效，已使用默认值 60 秒"
+
+                return (
+                    f"【执行结果】命令执行超时\n"
+                    f"【超时时间】{timeout_sec}秒\n"
+                    f"【已输出内容】{captured_output}\n"
+                    f"【建议】请检查命令是否需要交互输入，或适当增加 timeout_sec 参数后重试。"
+                    f"{timeout_note}"
+                )
+
+            # 正常执行完成
+            stdout = _decode_output(stdout_raw or b"")
+            stderr = _decode_output(stderr_raw or b"")
+
+            # 无效超时参数备注
+            timeout_note = ""
+            if invalid_timeout_flag:
+                timeout_note = "\n注意: timeout_sec 参数无效，已使用默认值 60 秒"
+
+            if returncode == 0:
+                # 成功格式
+                output_section = stdout
+                if stderr and stderr.strip():
+                    output_section += "\n" + stderr
+                output_section = output_section.strip() if output_section else "(无输出)"
+
+                result = (
+                    f"【执行结果】命令执行成功\n"
+                    f"【退出码】exit_code: 0\n"
+                    f"【输出内容】{output_section}"
+                    f"{timeout_note}\n\n"
+                    f"✓ 操作成功。如果任务已完成，请调用 finish 结束。"
+                )
+            else:
+                # 失败格式
+                stdout_section = stdout if stdout and stdout.strip() else "(无)"
+                stderr_section = stderr if stderr and stderr.strip() else "(无)"
+
+                # 根据错误内容添加针对性建议
+                error_suggestions = _get_error_suggestions(stderr, stdout)
+
+                result = (
+                    f"【执行结果】命令执行失败\n"
+                    f"【退出码】exit_code: {returncode}\n"
+                    f"【标准输出】{stdout_section}\n"
+                    f"【错误输出】{stderr_section}"
+                    f"{error_suggestions}"
+                    f"{timeout_note}\n\n"
+                    f"【重试引导】请分析上述错误信息，检查参数（路径、命令拼写、权限等）是否正确，修正后重新调用 run_command 重试。连续失败时请调用 load_skill_memory 获取相关经验。"
+                )
+
+            return _truncate_run_output(result)
+
+        except Exception as e:
+            return f"错误: 命令执行异常: {e}"
 
     if name == "read_memory":
         if ctx.memory is None:
