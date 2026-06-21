@@ -11,6 +11,7 @@ from ui.styles import StyleManager
 from ui.views.floating_chat_window import FloatingChatWindow
 from logger import get_logger
 from recorder import get_recorder, AudioTranscribeWorker
+import config
 
 if TYPE_CHECKING:
     pass
@@ -80,11 +81,17 @@ class FloatingBall(QWidget):
         self._transcribe_worker: Optional[AudioTranscribeWorker] = None
         self._current_audio_path: Optional[Path] = None
         
+        # Live2D 相关
+        self._mode = "live2d" if config.LIVE2D_ENABLED else "button"
+        self._live2d_widget = None
+        self._live2d_model_path: Optional[Path] = None
+        
         self._logger.info("FloatingBall: 开始初始化")
         self._init_ui()
         self._init_style()
         self._init_position()
         self._init_chat_window()
+        self._init_live2d()
         # 所有初始化完成后最后隐藏，确保不会被任何操作触发显示
         self._logger.info("FloatingBall: 初始化完成，调用 hide()")
         self.hide()
@@ -98,26 +105,33 @@ class FloatingBall(QWidget):
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(30, 30)
+        
+        # 根据模式设置尺寸
+        if self._mode == "live2d":
+            self.setFixedSize(config.LIVE2D_BALL_WIDTH, config.LIVE2D_BALL_HEIGHT)
+        else:
+            self.setFixedSize(30, 30)
 
-        # 创建按钮
+        # 创建按钮（仅在 button 模式下显示）
         self.button = FloatingBallButton(self)
         self.button.setFixedSize(30, 30)
         self.button.setObjectName("floatingBallButton")
         self.button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.button.setVisible(self._mode == "button")
 
         # 不设置任何文本或图标，保持纯色
 
         # 创建右键菜单
         self._init_context_menu()
 
-        # 连接信号
-        self.button.clicked.connect(self._on_button_clicked)
+        # 连接信号（仅 button 模式）
+        if self._mode == "button":
+            self.button.clicked.connect(self._on_button_clicked)
 
     def _init_style(self):
         """初始化样式"""
         style = StyleManager.get_style("floating_ball_stylesheet")
-        if style:
+        if style and self._mode == "button":
             self.setStyleSheet(style)
 
     def _init_position(self):
@@ -158,8 +172,150 @@ class FloatingBall(QWidget):
         quit_action.triggered.connect(self.quit_application.emit)
         self.menu.addAction(quit_action)
 
+    def _init_live2d(self):
+        """初始化 Live2D 相关（启用时自动加载模型）"""
+        if self._mode != "live2d":
+            return
+        
+        # 确定模型路径
+        self._live2d_model_path = self._resolve_live2d_model_path()
+        
+        if self._live2d_model_path is None:
+            self._logger.warning("未找到可用的 Live2D 模型，回退到按钮模式")
+            self._fallback_to_button_mode()
+            return
+        
+        # 创建 Live2D 控件
+        try:
+            from ui.live2d_widget import Live2DWidget
+            self._live2d_widget = Live2DWidget(self)
+            self._live2d_widget.setGeometry(0, 0, self.width(), self.height())
+            self._live2d_widget.clicked.connect(self._on_live2d_clicked)
+            
+            # 自动加载模型
+            self._live2d_widget.load_model(self._live2d_model_path)
+            self._logger.info(f"Live2D 控件已创建，自动加载模型: {self._live2d_model_path}")
+        except Exception as e:
+            self._logger.error(f"创建 Live2D 控件失败: {e}")
+            self._fallback_to_button_mode()
+
+    def _resolve_live2d_model_path(self) -> Optional[Path]:
+        """解析 Live2D 模型路径"""
+        from ui.live2d_model_manager import scan_models, get_default_model_dir
+        
+        # 如果配置了具体模型名称，查找对应模型
+        if config.LIVE2D_MODEL_NAME:
+            models = scan_models()
+            for model_info in models:
+                if model_info.name == config.LIVE2D_MODEL_NAME or model_info.model_dir.name == config.LIVE2D_MODEL_NAME:
+                    self._logger.info(f"找到配置的 Live2D 模型: {model_info.name}")
+                    return model_info.model_json
+            
+            self._logger.warning(f"未找到指定的 Live2D 模型: {config.LIVE2D_MODEL_NAME}")
+        
+        # 使用默认模型
+        default_dir = get_default_model_dir()
+        if default_dir:
+            from ui.live2d_model_manager import get_model_info
+            info = get_model_info(default_dir)
+            if info:
+                self._logger.info(f"使用默认 Live2D 模型: {info.name}")
+                return info.model_json
+        
+        return None
+
+    def load_live2d_model(self) -> bool:
+        """手动加载 Live2D 模型
+        
+        Returns:
+            bool: 加载成功返回 True，失败返回 False
+        """
+        if self._live2d_widget is None or self._live2d_model_path is None:
+            return False
+        
+        try:
+            self._live2d_widget.load_model(self._live2d_model_path)
+            return True
+        except Exception as e:
+            self._logger.error(f"手动加载 Live2D 模型失败: {e}")
+            return False
+
+    def switch_to_live2d_mode(self) -> bool:
+        """运行时切换到 Live2D 模式
+        
+        Returns:
+            bool: 切换成功返回 True，失败返回 False
+        """
+        if self._mode == "live2d":
+            return True
+        
+        # 先重新解析配置
+        import importlib
+        importlib.reload(config)
+        
+        if not config.LIVE2D_ENABLED:
+            self._logger.warning("Live2D 未启用")
+            return False
+        
+        self._mode = "live2d"
+        self._live2d_model_path = self._resolve_live2d_model_path()
+        
+        if self._live2d_model_path is None:
+            self._logger.warning("未找到可用的 Live2D 模型，无法切换")
+            return False
+        
+        # 隐藏按钮
+        self.button.setVisible(False)
+        
+        # 设置新尺寸
+        self.setFixedSize(config.LIVE2D_BALL_WIDTH, config.LIVE2D_BALL_HEIGHT)
+        
+        # 创建 Live2D 控件
+        try:
+            from ui.live2d_widget import Live2DWidget
+            self._live2d_widget = Live2DWidget(self)
+            self._live2d_widget.setGeometry(0, 0, self.width(), self.height())
+            self._live2d_widget.clicked.connect(self._on_live2d_clicked)
+            
+            # 加载模型
+            self._live2d_widget.load_model(self._live2d_model_path)
+            
+            self._logger.info("成功切换到 Live2D 模式")
+            return True
+        except Exception as e:
+            self._logger.error(f"切换到 Live2D 模式失败: {e}")
+            self._fallback_to_button_mode()
+            return False
+
+    def switch_to_button_mode(self) -> None:
+        """运行时切换到按钮模式"""
+        if self._mode == "button":
+            return
+        
+        self._fallback_to_button_mode()
+        self._logger.info("成功切换到按钮模式")
+
+    def _fallback_to_button_mode(self):
+        """回退到按钮模式"""
+        self._mode = "button"
+        self.button.setVisible(True)
+        self.setFixedSize(30, 30)
+        self.button.clicked.connect(self._on_button_clicked)
+        
+        # 重新定位
+        self._init_position()
+        
+        # 应用样式
+        style = StyleManager.get_style("floating_ball_stylesheet")
+        if style:
+            self.setStyleSheet(style)
+
     def _on_button_clicked(self):
         """按钮点击事件 - 切换聊天窗口展开/收起"""
+        self._toggle_chat_window()
+    
+    def _on_live2d_clicked(self):
+        """Live2D 控件点击事件 - 切换聊天窗口展开/收起"""
         self._toggle_chat_window()
     
     def _toggle_recording(self):

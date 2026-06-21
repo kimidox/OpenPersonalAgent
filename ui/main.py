@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import threading
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QStyleFactory
 from PySide6.QtGui import QIcon
 
@@ -74,6 +75,8 @@ def _preload_tts_check():
 
 def main(background: bool = False) -> None:
     logger = get_logger()
+    # 设置使用桌面 OpenGL（live2d-py 需要）
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL)
     app = QApplication(sys.argv)
     fusion = QStyleFactory.create("Fusion")
     if fusion is not None:

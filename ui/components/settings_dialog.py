@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -1622,6 +1623,134 @@ class SettingsDialog(QDialog):
         self._tab_widget = tab_widget
         layout.addWidget(tab_widget)
 
+        # ===== Live2D 2D Live 引擎配置标签页 =====
+        live2d_tab = QWidget()
+        live2d_tab_layout = QVBoxLayout(live2d_tab)
+        live2d_tab_layout.setContentsMargins(8, 8, 8, 8)
+        live2d_tab_layout.setSpacing(12)
+        
+        live2d_title = QLabel("2D Live 悬浮球配置")
+        live2d_title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        live2d_tab_layout.addWidget(live2d_title)
+        
+        # 说明文字
+        live2d_info_label = QLabel(
+            "配置 Live2D 模型作为悬浮球的视觉表现形式。\n"
+            "模型文件应放置在 PersonalData/2DLiveFiles 目录下。\n"
+            "支持 Live2D Cubism 3/4 格式（.model3.json）。"
+        )
+        live2d_info_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        live2d_info_label.setWordWrap(True)
+        live2d_tab_layout.addWidget(live2d_info_label)
+        
+        # 启用开关
+        live2d_enable_group = QGroupBox("启用设置")
+        live2d_enable_layout = QVBoxLayout(live2d_enable_group)
+        
+        self._live2d_enable_check = QCheckBox("启用 Live2D 悬浮球模式（替代传统纯色按钮）")
+        self._live2d_enable_check.stateChanged.connect(self._on_live2d_enable_changed)
+        live2d_enable_layout.addWidget(self._live2d_enable_check)
+        
+        live2d_tab_layout.addWidget(live2d_enable_group)
+        
+        # 模型选择
+        live2d_model_group = QGroupBox("模型选择")
+        live2d_model_layout = QVBoxLayout(live2d_model_group)
+        
+        model_select_row = QHBoxLayout()
+        model_select_label = QLabel("选择模型：")
+        model_select_row.addWidget(model_select_label)
+        
+        self._live2d_model_combo = QComboBox()
+        self._live2d_model_combo.currentIndexChanged.connect(self._on_live2d_model_changed)
+        model_select_row.addWidget(self._live2d_model_combo)
+        model_select_row.addStretch()
+        live2d_model_layout.addLayout(model_select_row)
+        
+        # 刷新和加载按钮
+        btn_row = QHBoxLayout()
+        self._live2d_refresh_btn = QPushButton("刷新模型列表")
+        self._live2d_refresh_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._live2d_refresh_btn.clicked.connect(self._refresh_live2d_model_list)
+        btn_row.addWidget(self._live2d_refresh_btn)
+        
+        self._live2d_load_btn = QPushButton("加载模型")
+        self._live2d_load_btn.setObjectName("skillAgentSettingsAddConfigButton")
+        self._live2d_load_btn.clicked.connect(self._on_live2d_load_clicked)
+        btn_row.addWidget(self._live2d_load_btn)
+        
+        btn_row.addStretch()
+        live2d_model_layout.addLayout(btn_row)
+        
+        # 模型信息显示
+        self._live2d_model_info_label = QLabel()
+        self._live2d_model_info_label.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        self._live2d_model_info_label.setWordWrap(True)
+        live2d_model_layout.addWidget(self._live2d_model_info_label)
+        
+        live2d_tab_layout.addWidget(live2d_model_group)
+        
+        # 尺寸设置
+        live2d_size_group = QGroupBox("悬浮球尺寸")
+        live2d_size_layout = QVBoxLayout(live2d_size_group)
+        
+        width_row = QHBoxLayout()
+        width_label = QLabel("宽度（像素）：")
+        width_row.addWidget(width_label)
+        self._live2d_width_spin = QSpinBox()
+        self._live2d_width_spin.setMinimum(50)
+        self._live2d_width_spin.setMaximum(500)
+        self._live2d_width_spin.setValue(200)
+        self._live2d_width_spin.valueChanged.connect(self._on_live2d_size_changed)
+        width_row.addWidget(self._live2d_width_spin)
+        width_row.addStretch()
+        live2d_size_layout.addLayout(width_row)
+        
+        height_row = QHBoxLayout()
+        height_label = QLabel("高度（像素）：")
+        height_row.addWidget(height_label)
+        self._live2d_height_spin = QSpinBox()
+        self._live2d_height_spin.setMinimum(50)
+        self._live2d_height_spin.setMaximum(500)
+        self._live2d_height_spin.setValue(200)
+        self._live2d_height_spin.valueChanged.connect(self._on_live2d_size_changed)
+        height_row.addWidget(self._live2d_height_spin)
+        height_row.addStretch()
+        live2d_size_layout.addLayout(height_row)
+        
+        live2d_tab_layout.addWidget(live2d_size_group)
+        
+        # 模型目录说明
+        live2d_dir_group = QGroupBox("模型目录说明")
+        live2d_dir_layout = QVBoxLayout(live2d_dir_group)
+        
+        dir_info = QLabel(
+            "Live2D 模型应放置在 PersonalData/2DLiveFiles 目录下。\n"
+            "每个模型应放在独立的子目录中，目录结构如下：\n\n"
+            "PersonalData/2DLiveFiles/\n"
+            "├── model_name_1/\n"
+            "│   ├── model.model3.json\n"
+            "│   ├── model.moc3\n"
+            "│   ├── textures/\n"
+            "│   │   └── texture_00.png\n"
+            "│   └── motions/\n"
+            "│       └── idle.motion3.json\n"
+            "└── model_name_2/\n"
+            "    └── ...\n\n"
+            "支持的格式：Live2D Cubism 3/4（.model3.json）"
+        )
+        dir_info.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        dir_info.setWordWrap(True)
+        live2d_dir_layout.addWidget(dir_info)
+        
+        live2d_tab_layout.addWidget(live2d_dir_group)
+        
+        live2d_tab_layout.addStretch()
+        
+        tab_widget.addTab(live2d_tab, "2D Live 配置")
+        
+        self._live2d_tab = live2d_tab
+
     def _create_left_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -2206,6 +2335,7 @@ class SettingsDialog(QDialog):
         self._refresh_asr_model_status()
         self._refresh_tts_model_status()
         self._refresh_prompt_template_status()
+        self._refresh_live2d_settings()
         # 刷新用户Skill管理页面
         if hasattr(self, '_user_skill_page'):
             self._user_skill_page.refresh()
@@ -2735,3 +2865,166 @@ class SettingsDialog(QDialog):
         conv_type = self._prompt_type_combo.currentData()
         if conv_type:
             self._load_template_for_type(conv_type)
+
+    # ===== Live2D 2D Live 配置相关方法 =====
+
+    def _refresh_live2d_model_list(self) -> None:
+        """刷新 Live2D 模型列表"""
+        from ui.live2d_model_manager import scan_models
+        
+        self._live2d_model_combo.clear()
+        models = scan_models()
+        
+        if not models:
+            self._live2d_model_combo.addItem("未找到可用模型", "")
+            self._live2d_model_info_label.setText("提示：请将 Live2D 模型放置在 PersonalData/2DLiveFiles 目录下")
+            return
+        
+        current_model = getattr(config, 'LIVE2D_MODEL_NAME', '')
+        
+        for model_info in models:
+            self._live2d_model_combo.addItem(model_info.name, model_info.name)
+        
+        # 选中当前配置的模型
+        if current_model:
+            idx = self._live2d_model_combo.findData(current_model)
+            if idx >= 0:
+                self._live2d_model_combo.setCurrentIndex(idx)
+        
+        # 显示第一个模型的信息
+        self._update_live2d_model_info()
+
+    def _update_live2d_model_info(self) -> None:
+        """更新模型信息显示"""
+        from ui.live2d_model_manager import scan_models
+        
+        model_name = self._live2d_model_combo.currentData()
+        if not model_name:
+            self._live2d_model_info_label.setText("")
+            return
+        
+        models = scan_models()
+        for model_info in models:
+            if model_info.name == model_name:
+                motions = ", ".join(model_info.available_motions[:5])
+                if len(model_info.available_motions) > 5:
+                    motions += f" 等 {len(model_info.available_motions)} 个"
+                
+                physics_status = "已配置" if model_info.has_physics else "未配置"
+                
+                self._live2d_model_info_label.setText(
+                    f"模型名称：{model_info.name}\n"
+                    f"动作组：{motions}\n"
+                    f"物理引擎：{physics_status}\n"
+                    f"模型目录：{model_info.model_dir.name}"
+                )
+                return
+        
+        self._live2d_model_info_label.setText("未找到该模型信息")
+
+    def _on_live2d_enable_changed(self, state: int) -> None:
+        """Live2D 启用状态改变"""
+        enabled = state == Qt.CheckState.Checked.value
+        config.set_config("LIVE2D_ENABLED", str(enabled).lower())
+        config.LIVE2D_ENABLED = enabled
+        
+        # 更新 UI 状态
+        self._live2d_model_combo.setEnabled(enabled)
+        self._live2d_refresh_btn.setEnabled(enabled)
+        self._live2d_load_btn.setEnabled(enabled)
+        self._live2d_width_spin.setEnabled(enabled)
+        self._live2d_height_spin.setEnabled(enabled)
+
+    def _on_live2d_load_clicked(self) -> None:
+        """点击加载 Live2D 模型，运行时动态切换"""
+        enabled = self._live2d_enable_check.isChecked()
+        
+        if enabled:
+            self._apply_live2d_mode()
+        else:
+            self._apply_button_mode()
+
+    def _apply_live2d_mode(self) -> None:
+        """应用 Live2D 模式到悬浮球"""
+        if not self.parent():
+            return
+        
+        main_window = self.parent()
+        if not hasattr(main_window, '_floating_ball') or main_window._floating_ball is None:
+            QMessageBox.warning(self, "警告", "无法获取悬浮球组件")
+            return
+        
+        floating_ball = main_window._floating_ball
+        
+        # 重新读取配置
+        import importlib
+        importlib.reload(config)
+        
+        success = floating_ball.switch_to_live2d_mode()
+        if success:
+            # 手动加载模型
+            floating_ball.load_live2d_model()
+            model_name = self._live2d_model_combo.currentData() or "默认"
+            QMessageBox.information(self, "提示", f"Live2D 模式已启用\n模型: {model_name}")
+        else:
+            QMessageBox.warning(self, "警告", "切换到 Live2D 模式失败\n请检查模型是否存在")
+
+    def _apply_button_mode(self) -> None:
+        """应用按钮模式到悬浮球"""
+        if not self.parent():
+            return
+        
+        main_window = self.parent()
+        if not hasattr(main_window, '_floating_ball') or main_window._floating_ball is None:
+            return
+        
+        floating_ball = main_window._floating_ball
+        floating_ball.switch_to_button_mode()
+        
+        QMessageBox.information(self, "提示", "已切换回按钮模式")
+
+    def _on_live2d_model_changed(self, index: int) -> None:
+        """Live2D 模型选择改变"""
+        model_name = self._live2d_model_combo.currentData()
+        if model_name:
+            config.set_config("LIVE2D_MODEL_NAME", model_name)
+            config.LIVE2D_MODEL_NAME = model_name
+            self._update_live2d_model_info()
+
+    def _on_live2d_size_changed(self, value: int) -> None:
+        """Live2D 悬浮球尺寸改变"""
+        width = self._live2d_width_spin.value()
+        height = self._live2d_height_spin.value()
+        
+        config.set_config("LIVE2D_BALL_WIDTH", str(width))
+        config.set_config("LIVE2D_BALL_HEIGHT", str(height))
+        config.LIVE2D_BALL_WIDTH = width
+        config.LIVE2D_BALL_HEIGHT = height
+
+    def _refresh_live2d_settings(self) -> None:
+        """刷新 Live2D 设置界面"""
+        # 启用状态
+        enabled = getattr(config, 'LIVE2D_ENABLED', False)
+        self._live2d_enable_check.blockSignals(True)
+        self._live2d_enable_check.setChecked(enabled)
+        self._live2d_enable_check.blockSignals(False)
+        
+        # 更新 UI 状态
+        self._live2d_model_combo.setEnabled(enabled)
+        self._live2d_refresh_btn.setEnabled(enabled)
+        self._live2d_load_btn.setEnabled(enabled)
+        self._live2d_width_spin.setEnabled(enabled)
+        self._live2d_height_spin.setEnabled(enabled)
+        
+        # 模型列表
+        self._refresh_live2d_model_list()
+        
+        # 尺寸
+        width = getattr(config, 'LIVE2D_BALL_WIDTH', 200)
+        height = getattr(config, 'LIVE2D_BALL_HEIGHT', 200)
+        self._live2d_width_spin.blockSignals(True)
+        self._live2d_height_spin.blockSignals(True)
+        self._live2d_width_spin.setValue(width)
+        self._live2d_height_spin.setValue(height)
+        self._live2d_width_spin.blockSignals(False)
+        self._live2d_height_spin.blockSignals(False)

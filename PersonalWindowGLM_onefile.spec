@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import glob
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
@@ -10,10 +11,30 @@ block_cipher = None
 upx_enable = False
 upx_dir = None  # 如果UPX不在PATH中，可以指定UPX目录路径，例如: r'C:\upx'
 
+# ===== 收集 onnxruntime 的 CUDA provider DLL =====
+# onnxruntime-gpu 的 CUDA provider DLL（如 onnxruntime_providers_cuda.dll）
+# 位于 onnxruntime/capi/ 目录下，PyInstaller 默认不会收集这些 DLL
+onnxruntime_binaries = []
+try:
+    import onnxruntime
+    onnxruntime_dir = os.path.dirname(onnxruntime.__file__)
+    capi_dir = os.path.join(onnxruntime_dir, 'capi')
+    if os.path.exists(capi_dir):
+        # 收集 capi 目录下的所有 DLL
+        dll_files = glob.glob(os.path.join(capi_dir, '*.dll'))
+        for dll_path in dll_files:
+            dll_name = os.path.basename(dll_path)
+            onnxruntime_binaries.append((dll_path, 'onnxruntime/capi'))
+            print(f"[Packaging] 收集 onnxruntime DLL: {dll_name}")
+except ImportError:
+    print("[Packaging] 警告: onnxruntime 未安装，跳过 DLL 收集")
+except Exception as e:
+    print(f"[Packaging] 警告: 收集 onnxruntime DLL 失败: {e}")
+
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=onnxruntime_binaries,
     datas=[
         ('ui/styles/ui_skill_agent_styles.css', 'ui/styles'),
         ('application.ico', '.'),
@@ -37,6 +58,7 @@ a = Analysis(
         'scheduler',
         'notification',
         'autostart',
+        'automation',
         'prompt',
         'document_parser',
         'base_tool',
@@ -82,6 +104,10 @@ a = Analysis(
         'sounddevice',
         'numpy',
         'faster-whisper',
+        'onnxruntime',
+        'comtypes',
+        'uiautomation',
+        'scipy'
     ],
     hookspath=[],
     hooksconfig={},
@@ -137,7 +163,7 @@ a = Analysis(
         'flake8',
         'autopep8',
         'yapf',
-        'black',
+        'black'
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

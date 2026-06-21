@@ -380,3 +380,31 @@ OMNIPARSER_ENABLED = _env_bool(_omniparser_enabled, False)
 # OmniParser 模型路径
 _omniparser_path = get_config("OMNIPARSER_MODEL_PATH")
 OMNIPARSER_MODEL_PATH = _omniparser_path if _omniparser_path not in (None, "") else ""
+
+# ===== Live2D 悬浮球配置 =====
+
+# 是否启用 Live2D 悬浮球模式
+_live2d_enabled = get_config("LIVE2D_ENABLED")
+LIVE2D_ENABLED = _env_bool(_live2d_enabled, False)
+
+# Live2D 模型名称（对应 PersonalData/2DLiveFiles 下的模型目录名）
+_live2d_model = get_config("LIVE2D_MODEL_NAME")
+LIVE2D_MODEL_NAME = _live2d_model if _live2d_model not in (None, "") else ""
+
+# Live2D 悬浮球宽度（像素）
+_live2d_width = get_config("LIVE2D_BALL_WIDTH")
+try:
+    LIVE2D_BALL_WIDTH = int(_live2d_width) if _live2d_width not in (None, "") else 200
+except (TypeError, ValueError):
+    LIVE2D_BALL_WIDTH = 200
+if LIVE2D_BALL_WIDTH < 50:
+    LIVE2D_BALL_WIDTH = 200
+
+# Live2D 悬浮球高度（像素）
+_live2d_height = get_config("LIVE2D_BALL_HEIGHT")
+try:
+    LIVE2D_BALL_HEIGHT = int(_live2d_height) if _live2d_height not in (None, "") else 200
+except (TypeError, ValueError):
+    LIVE2D_BALL_HEIGHT = 200
+if LIVE2D_BALL_HEIGHT < 50:
+    LIVE2D_BALL_HEIGHT = 200

@@ -38,3 +38,7 @@ onnxruntime-gpu==1.19.0  # 支持 CUDA 12.x
 # UI Automation (Windows桌面自动化)
 uiautomation>=2.0.0
 comtypes>=1.4.0
+
+# Live2D 渲染
+live2d-py>=0.7.0
+PyOpenGL>=3.1.0
