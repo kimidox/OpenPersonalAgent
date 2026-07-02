@@ -9,6 +9,7 @@ from memory.migration import run_migration, is_migration_completed
 from memory.reindex_fts import reindex_all_memory_segments
 from ui import main as main_desktop_agent
 from ui_skill_agent import main as main_skill_agent
+from recorder import ensure_model_dirs, migrate_models_to_separate_dirs
 
 
 FTS_REINDEX_FLAG = Path("PersonalData/.fts_reindexed")
@@ -50,6 +51,14 @@ def main() -> None:
     except Exception as e:
         logger.exception(f"数据库初始化失败: {e}")
         raise
+    
+    # 初始化模型目录结构并迁移模型
+    try:
+        ensure_model_dirs()
+        migrate_models_to_separate_dirs()
+        logger.info("模型目录初始化和迁移完成")
+    except Exception as e:
+        logger.exception(f"模型目录初始化失败: {e}")
     
     if not is_migration_completed():
         try:

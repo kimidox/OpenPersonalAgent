@@ -1,8 +1,12 @@
 import os
+from typing import Optional, List, Dict, Any
 
 import dotenv
 
 from resource_path import paths
+from logger import get_module_logger
+
+logger = get_module_logger("config")
 
 
 env_file='.env'
@@ -72,6 +76,9 @@ def _env_bool(raw, default: bool) -> bool:
     if raw is None or str(raw).strip() == "":
         return default
     s = str(raw).strip().lower()
+    # 去除值两端的引号（处理 'true' 或 "true" 等情况）
+    if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
+        s = s[1:-1].strip().lower()
     if s in ("0", "false", "no", "off"):
         return False
     if s in ("1", "true", "yes", "on"):
@@ -284,42 +291,28 @@ RECORDING_DTYPE = 'int16'
 _stl = get_config("RECORDING_TRANSCRIPTION_LANGUAGE")
 RECORDING_TRANSCRIPTION_LANGUAGE = _stl if _stl not in (None, "") else "zh"
 
-# ===== ASR 语音识别模型配置 =====
+# ===== ASR 实时识别配置 =====
 
-# ONNX 模型目录路径
-_asr_onnx = get_config("ASR_ONNX_MODEL_PATH")
-ASR_ONNX_MODEL_PATH = _asr_onnx if _asr_onnx not in (None, "") else ""
+# 是否启用实时语音识别（默认 True）
+_asr_realtime_enabled = get_config("ASR_REALTIME_ENABLED")
+ASR_REALTIME_ENABLED = _env_bool(_asr_realtime_enabled, True)
 
-# 程序启动自动加载 ASR 模型
-_asr_auto_load = get_config("ASR_AUTO_LOAD")
-ASR_AUTO_LOAD = _asr_auto_load.lower() in ("true", "1", "yes") if _asr_auto_load not in (None, "") else False
+# 实时识别模型路径（默认为空，使用默认模型）
+_asr_realtime_model = get_config("ASR_REALTIME_MODEL_PATH")
+ASR_REALTIME_MODEL_PATH = _asr_realtime_model if _asr_realtime_model not in (None, "") else ""
 
-# 模型不存在时是否自动下载（默认 True）
-_asr_auto_download = get_config("ASR_AUTO_DOWNLOAD")
-ASR_AUTO_DOWNLOAD = _env_bool(_asr_auto_download, True)
-
-# 最大音频处理时长（秒），默认 3600（1小时）
-_asr_max_duration = get_config("ASR_MAX_AUDIO_DURATION")
+# 实时识别结果更新间隔（毫秒），默认 200ms
+_asr_realtime_interval = get_config("ASR_REALTIME_UPDATE_INTERVAL")
 try:
-    ASR_MAX_AUDIO_DURATION = int(_asr_max_duration) if _asr_max_duration not in (None, "") else 3600
+    ASR_REALTIME_UPDATE_INTERVAL = int(_asr_realtime_interval) if _asr_realtime_interval not in (None, "") else 200
 except (TypeError, ValueError):
-    ASR_MAX_AUDIO_DURATION = 3600
-if ASR_MAX_AUDIO_DURATION < 1:
-    ASR_MAX_AUDIO_DURATION = 3600
+    ASR_REALTIME_UPDATE_INTERVAL = 200
+if ASR_REALTIME_UPDATE_INTERVAL < 50:
+    ASR_REALTIME_UPDATE_INTERVAL = 200
 
-# 是否显示时长警告提示（默认 True）
-_asr_show_warning = get_config("ASR_SHOW_DURATION_WARNING")
-ASR_SHOW_DURATION_WARNING = _env_bool(_asr_show_warning, True)
-
-# GPU 处理的最大音频时长（秒），超过此时长强制使用 CPU，默认 300 秒（5分钟）
-# 原因：长音频一次性加载到 GPU 可能导致显存溢出和系统崩溃
-_asr_gpu_max_duration = get_config("ASR_GPU_MAX_DURATION")
-try:
-    ASR_GPU_MAX_DURATION = int(_asr_gpu_max_duration) if _asr_gpu_max_duration not in (None, "") else 300
-except (TypeError, ValueError):
-    ASR_GPU_MAX_DURATION = 300
-if ASR_GPU_MAX_DURATION < 1:
-    ASR_GPU_MAX_DURATION = 300
+# 是否程序启动自动加载流式模型（默认 False）
+_asr_realtime_auto_load = get_config("ASR_REALTIME_AUTO_LOAD")
+ASR_REALTIME_AUTO_LOAD = _env_bool(_asr_realtime_auto_load, False)
 
 # ===== 文件上传配置 =====
 
@@ -408,3 +401,102 @@ except (TypeError, ValueError):
     LIVE2D_BALL_HEIGHT = 200
 if LIVE2D_BALL_HEIGHT < 50:
     LIVE2D_BALL_HEIGHT = 200
+
+# ===== 音频输入设备配置 =====
+
+def get_audio_input_device() -> Optional[int]:
+    """
+    获取音频输入设备ID
+    
+    从配置文件读取 AUDIO_INPUT_DEVICE 配置项，返回设备ID。
+    
+    Returns:
+        设备ID（int），如果未配置或配置无效则返回 None（使用系统默认设备）
+    """
+    _device_id = get_config("AUDIO_INPUT_DEVICE")
+    
+    if _device_id is None or str(_device_id).strip() == "":
+        logger.debug("音频输入设备未配置，将使用系统默认设备")
+        return None
+    
+    try:
+        device_id = int(_device_id)
+        logger.info(f"读取音频输入设备配置: ID={device_id}")
+        return device_id
+    except (TypeError, ValueError):
+        logger.warning(f"音频输入设备配置无效: '{_device_id}'，将使用系统默认设备")
+        return None
+
+
+def set_audio_input_device(device_id: Optional[int]) -> bool:
+    """
+    设置音频输入设备ID
+    
+    将设备ID保存到配置文件。如果 device_id 为 None，则清除配置项。
+    
+    Args:
+        device_id: 设备ID（int），如果为 None 则清除配置
+        
+    Returns:
+        是否设置成功
+    """
+    if device_id is None:
+        # 清除配置项（设置为空字符串）
+        logger.info("清除音频输入设备配置，将使用系统默认设备")
+        # 注意：dotenv 不支持删除键，设置为空字符串表示未配置
+        return set_config("AUDIO_INPUT_DEVICE", "")
+    else:
+        logger.info(f"设置音频输入设备: ID={device_id}")
+        return set_config("AUDIO_INPUT_DEVICE", str(device_id))
+
+
+def get_audio_devices() -> List[Dict[str, Any]]:
+    """
+    获取系统可用的音频输入设备列表
+    
+    使用 sounddevice.query_devices() 获取所有设备，
+    过滤出输入设备（max_input_channels > 0）。
+    
+    Returns:
+        设备列表，每个设备包含：
+        - id: 设备ID（int）
+        - name: 设备名称（str）
+        - max_input_channels: 最大输入声道数（int）
+        - default_samplerate: 默认采样率（float）
+        
+        如果 sounddevice 不可用或获取失败，返回空列表
+    """
+    try:
+        import sounddevice as sd
+        logger.debug("开始获取音频输入设备列表...")
+        
+        devices = sd.query_devices()
+        input_devices = []
+        
+        # devices 可能是列表或单个设备字典
+        if isinstance(devices, dict):
+            # 单设备情况，包装成列表
+            devices = [devices]
+        
+        for idx, device in enumerate(devices):
+            # 过滤出输入设备（max_input_channels > 0）
+            max_input_channels = device.get('max_input_channels', 0)
+            if max_input_channels > 0:
+                device_info = {
+                    'id': idx,
+                    'name': device.get('name', 'Unknown'),
+                    'max_input_channels': max_input_channels,
+                    'default_samplerate': device.get('default_samplerate', 0.0),
+                }
+                input_devices.append(device_info)
+                logger.debug(f"发现输入设备: ID={idx}, 名称='{device_info['name']}', 声道数={max_input_channels}")
+        
+        logger.info(f"获取到 {len(input_devices)} 个音频输入设备")
+        return input_devices
+        
+    except ImportError:
+        logger.warning("sounddevice 库未安装，无法获取音频设备列表")
+        return []
+    except Exception as e:
+        logger.error(f"获取音频设备列表时发生错误: {e}")
+        return []

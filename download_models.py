@@ -2,12 +2,10 @@
 """
 模型下载脚本
 
-用于手动下载 ASR（语音识别）和 TTS（文本转语音）模型。
+用于手动下载 TTS（文本转语音）模型。
 
 使用方法：
-    python download_models.py                  # 下载所有模型
-    python download_models.py --asr            # 仅下载 ASR 模型
-    python download_models.py --tts            # 仅下载 TTS 模型（默认中文）
+    python download_models.py --tts            # 下载 TTS 模型（默认中文）
     python download_models.py --tts zh         # 下载中文 TTS 模型
     python download_models.py --tts zh_en      # 下载中英文 TTS 模型
     python download_models.py --list           # 列出可用的模型
@@ -26,15 +24,6 @@ from typing import Optional, Dict, Any
 
 # 模型配置
 MODEL_CONFIGS = {
-    "asr": {
-        "name": "ASR 语音识别模型",
-        "model_id": "sherpa-onnx-paraformer-zh-int8",
-        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-int8-2025-10-07.tar.bz2",
-        "model_name": "sherpa-onnx-paraformer-zh-int8-2025-10-07",
-        "description": "Paraformer 中文语音识别模型（INT8量化版本）",
-        "size_mb": 80,
-        "required_files": ["model.int8.onnx", "tokens.txt"],
-    },
     "tts_zh": {
         "name": "TTS 中文模型",
         "model_id": "sherpa-onnx-vits-zh-ll",
@@ -253,24 +242,16 @@ def print_model_status(model_dir: Path):
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description="模型下载脚本 - 用于手动下载 ASR 和 TTS 模型",
+        description="模型下载脚本 - 用于手动下载 TTS 模型",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python download_models.py                  # 下载所有模型
-  python download_models.py --asr            # 仅下载 ASR 模型
-  python download_models.py --tts            # 仅下载 TTS 模型（默认中文）
+  python download_models.py --tts            # 下载 TTS 模型（默认中文）
   python download_models.py --tts zh         # 下载中文 TTS 模型
   python download_models.py --tts zh_en      # 下载中英文 TTS 模型
   python download_models.py --list           # 列出可用的模型
   python download_models.py --check          # 检查已下载的模型
         """
-    )
-    
-    parser.add_argument(
-        "--asr",
-        action="store_true",
-        help="下载 ASR 语音识别模型"
     )
     
     parser.add_argument(
@@ -284,7 +265,7 @@ def main():
     parser.add_argument(
         "--all",
         action="store_true",
-        help="下载所有模型（ASR + 中文TTS + 中英文TTS）"
+        help="下载所有模型（中文TTS + 中英文TTS）"
     )
     
     parser.add_argument(
@@ -325,19 +306,17 @@ def main():
     models_to_download = []
     
     if args.all:
-        models_to_download = ["asr", "tts_zh", "tts_zh_en"]
-    elif args.asr:
-        models_to_download.append("asr")
+        models_to_download = ["tts_zh", "tts_zh_en"]
     elif args.tts:
         if args.tts == "zh":
             models_to_download.append("tts_zh")
         elif args.tts == "zh_en":
             models_to_download.append("tts_zh_en")
     
-    # 如果没有指定任何模型，下载所有（ASR + 默认中文TTS）
+    # 如果没有指定任何模型，下载默认中文TTS
     if not models_to_download:
-        print("未指定具体模型，将下载默认模型（ASR + 中文TTS）")
-        models_to_download = ["asr", "tts_zh"]
+        print("未指定具体模型，将下载默认模型（中文TTS）")
+        models_to_download = ["tts_zh"]
     
     print(f"\n将下载以下模型: {', '.join(models_to_download)}")
     

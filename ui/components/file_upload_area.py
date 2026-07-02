@@ -121,7 +121,6 @@ class FileUploadArea(QWidget):
         self._controller.file_parse_started.connect(self._on_parse_started)
         self._controller.file_parse_finished.connect(self._on_parse_finished)
         self._controller.file_parse_error.connect(self._on_parse_error)
-        self._controller.file_parse_progress.connect(self._on_parse_progress)
         self._controller.upload_error.connect(self._show_upload_error)
 
     def create_upload_button(self) -> QToolButton:
@@ -233,12 +232,6 @@ class FileUploadArea(QWidget):
     def _on_parse_started(self, file_id: str) -> None:
         self._update_progress_display()
         self._progress_container.setVisible(True)
-
-    def _on_parse_progress(self, file_id: str, progress: int, status: str) -> None:
-        file_info = self._controller.get_file(file_id)
-        if file_info:
-            self._file_list.update_file(file_info)
-        self._update_progress_display()
 
     def _on_parse_finished(self, file_id: str, result) -> None:
         file_info = self._controller.get_file(file_id)

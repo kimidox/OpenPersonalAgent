@@ -33,7 +33,7 @@ numpy>=1.20.0
 scipy>=1.9.0
 
 # ASR/TTS
-onnxruntime-gpu==1.19.0  # 支持 CUDA 12.x
+onnxruntime-gpu==1.17.1  # 支持 CUDA 12.x
 
 # UI Automation (Windows桌面自动化)
 uiautomation>=2.0.0
@@ -42,3 +42,6 @@ comtypes>=1.4.0
 # Live2D 渲染
 live2d-py>=0.7.0
 PyOpenGL>=3.1.0
+
+# sherpa-onnx[cuda] --extra-index-url https://k2-fsa.github.io/sherpa-onnx/
+sherpa-onnx==1.10.15

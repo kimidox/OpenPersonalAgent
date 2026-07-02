@@ -116,23 +116,6 @@ class SkillAgentMainWindow(QMainWindow):
             "语音模型未加载，请先在设置页面点击「加载模型」按钮加载模型，然后再使用录音功能。"
         )
     
-    def _on_asr_model_not_loaded(self, filename: str):
-        """处理 ASR 模型未加载的信号，显示提示对话框"""
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("提示")
-        msg_box.setText(f"语音识别模型未加载，无法处理音频文件 '{filename}'。\n请先在设置页面点击「加载模型」按钮加载模型后再上传音频文件。")
-        msg_box.setIcon(QMessageBox.Icon.Warning)
-        
-        # 添加"打开设置"按钮
-        open_settings_btn = msg_box.addButton("打开设置", QMessageBox.ButtonRole.AcceptRole)
-        msg_box.addButton(QMessageBox.StandardButton.Close)
-        
-        msg_box.exec()
-        
-        # 如果用户点击了"打开设置"按钮，打开设置页面
-        if msg_box.clickedButton() == open_settings_btn:
-            self._open_settings()
-    
     def _on_floating_ball_send_message(self, text: str):
         """处理来自悬浮球的消息发送请求"""
         if self._floating_ball:
@@ -237,7 +220,7 @@ class SkillAgentMainWindow(QMainWindow):
     
     def _toggle_tray_recording(self) -> None:
         """切换托盘录音状态"""
-        from recorder import is_onnx_model_loaded
+        from recorder import is_online_model_loaded
         recorder = get_recorder()
         
         if recorder.is_recording:
@@ -245,124 +228,67 @@ class SkillAgentMainWindow(QMainWindow):
             self._tray_recording_action.setText("录音模式")
             
             if audio_path:
-                self._process_recording_for_conversation(audio_path)
+                # 实时识别失败，使用离线转录作为降级方案
+                self._transcribe_recording_offline(audio_path)
         else:
-            # 在开始录音前先检查模型是否已加载
-            if not is_onnx_model_loaded():
+            # 在开始录音前先检查流式模型是否已加载
+            if not is_online_model_loaded():
                 QMessageBox.warning(
                     self, 
                     "提示", 
                     "语音模型未加载，请先在设置页面点击「加载模型」按钮加载模型，然后再使用录音功能。"
                 )
                 return
-            success = recorder.start_recording()
+            success = recorder.start_recording(realtime_callback=self._on_tray_realtime_result)
             if success:
                 self._tray_recording_action.setText("停止录音")
-
+    
+    def _on_tray_realtime_result(self, text: str, is_final: bool):
+        """托盘录音实时识别结果回调"""
+        from PySide6.QtCore import QTimer
+        if is_final and text:
+            # 最终结果，在主线程中创建会话并发送
+            QTimer.singleShot(0, lambda: self._create_conversation_and_send(text))
+    
     def _process_recording_for_conversation(self, audio_path: Path, text: str = "") -> None:
-        """处理录音文件：转文本、创建会话并发送消息
+        """处理录音结果：创建会话并发送消息
         
-        使用异步转录方式，避免阻塞 UI 线程
+        由悬浮球的 create_recording_conversation 信号调用
+        audio_path 为 None 表示实时识别成功，text 包含识别结果
+        audio_path 不为 None 表示实时识别失败，需要离线转录
         """
-        self._logger.info(f"_process_recording_for_conversation 被调用: audio_path={audio_path}, text={text}")
+        self._logger.info(f"_process_recording_for_conversation: audio_path={audio_path}, text='{text}'")
         
-        # 如果已有转录任务在进行，提示用户
-        if self._transcribe_worker is not None and self._transcribe_worker.isRunning():
-            QMessageBox.warning(self, "提示", "已有转录任务在进行中，请等待完成或取消后再试。")
-            return
-        
-        # 防止重复处理同一个录音文件
-        audio_path_str = str(audio_path)
-        if self._last_processed_recording == audio_path_str:
-            self._logger.warning(f"检测到重复处理录音文件: {audio_path_str}，跳过")
-            return
-        self._last_processed_recording = audio_path_str
-        
-        from recorder import is_onnx_model_loaded
-        recorder = get_recorder()
-        
-        # 如果已有文本，直接处理
+        # 如果已有文本（实时识别成功），直接创建会话
         if text:
-            self._logger.info(f"text 已提供: {text}")
             self._create_conversation_and_send(text)
             return
         
-        # 检查模型是否已加载
+        # 实时识别失败，使用离线转录降级
+        if audio_path:
+            self._transcribe_recording_offline(audio_path)
+    
+    def _transcribe_recording_offline(self, audio_path: Path):
+        """使用离线模型转录作为降级方案"""
+        from recorder import is_onnx_model_loaded, transcribe_audio_with_onnx
+        
         if not is_onnx_model_loaded():
             QMessageBox.warning(
                 self, 
-                "提示", 
-                "语音模型未加载，请先在设置页面点击「加载模型」按钮加载模型，然后再使用录音功能。"
+                "转录失败", 
+                f"实时识别失败，离线模型也未加载。\n音频文件已保存到: {audio_path}"
             )
             return
         
-        # 检查音频时长是否超过限制
-        duration = recorder.get_audio_duration(audio_path)
-        max_duration = getattr(config, 'ASR_MAX_AUDIO_DURATION', 3600)
-        show_warning = getattr(config, 'ASR_SHOW_DURATION_WARNING', True)
-        
-        if duration is not None and duration > max_duration:
-            error_msg = f"音频时长 ({duration:.1f}秒) 超过限制 ({max_duration}秒)"
-            self._logger.warning(error_msg)
-            QMessageBox.warning(self, "音频时长超限", error_msg)
-            return
-        
-        # 如果时长较长，显示警告提示
-        if duration is not None and duration > 60 and show_warning:
-            warning_result = QMessageBox.question(
-                self,
-                "音频时长提示",
-                f"音频时长为 {duration:.1f} 秒，转录可能需要较长时间。\n\n是否继续转录？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes
+        result = transcribe_audio_with_onnx(audio_path)
+        if result:
+            self._create_conversation_and_send(result)
+        else:
+            QMessageBox.warning(
+                self, 
+                "转录失败", 
+                f"转录失败，无法获取识别结果。\n音频文件已保存到: {audio_path}"
             )
-            if warning_result != QMessageBox.StandardButton.Yes:
-                self._logger.info("用户取消长音频转录")
-                return
-        
-        # 创建进度对话框
-        self._transcribe_progress_dialog = QProgressDialog("正在转录音频...", "取消", 0, 100, self)
-        self._transcribe_progress_dialog.setWindowTitle("语音转录")
-        self._transcribe_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        self._transcribe_progress_dialog.setMinimumDuration(0)
-        self._transcribe_progress_dialog.setValue(0)
-        self._transcribe_progress_dialog.canceled.connect(self._on_transcribe_cancelled)
-        
-        # 定义转录完成回调
-        def on_transcribe_finished(path: str, transcribed_text: str):
-            self._logger.info(f"转录完成: path={path}, text={transcribed_text}")
-            self._cleanup_transcribe_dialog()
-            
-            if not transcribed_text or not transcribed_text.strip():
-                QMessageBox.warning(self, "转录失败", "转录结果为空，请重试。")
-                return
-            
-            self._create_conversation_and_send(transcribed_text.strip())
-        
-        # 定义转录失败回调
-        def on_transcribe_error(path: str, error: str):
-            self._logger.error(f"转录失败: path={path}, error={error}")
-            self._cleanup_transcribe_dialog()
-            QMessageBox.warning(self, "转录失败", f"语音转录失败：{error}")
-        
-        # 定义转录进度回调
-        def on_transcribe_progress(progress: int, status: str):
-            if self._transcribe_progress_dialog:
-                self._transcribe_progress_dialog.setValue(progress)
-                self._transcribe_progress_dialog.setLabelText(status)
-        
-        # 启动异步转录
-        self._transcribe_worker = recorder.transcribe_audio_async(
-            audio_path,
-            callback=lambda path, text, error: (
-                on_transcribe_finished(path, text) if error is None else on_transcribe_error(path, error)
-            ),
-            progress_callback=on_transcribe_progress
-        )
-        
-        if self._transcribe_worker is None:
-            self._cleanup_transcribe_dialog()
-            QMessageBox.warning(self, "转录失败", "无法启动转录任务，请重试。")
     
     def _cleanup_transcribe_dialog(self):
         """清理转录进度对话框"""
@@ -370,15 +296,6 @@ class SkillAgentMainWindow(QMainWindow):
             self._transcribe_progress_dialog.close()
             self._transcribe_progress_dialog.deleteLater()
             self._transcribe_progress_dialog = None
-    
-    def _on_transcribe_cancelled(self):
-        """处理转录取消"""
-        self._logger.info("用户取消转录")
-        if self._transcribe_worker and self._transcribe_worker.isRunning():
-            self._transcribe_worker.requestInterruption()
-            self._transcribe_worker.wait(2000)
-        self._transcribe_worker = None
-        self._cleanup_transcribe_dialog()
     
     def _create_conversation_and_send(self, text: str) -> None:
         """创建新会话并发送消息"""
@@ -549,8 +466,6 @@ class SkillAgentMainWindow(QMainWindow):
         self.sidebar.conversation_export_requested.connect(self._on_conversation_export_requested)
         self.sidebar.conversation_rename_requested.connect(self._on_conversation_rename_requested)
         self.sidebar.settings_requested.connect(self._open_settings)
-        # 连接文件上传控制器信号
-        self.file_upload_controller.asr_model_not_loaded.connect(self._on_asr_model_not_loaded)
 
     def _populate_initial_conversations(self) -> None:
         all_sessions = [c for c in self.skill_agent.list_saved_conversations() if (c.conversation_id or "").strip()]

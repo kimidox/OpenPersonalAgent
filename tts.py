@@ -48,6 +48,52 @@ def get_default_tts_model_dir() -> Path:
     return model_dir
 
 
+def get_tts_model_dir() -> Path:
+    """
+    获取 TTS 模型默认目录路径
+    
+    Returns:
+        TTS 模型目录路径 (PersonalData/model/tts)
+    """
+    tts_dir = paths.personal_data_dir / "model" / "tts"
+    tts_dir.mkdir(parents=True, exist_ok=True)
+    logger.debug(f"TTS 模型目录: {tts_dir}")
+    return tts_dir
+
+
+def get_local_tts_models_list() -> dict:
+    """
+    获取本地 TTS 模型列表
+    
+    扫描 PersonalData/model/tts 目录，返回包含有效模型文件的目录
+    
+    Returns:
+        本地模型字典，键为模型名称，值为模型路径
+    """
+    tts_dir = get_tts_model_dir()
+    local_models = {}
+    
+    if tts_dir.exists():
+        for subdir in tts_dir.iterdir():
+            if subdir.is_dir():
+                # 检查是否包含 TTS 模型文件（*.onnx）
+                onnx_files = list(subdir.glob("*.onnx"))
+                if onnx_files:
+                    # 检查是否是预设模型
+                    model_name = subdir.name
+                    is_predefined = False
+                    for model_type, model_config in TTS_MODEL_OPTIONS.items():
+                        if model_config["model_name"] == model_name:
+                            is_predefined = True
+                            break
+                    
+                    if not is_predefined:
+                        # 添加本地模型
+                        local_models[model_name] = str(subdir)
+    
+    return local_models
+
+
 def download_tts_model(model_type: str = "zh", callback: Callable[[int, str], None] = None) -> Optional[Path]:
     """
     自动下载 TTS 模型到 PersonalData/model 目录
@@ -67,7 +113,7 @@ def download_tts_model(model_type: str = "zh", callback: Callable[[int, str], No
     model_url = model_config["url"]
     model_name = model_config["model_name"]
     
-    model_dir = get_default_tts_model_dir()
+    model_dir = get_tts_model_dir()
     target_dir = model_dir / model_name
     
     # 如果模型已存在，直接返回
@@ -151,7 +197,7 @@ def load_tts_model(model_path: str = None, model_type: str = None, callback: Cal
         # 如果配置中没有路径，使用默认目录
         if not model_path and auto_download:
             model_config = TTS_MODEL_OPTIONS.get(model_type, TTS_MODEL_OPTIONS[DEFAULT_TTS_MODEL_TYPE])
-            default_dir = get_default_tts_model_dir() / model_config["model_name"]
+            default_dir = get_tts_model_dir() / model_config["model_name"]
             if default_dir.exists():
                 model_path = str(default_dir)
             else:

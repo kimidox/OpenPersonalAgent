@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-SUPPORTED_EXTENSIONS = ["docx", "pdf", "md", "txt", "json", "xlsx", "xls", "wav", "mp3", "m4a", "flac"]
+SUPPORTED_EXTENSIONS = ["docx", "pdf", "md", "txt", "json", "xlsx", "xls"]
 
 
 @dataclass
@@ -34,10 +34,6 @@ class UploadedFileInfo:
         "json": "application/json",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "xls": "application/vnd.ms-excel",
-        "wav": "audio/wav",
-        "mp3": "audio/mpeg",
-        "m4a": "audio/mp4",
-        "flac": "audio/flac",
     }, repr=False)
 
     @property

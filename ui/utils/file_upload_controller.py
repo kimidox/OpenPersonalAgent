@@ -8,11 +8,8 @@ from typing import Any, Optional
 from PySide6.QtCore import QObject, Signal, QThread, QTimer
 
 from ui.utils.file_upload_manager import UploadedFileInfo, SUPPORTED_EXTENSIONS
-from recorder import get_recorder, is_onnx_model_loaded
+from recorder import get_recorder
 import config
-
-# 音频文件扩展名列表
-AUDIO_EXTENSIONS = ["wav", "mp3", "m4a", "flac"]
 
 
 class FileParseWorker(QThread):
@@ -46,71 +43,14 @@ class FileParseWorker(QThread):
             self.parse_error.emit(self._file_id, str(e))
 
 
-class AudioParseWorker(QThread):
-    """
-    音频转录工作线程
-    
-    在后台线程中执行音频转录任务
-    """
-    parse_finished = Signal(str, object)
-    parse_error = Signal(str, str)
-    parse_progress = Signal(str, int, str)  # (file_id, progress, status)
-
-    def __init__(
-        self,
-        file_id: str,
-        file_path: Path,
-        parent: QObject | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self._file_id = file_id
-        self._file_path = file_path
-        self._result_text: Optional[str] = None
-        self._result_error: Optional[str] = None
-
-    def run(self) -> None:
-        try:
-            from recorder import transcribe_audio_with_onnx, is_onnx_model_loaded
-            
-            # 检查 ASR 模型是否已加载
-            if not is_onnx_model_loaded():
-                self.parse_error.emit(self._file_id, "ASR 模型未加载，请先加载模型")
-                return
-            
-            # 定义进度回调函数
-            def progress_callback(progress: int, status: str):
-                self.parse_progress.emit(self._file_id, progress, status)
-            
-            # 直接调用转录函数（在工作线程中执行）
-            result = transcribe_audio_with_onnx(self._file_path, progress_callback=progress_callback)
-            
-            if result is not None:
-                # 创建一个简单的结果对象
-                class AudioTranscriptionResult:
-                    def __init__(self, content: str):
-                        self.content = content
-                        self.summary = None
-                        self.is_success = True
-                        self.error = None
-                
-                transcription_result = AudioTranscriptionResult(result)
-                self.parse_finished.emit(self._file_id, transcription_result)
-            else:
-                self.parse_error.emit(self._file_id, "音频转录失败：未获取到转录结果")
-        except Exception as e:
-            self.parse_error.emit(self._file_id, str(e))
-
-
 class FileUploadController(QObject):
     file_added = Signal(object)
     file_removed = Signal(str)
     file_parse_started = Signal(str)
     file_parse_finished = Signal(str, object)
     file_parse_error = Signal(str, str)
-    file_parse_progress = Signal(str, int, str)  # (file_id, progress, status)
     files_changed = Signal()
     upload_error = Signal(str)
-    asr_model_not_loaded = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -150,14 +90,6 @@ class FileUploadController(QObject):
         
         return None
 
-    def _is_audio_file(self, extension: str) -> bool:
-        """检查是否为音频文件"""
-        return extension.lower() in AUDIO_EXTENSIONS
-
-    def _check_asr_model_loaded(self) -> bool:
-        """检查 ASR 模型是否已加载"""
-        return is_onnx_model_loaded()
-
     def add_file(self, file_path: Path) -> Optional[UploadedFileInfo]:
         validation_error = self.validate_file(file_path)
         if validation_error:
@@ -170,12 +102,6 @@ class FileUploadController(QObject):
         
         file_id = uuid.uuid4().hex
         extension = file_path.suffix.lower().lstrip(".")
-        
-        # 检查是否为音频文件，如果是则检查 ASR 模型是否已加载
-        if self._is_audio_file(extension):
-            if not self._check_asr_model_loaded():
-                self.asr_model_not_loaded.emit(file_path.name)
-                return None
         
         mime_map: dict[str, str] = {
             "txt": "text/plain",
@@ -251,33 +177,16 @@ class FileUploadController(QObject):
         file_info.parse_status = "开始解析..."
         self.file_parse_started.emit(file_id)
         
-        # 根据文件类型选择不同的解析器
-        if self._is_audio_file(file_info.extension):
-            worker = AudioParseWorker(file_id, file_info.file_path, self)
-        else:
-            worker = FileParseWorker(file_id, file_info.file_path, self)
+        # 使用 FileParseWorker 解析文件
+        worker = FileParseWorker(file_id, file_info.file_path, self)
         
         worker.parse_finished.connect(self._on_parse_finished)
         worker.parse_error.connect(self._on_parse_error)
-        
-        # 连接进度信号（仅 AudioParseWorker 有）
-        if hasattr(worker, 'parse_progress'):
-            worker.parse_progress.connect(self._on_parse_progress)
         
         worker.finished.connect(lambda: self._cleanup_worker(file_id))
         
         self._parse_workers[file_id] = worker
         worker.start()
-
-    def _on_parse_progress(self, file_id: str, progress: int, status: str) -> None:
-        file_info = self._files.get(file_id)
-        if not file_info:
-            return
-        
-        file_info.parse_progress = progress
-        file_info.parse_status = status
-        
-        self.file_parse_progress.emit(file_id, progress, status)
 
     def _on_parse_finished(self, file_id: str, result: Any) -> None:
         file_info = self._files.get(file_id)

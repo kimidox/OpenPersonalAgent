@@ -36,9 +36,9 @@ class AudioParser(BaseParser):
             return ParseResult.from_error(error, file_path)
 
         # 检查 ASR 模型是否已加载
-        if not recorder.is_onnx_model_loaded():
+        if not recorder.is_online_model_loaded():
             return ParseResult.from_error(
-                "ASR 模型未加载，请先加载模型后再解析音频文件",
+                "实时语音识别模型未加载，请先加载模型后再解析音频文件",
                 file_path
             )
 
@@ -59,8 +59,12 @@ class AudioParser(BaseParser):
                     )
                 audio_path = temp_wav_path
 
-            # 使用 ASR 模型转录音频
-            transcript = recorder.transcribe_audio_with_onnx(audio_path)
+            # 注意：当前版本不支持音频文件转录，仅支持实时语音识别
+            # 音频文件转录功能需要后续实现
+            return ParseResult.from_error(
+                "当前版本仅支持实时语音识别，不支持音频文件转录功能",
+                file_path
+            )
 
             if transcript is None:
                 return ParseResult.from_error(

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
-from PySide6.QtCore import Qt, QPoint, Signal, QPropertyAnimation, QEasingCurve, QTimer, QEvent
-from PySide6.QtGui import QIcon, QAction
-from PySide6.QtWidgets import QWidget, QPushButton, QMenu, QApplication
+from PySide6.QtCore import Qt, QPoint, Signal, QPropertyAnimation, QEasingCurve, QTimer, QEvent, QRectF
+from PySide6.QtGui import QIcon, QAction, QPainter, QColor, QFont, QPen, QBrush
+from PySide6.QtWidgets import QWidget, QPushButton, QMenu, QApplication, QLabel, QGraphicsOpacityEffect
 
 from resource_path import paths
 from ui.styles import StyleManager
 from ui.views.floating_chat_window import FloatingChatWindow
 from logger import get_logger
-from recorder import get_recorder, AudioTranscribeWorker
+from recorder import get_recorder
 import config
 
 if TYPE_CHECKING:
@@ -54,6 +54,235 @@ class FloatingBallButton(QPushButton):
         self._parent_floating_ball.contextMenuEvent(event)
 
 
+class RealtimeRecognitionPopup(QWidget):
+    """实时识别结果弹出窗口"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._text = ""
+        self._is_final = False
+        self._animation_opacity = 1.0
+        self._dot_count = 0
+        self._max_dots = 3
+        
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        
+        self._init_ui()
+        self._init_animation()
+        
+    def _init_ui(self):
+        """初始化 UI"""
+        # 设置固定宽度和最小高度，高度会根据文本动态调整
+        self.setFixedWidth(320)
+        self.setMinimumHeight(60)
+        
+        # 主布局
+        self._label = QLabel(self)
+        self._label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._label.setWordWrap(True)
+        self._label.setGeometry(15, 10, 290, 40)
+        
+        # 设置字体
+        font = QFont()
+        font.setPointSize(11)
+        self._label.setFont(font)
+        
+        # 设置样式
+        self.setStyleSheet("""
+            RealtimeRecognitionPopup {
+                background-color: rgba(30, 30, 30, 230);
+                border-radius: 10px;
+            }
+            QLabel {
+                color: #FFFFFF;
+                background: transparent;
+            }
+        """)
+        
+    def _init_animation(self):
+        """初始化动画"""
+        # 闪烁动画定时器
+        self._blink_timer = QTimer(self)
+        self._blink_timer.timeout.connect(self._on_blink_timeout)
+        
+        # 不透明度动画
+        self._opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._opacity_effect)
+        
+    def _on_blink_timeout(self):
+        """闪烁动画定时器回调"""
+        if self._is_final:
+            return
+            
+        self._dot_count = (self._dot_count + 1) % (self._max_dots + 1)
+        self.update()
+        
+    def start_animation(self):
+        """开始动画"""
+        self._blink_timer.start(500)  # 每 500ms 更新一次
+        
+    def stop_animation(self):
+        """停止动画"""
+        self._blink_timer.stop()
+        self._dot_count = 0
+        self.update()
+        
+    def set_text(self, text: str, is_final: bool = False):
+        """设置识别文本
+        
+        Args:
+            text: 识别文本
+            is_final: 是否为最终结果
+        """
+        self._text = text
+        self._is_final = is_final
+        
+        if is_final:
+            self.stop_animation()
+            display_text = text if text else "识别完成"
+        else:
+            # 部分结果，显示识别中状态
+            display_text = text if text else "正在识别..."
+            
+        # 设置文本
+        self._label.setText(display_text)
+        
+        # 根据文本内容动态调整高度
+        self._adjust_height()
+        
+        if is_final:
+            # 最终结果时改变背景色
+            self.setStyleSheet("""
+                RealtimeRecognitionPopup {
+                    background-color: rgba(46, 125, 50, 230);
+                    border-radius: 10px;
+                }
+                QLabel {
+                    color: #FFFFFF;
+                    background: transparent;
+                }
+            """)
+        else:
+            # 恢复正常背景色
+            self.setStyleSheet("""
+                RealtimeRecognitionPopup {
+                    background-color: rgba(30, 30, 30, 230);
+                    border-radius: 10px;
+                }
+                QLabel {
+                    color: #FFFFFF;
+                    background: transparent;
+                }
+            """)
+            
+        self.update()
+        
+    def _adjust_height(self):
+        """根据文本内容调整窗口高度"""
+        # 计算文本所需的高度
+        from PySide6.QtCore import Qt
+        
+        # 获取文本的字体度量
+        font_metrics = self._label.fontMetrics()
+        text_width = 290  # 标签宽度
+        
+        # 计算文本所需的行数和高度
+        text_rect = font_metrics.boundingRect(0, 0, text_width, 0, 
+                                                Qt.TextFlag.TextWordWrap, 
+                                                self._text if self._text else "正在识别...")
+        text_height = text_rect.height()
+        
+        # 计算窗口高度：文本高度 + 上下边距
+        window_height = text_height + 30  # 上下各15像素边距
+        
+        # 限制最小和最大高度
+        window_height = max(60, min(window_height, 300))
+        
+        # 设置窗口高度
+        self.setFixedHeight(window_height)
+        
+        # 更新标签的几何位置
+        self._label.setGeometry(15, 10, 290, window_height - 20)
+        
+    def clear(self):
+        """清除内容"""
+        self._text = ""
+        self._is_final = False
+        self._dot_count = 0
+        self.stop_animation()
+        self._label.setText("")
+        # 重置窗口高度到默认值
+        self.setFixedHeight(60)
+        self._label.setGeometry(15, 10, 290, 40)
+        
+    def paintEvent(self, event):
+        """绘制事件"""
+        super().paintEvent(event)
+        
+        if self._is_final:
+            return
+            
+        # 绘制"识别中"动画点
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # 绘制圆角矩形背景
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(30, 30, 30, 230)))
+        painter.drawRoundedRect(self.rect(), 10, 10)
+        
+        # 如果没有文本，绘制动画点
+        if not self._text:
+            # 绘制三个动画点
+            dot_size = 8
+            spacing = 12
+            start_x = (self.width() - (dot_size * 3 + spacing * 2)) // 2
+            y = self.height() // 2
+            
+            for i in range(3):
+                if i < self._dot_count:
+                    painter.setBrush(QBrush(QColor(100, 200, 255)))
+                else:
+                    painter.setBrush(QBrush(QColor(100, 100, 100)))
+                    
+                x = start_x + i * (dot_size + spacing)
+                painter.drawEllipse(x, y - dot_size // 2, dot_size, dot_size)
+        
+        painter.end()
+        
+    def show_near_ball(self, ball_geometry: 'QRect'):
+        """在悬浮球附近显示
+        
+        Args:
+            ball_geometry: 悬浮球的几何位置
+        """
+        screen_geometry = QApplication.primaryScreen().availableGeometry()
+        
+        # 优先在右侧显示
+        x = ball_geometry.right() + 10
+        y = ball_geometry.top() - (self.height() - ball_geometry.height()) // 2
+        
+        # 检查是否超出屏幕右边界
+        if x + self.width() > screen_geometry.right():
+            x = ball_geometry.left() - self.width() - 10
+            
+        # 检查是否超出屏幕上下边界
+        if y < screen_geometry.top():
+            y = screen_geometry.top()
+        if y + self.height() > screen_geometry.bottom():
+            y = screen_geometry.bottom() - self.height()
+            
+        self.move(x, y)
+        self.show()
+        self.raise_()
+
+
 class FloatingBall(QWidget):
     """悬浮球组件，支持拖动、右键菜单和展开会话窗口"""
 
@@ -68,6 +297,8 @@ class FloatingBall(QWidget):
     transcription_progress = Signal(str)  # 转录进度消息
     transcription_finished = Signal(Path, str)  # 转录完成 (audio_path, text)
     transcription_error = Signal(str)  # 转录错误消息
+    # 实时识别信号（跨线程安全传递识别结果）
+    realtime_result_signal = Signal(str, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -78,8 +309,11 @@ class FloatingBall(QWidget):
         self._is_expanded = False
         self._animation = None
         # 转录相关属性
-        self._transcribe_worker: Optional[AudioTranscribeWorker] = None
         self._current_audio_path: Optional[Path] = None
+        
+        # 实时识别相关属性
+        self._realtime_popup: Optional[RealtimeRecognitionPopup] = None
+        self._is_realtime_recording: bool = False
         
         # Live2D 相关
         self._mode = "live2d" if config.LIVE2D_ENABLED else "button"
@@ -91,7 +325,11 @@ class FloatingBall(QWidget):
         self._init_style()
         self._init_position()
         self._init_chat_window()
+        self._init_realtime_popup()
         self._init_live2d()
+        self._connect_recorder_signals()
+        # 连接实时识别信号到 UI 更新（跨线程安全）
+        self.realtime_result_signal.connect(self._update_realtime_popup)
         # 所有初始化完成后最后隐藏，确保不会被任何操作触发显示
         self._logger.info("FloatingBall: 初始化完成，调用 hide()")
         self.hide()
@@ -147,6 +385,16 @@ class FloatingBall(QWidget):
         self._chat_window.hide()
         # 浮动聊天窗口现在独立处理消息，不需要转发
         self._chat_window.close_requested.connect(self._collapse_chat_window)
+
+    def _init_realtime_popup(self):
+        """初始化实时识别弹出窗口"""
+        self._realtime_popup = RealtimeRecognitionPopup()
+        self._realtime_popup.hide()
+        
+    def _connect_recorder_signals(self):
+        """连接 AudioRecorder 的信号"""
+        # 实时识别结果通过 start_recording 的回调传递，无需额外信号连接
+        self._logger.info("实时识别将通过回调机制工作")
 
     def _init_context_menu(self):
         """初始化右键菜单"""
@@ -320,123 +568,129 @@ class FloatingBall(QWidget):
     
     def _toggle_recording(self):
         """切换录音状态"""
-        from recorder import is_onnx_model_loaded
+        from recorder import is_online_model_loaded
+        import config
         recorder = get_recorder()
         
         if recorder.is_recording:
+            self._logger.info("停止录音...")
             audio_path = recorder.stop_recording()
             self._recording_action.setText("录音模式")
+            self._logger.info(f"录音已停止，audio_path={audio_path}")
             
+            # 停止录音后，立即隐藏实时识别窗口
+            self._hide_realtime_popup()
+            
+            # audio_path 为 None 表示实时识别成功，结果已通过回调传递
+            # audio_path 不为 None 表示实时识别失败，需要离线转录
             if audio_path:
-                self.recording_stopped.emit(audio_path)
-                # 使用异步转录
-                self._start_async_transcription(audio_path)
+                self._logger.warning(f"实时识别失败，保存了音频文件: {audio_path}")
+                # 离线转录作为降级方案
+                self._transcribe_offline(audio_path)
         else:
-            # 在开始录音前先检查模型是否已加载
-            if not is_onnx_model_loaded():
-                # 我们通过信号让主窗口来显示提示，避免在悬浮球中直接显示对话框导致的问题
+            # 在开始录音前检查流式模型是否已加载
+            if not is_online_model_loaded():
+                # 没有流式模型，显示警告
                 self.show_model_not_loaded_warning.emit()
                 return
-            success = recorder.start_recording()
+            
+            success = recorder.start_recording(realtime_callback=self._on_realtime_result)
             if success:
                 self._recording_action.setText("停止录音")
                 self.recording_started.emit()
-    
-    def _start_async_transcription(self, audio_path: Path):
-        """启动异步转录"""
-        from recorder import is_onnx_model_loaded
-        
-        # 检查模型是否已加载
-        if not is_onnx_model_loaded():
-            self._logger.warning("转录模型未加载，无法转录")
-            self._on_transcribe_error(str(audio_path), "语音模型未加载，请先在设置中加载模型")
+                self._show_realtime_popup()
+                    
+    def _show_realtime_popup(self):
+        """显示实时识别弹出窗口"""
+        if self._realtime_popup is None:
+            self._logger.warning("无法显示实时识别弹出窗口：_realtime_popup 为 None")
             return
+            
+        self._logger.info("准备显示实时识别弹出窗口")
+        self._is_realtime_recording = True
+        self._realtime_popup.clear()
+        self._realtime_popup.start_animation()
+        self._realtime_popup.show_near_ball(self.geometry())
+        self._logger.info(f"实时识别弹出窗口已显示，_is_realtime_recording={self._is_realtime_recording}")
         
-        # 如果已有转录任务在进行，先取消
-        if self._transcribe_worker and self._transcribe_worker.isRunning():
-            self._transcribe_worker.requestInterruption()
-            self._transcribe_worker.wait(1000)
-            self._transcribe_worker = None
+    def _hide_realtime_popup(self):
+        """隐藏实时识别弹出窗口"""
+        self._logger.info(f"准备隐藏实时识别弹出窗口，_realtime_popup={self._realtime_popup is not None}, _is_realtime_recording={self._is_realtime_recording}")
         
-        self._current_audio_path = audio_path
+        if self._realtime_popup is None:
+            self._logger.warning("无法隐藏实时识别弹出窗口：_realtime_popup 为 None")
+            return
+            
+        self._is_realtime_recording = False
+        self._realtime_popup.stop_animation()
+        self._realtime_popup.hide()
+        self._logger.info("实时识别弹出窗口已隐藏")
         
-        # 显示转录进度提示
-        self._show_transcription_progress("正在转录音频...")
+    def _on_realtime_result(self, text: str, is_final: bool):
+        """处理实时识别结果（从录音回调线程调用）
         
-        # 创建转录工作线程
-        recorder = get_recorder()
-        self._transcribe_worker = recorder.transcribe_audio_async(
-            audio_path,
-            callback=self._on_transcribe_callback,
-            progress_callback=self._on_transcribe_progress_callback
-        )
+        Args:
+            text: 识别文本
+            is_final: 是否为最终结果
+        """
+        # 使用 Qt Signal 跨线程安全传递结果到主线程
+        self.realtime_result_signal.emit(text, is_final)
         
-        if self._transcribe_worker is None:
-            self._on_transcribe_error(str(audio_path), "启动转录任务失败")
-    
-    def _show_transcription_progress(self, message: str):
-        """显示转录进度提示"""
-        # 展开聊天窗口并显示进度消息
-        if not self._is_expanded:
-            self._expand_chat_window()
+    def _update_realtime_popup(self, text: str, is_final: bool):
+        """更新实时识别弹出窗口
         
-        # 添加或更新进度消息
-        if hasattr(self, '_transcription_message_shown') and self._transcription_message_shown:
-            # 更新现有消息
-            self._chat_window.update_last_message(message)
-        else:
-            # 添加新消息
-            self._chat_window.add_message("assistant", message)
-            self._transcription_message_shown = True
-    
-    def _on_transcribe_callback(self, audio_path: str, text: Optional[str], error: Optional[str]):
-        """转录完成回调"""
-        # 使用 QTimer 确保在主线程中处理
-        QTimer.singleShot(0, lambda: self._handle_transcribe_result(audio_path, text, error))
-    
-    def _on_transcribe_progress_callback(self, progress: int, status: str):
-        """转录进度回调"""
-        QTimer.singleShot(0, lambda: self._show_transcription_progress(f"正在转录音频... {progress}%"))
-    
-    def _handle_transcribe_result(self, audio_path: str, text: Optional[str], error: Optional[str]):
-        """处理转录结果（在主线程中执行）"""
-        self._transcription_message_shown = False
+        Args:
+            text: 识别文本
+            is_final: 是否为最终结果
+        """
+        self._logger.info(f"_update_realtime_popup 被调用: text='{text}', is_final={is_final}, _realtime_popup={self._realtime_popup is not None}, _is_realtime_recording={self._is_realtime_recording}")
         
-        if error:
-            self._on_transcribe_error(audio_path, error)
-        elif text:
-            self._on_transcribe_finished(Path(audio_path), text)
-        else:
-            self._on_transcribe_error(audio_path, "转录返回空结果")
-    
-    def _on_transcribe_finished(self, audio_path: Path, text: str):
-        """转录完成处理"""
-        self._logger.info(f"转录完成: {audio_path}, 文本长度: {len(text)}")
-        self._transcribe_worker = None
-        self._current_audio_path = None
+        if self._realtime_popup is None or not self._is_realtime_recording:
+            self._logger.warning(f"无法更新实时识别弹出窗口: _realtime_popup={self._realtime_popup is not None}, _is_realtime_recording={self._is_realtime_recording}")
+            return
+            
+        self._logger.debug(f"实时识别结果更新: text='{text}', is_final={is_final}")
         
-        # 发送转录完成信号
-        self.transcription_finished.emit(audio_path, text)
+        # 更新弹出窗口内容
+        self._realtime_popup.set_text(text, is_final)
         
-        # 发送创建录音会话信号给主窗口
-        self.create_recording_conversation.emit(audio_path, text)
+        # 如果是最终结果，发送转录完成信号并延迟隐藏弹出窗口
+        if is_final:
+            self._logger.info("最终结果已显示，发送转录完成信号")
+            # 发送转录完成信号
+            self.transcription_finished.emit(None, text)
+            # 发送创建录音会话信号给主窗口
+            self.create_recording_conversation.emit(None, text)
+            self._logger.info("将在 2 秒后隐藏弹出窗口")
+            QTimer.singleShot(2000, self._hide_realtime_popup)
     
     def _on_transcribe_error(self, audio_path: str, error: str):
         """转录错误处理"""
         self._logger.error(f"转录失败: {audio_path}, 错误: {error}")
-        self._transcribe_worker = None
-        self._current_audio_path = None
         
         # 发送转录错误信号
         self.transcription_error.emit(error)
+    
+    def _transcribe_offline(self, audio_path: Path):
+        """使用离线模型转录音频文件作为降级方案"""
+        self._logger.info(f"尝试离线转录: {audio_path}")
+        from recorder import is_onnx_model_loaded, transcribe_audio_with_onnx
+        
+        if not is_onnx_model_loaded():
+            self._logger.warning("离线模型也未加载，无法转录")
+            self._on_transcribe_error(str(audio_path), "离线模型未加载，无法转录音频")
+            return
+        
+        result = transcribe_audio_with_onnx(audio_path)
+        if result:
+            self._logger.info(f"离线转录成功: {result}")
+            self.create_recording_conversation.emit(audio_path, result)
+        else:
+            self._on_transcribe_error(str(audio_path), "离线转录失败")
         
         # 在聊天窗口显示错误消息
         if self._chat_window:
-            if hasattr(self, '_transcription_message_shown') and self._transcription_message_shown:
-                self._chat_window.update_last_message(f"❌ 转录失败: {error}")
-            else:
-                self._chat_window.add_message("assistant", f"❌ 转录失败: {error}")
-            self._transcription_message_shown = False
+            self._chat_window.add_message("assistant", f"❌ 转录失败: {error}")
 
     def _toggle_chat_window(self):
         """切换聊天窗口的展开/收起状态"""
@@ -540,6 +794,9 @@ class FloatingBall(QWidget):
             # 如果聊天窗口已展开，同步移动
             if self._is_expanded and self._chat_window:
                 self._position_chat_window()
+            # 如果实时识别弹出窗口已显示，同步移动
+            if self._is_realtime_recording and self._realtime_popup:
+                self._realtime_popup.show_near_ball(self.geometry())
             event.accept()
 
     def mouseReleaseEvent(self, event):

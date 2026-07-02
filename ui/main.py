@@ -18,24 +18,24 @@ def _preload_asr_check():
     """后台检查 ASR 模型配置并自动加载"""
     try:
         import config
-        from recorder import is_onnx_model_loaded, load_onnx_model
+        from recorder import is_online_model_loaded, load_online_model
         
         logger = get_logger()
         
-        # 检查是否配置了自动加载
-        if getattr(config, 'ASR_AUTO_LOAD', False):
-            logger.info("配置了自动加载 ASR 模型，正在加载...")
-            if not is_onnx_model_loaded():
-                success = load_onnx_model()
+        # 检查是否配置了自动加载流式模型
+        if getattr(config, 'ASR_REALTIME_AUTO_LOAD', False):
+            logger.info("配置了自动加载流式模型，正在加载...")
+            if not is_online_model_loaded():
+                success = load_online_model()
                 if success:
-                    logger.info("ASR 模型自动加载成功")
+                    logger.info("流式模型自动加载成功")
                 else:
-                    logger.warning("ASR 模型自动加载失败")
+                    logger.warning("流式模型自动加载失败")
             else:
-                logger.info("ASR 模型已加载")
+                logger.info("流式模型已加载")
         else:
-            if not is_onnx_model_loaded():
-                logger.info("ASR 模型未加载，录音功能需要先在设置中加载模型")
+            if not is_online_model_loaded():
+                logger.info("流式模型未加载，录音功能需要先在设置中加载模型")
     except Exception as e:
         logger = get_logger()
         logger.exception(f"ASR 模型自动加载检查异常: {e}")
