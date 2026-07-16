@@ -112,6 +112,7 @@ class MessageList(ft.Container):
         msg_type: MessageType,
         content: str = "",
         token_usage: dict[str, Any] | None = None,
+        files: list[Any] | None = None,
         update_ui: bool = True,
     ) -> MessageCard:
         """
@@ -134,6 +135,7 @@ class MessageList(ft.Container):
         card = MessageCard(
             msg_type=msg_type,
             content=content,
+            files=files,
             on_copy=self._on_copy,
             on_speak=self._on_speak if msg_type == "assistant" else None,
         )

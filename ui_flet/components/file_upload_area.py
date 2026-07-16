@@ -69,7 +69,6 @@ class FileUploadArea(ft.Container):
 
         # 文件选择器（Service 控件，注册到 page.services 避免渲染占位）
         self._file_picker = ft.FilePicker()
-        self._file_picker.on_result = self._on_file_picker_result
         self._page.services.append(self._file_picker)
 
         # UI 引用
@@ -145,30 +144,31 @@ class FileUploadArea(ft.Container):
         )
         self.padding = 0
 
-    def _on_upload_click(self, e: ft.ControlEvent) -> None:
+    async def _on_upload_click(self, e: ft.ControlEvent) -> None:
         """上传按钮点击"""
         self._logger.info("FileUploadArea: 打开文件选择对话框")
         if not self._controller.can_add_file():
             self._show_snackbar(f"最多只能上传 {self._controller._max_files} 个文件")
             return
 
-        self._file_picker.pick_files(
+        files = await self._file_picker.pick_files(
             allow_multiple=True,
             allowed_extensions=self._controller.get_supported_extensions(),
             dialog_title="选择文件",
         )
+        self._handle_picked_files(files)
 
-    def _on_file_picker_result(self, e: ft.FilePickerResultEvent) -> None:
-        """文件选择结果"""
-        if not e.files:
+    def _handle_picked_files(self, files: list[ft.FilePickerFile] | None) -> None:
+        """处理选择的文件"""
+        if not files:
             return
 
         remaining = self._controller.get_remaining_slots()
-        files_to_add = e.files[:remaining]
+        files_to_add = files[:remaining]
 
-        if len(e.files) > remaining:
+        if len(files) > remaining:
             self._show_snackbar(
-                f"已选择 {len(e.files)} 个文件，但只能再上传 {remaining} 个"
+                f"已选择 {len(files)} 个文件，但只能再上传 {remaining} 个"
             )
 
         for file_info in files_to_add:
@@ -184,10 +184,10 @@ class FileUploadArea(ft.Container):
             self._file_preview_list.add_file(file_info)
         self._notify_files_changed()
 
-    def _on_file_removed(self, file_id: str) -> None:
+    def _on_file_removed(self, file_info: UploadedFileInfo) -> None:
         """文件移除回调"""
         if self._file_preview_list:
-            self._file_preview_list.remove_file(file_id)
+            self._file_preview_list.remove_file(file_info.file_id)
         self._notify_files_changed()
 
     def _on_parse_update(self, file_info: UploadedFileInfo) -> None:
@@ -197,7 +197,7 @@ class FileUploadArea(ft.Container):
         self._update_progress_display()
         self._notify_files_changed()
 
-    def _on_files_changed_internal(self) -> None:
+    def _on_files_changed_internal(self, file_info: UploadedFileInfo | None = None) -> None:
         """文件列表变化内部处理"""
         self._update_progress_display()
         self._notify_files_changed()

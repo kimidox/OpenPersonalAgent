@@ -380,9 +380,11 @@ class ModelConfigPage:
         )
 
         # 面板容器
+        # expand=True 让容器填满父级剩余空间，使内部 form 的 scroll 能正确生效
         self._config_form = ft.Container(
             content=form,
             visible=False,
+            expand=True,
         )
 
         panel = ft.Column(
@@ -690,26 +692,20 @@ class ModelConfigPage:
         else:
             self._show_snackbar("删除配置失败", error=True)
 
-    def _on_import_config_click(self, e) -> None:
+    async def _on_import_config_click(self, e) -> None:
         """导入配置按钮点击事件"""
         if not self._file_picker:
             return
 
-        # 设置文件选择器回调
-        self._file_picker.on_result = self._on_import_file_selected
-
         # 打开文件选择器
-        self._file_picker.pick_files(
+        files = await self._file_picker.pick_files(
             allowed_extensions=["json"],
             allow_multiple=False,
         )
-
-    def _on_import_file_selected(self, e: ft.ControlEvent) -> None:
-        """导入文件选择回调"""
-        if not e.files or len(e.files) == 0:
+        if not files:
             return
 
-        file_path = e.files[0].path
+        file_path = files[0].path
 
         try:
             # 读取文件内容
@@ -745,23 +741,17 @@ class ModelConfigPage:
             self._logger.exception("导入配置失败")
             self._show_snackbar(f"导入配置失败: {str(ex)}", error=True)
 
-    def _on_export_config_click(self, e) -> None:
+    async def _on_export_config_click(self, e) -> None:
         """导出配置按钮点击事件"""
         if not self._file_picker:
             return
 
-        # 设置文件选择器回调
-        self._file_picker.on_result = self._on_export_file_selected
-
         # 打开保存文件对话框
-        self._file_picker.save_file(
+        path = await self._file_picker.save_file(
             allowed_extensions=["json"],
             file_name="llm_config.json",
         )
-
-    def _on_export_file_selected(self, e: ft.ControlEvent) -> None:
-        """导出文件选择回调"""
-        if not e.path:
+        if not path:
             return
 
         try:
@@ -772,11 +762,11 @@ class ModelConfigPage:
             data = multi_config.to_dict()
 
             # 写入文件
-            with open(e.path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-            self._logger.info(f"已导出配置到: {e.path}")
-            self._show_snackbar(f"已导出配置到: {e.path}")
+            self._logger.info(f"已导出配置到: {path}")
+            self._show_snackbar(f"已导出配置到: {path}")
 
         except Exception as ex:
             self._logger.exception("导出配置失败")

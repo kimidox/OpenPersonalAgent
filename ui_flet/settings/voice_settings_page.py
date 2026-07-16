@@ -790,19 +790,16 @@ class VoiceSettingsPage:
                 self._asr_model_dropdown.value = custom_key
             self._update_asr_model_detail()
 
-    def _on_browse_asr_path(self, e: ft.ControlEvent) -> None:
+    async def _on_browse_asr_path(self, e: ft.ControlEvent) -> None:
         """浏览 ASR 本地模型路径"""
-        def on_result(picker_e: ft.FilePickerResultEvent) -> None:
-            if picker_e.path and self._asr_local_path_field:
-                self._asr_local_path_field.value = picker_e.path
-                self._on_asr_local_path_changed(None)
-                self._asr_local_path_field.update()
-
         picker = ft.FilePicker()
-        picker.on_result = on_result
-        self._page.overlay.append(picker)
+        self._page.services.append(picker)
         self._page.update()
-        picker.get_directory_path()
+        path = await picker.get_directory_path()
+        if path and self._asr_local_path_field:
+            self._asr_local_path_field.value = path
+            self._on_asr_local_path_changed(None)
+            self._asr_local_path_field.update()
 
     def _on_asr_auto_load_changed(self, e: ft.ControlEvent) -> None:
         """ASR 自动加载开关变化"""

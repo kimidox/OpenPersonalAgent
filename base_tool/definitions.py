@@ -63,7 +63,7 @@ REQUEST_TOOL_DETAILS_DEFINITION = {
 }
 
 TOOL_CATALOG = {
-    "run_command": "执行命令行程序或脚本。",
+    "run_command": "执行 Python 命令或 PowerShell 命令。",
     "file_operation": "文件操作工具。支持四种操作：",
     "edit": "精确编辑文件。在文件中搜索指定内容并替换。",
     "read_memory": "读取长期记忆。从数据库中读取已保存的信息。",
@@ -89,14 +89,14 @@ CONTROL_TOOL_DEFINITIONS: list[dict] = [
             "加载指定的 Skill 文档，获取完整的操作指南。\n"
             "参数：skill_id（必需），要加载的 Skill 的 ID。\n"
             "可多次调用加载多个 Skill，已加载的不会重复追加。\n"
-            "【Skill 加载铁律】（不可跳过）\n"
-            "1. 完整阅读主文档全部内容\n"
-            "2. 逐行扫描文档，提取所有反引号包裹的文件路径\n"
-            "3. 对每个文件路径，**必须**调用 run_command 读取内容（必须指定 skill_id）\n"
-            "4. 若文档要求运行 scripts/ 下的 .py 脚本，**必须**执行\n"
-            "5. 若文档语义化表明要求执行其他工具操作，***必须**执行\n"
-            "6. 将所有内容完整合并为最终上下文\n"
-            "7. 若发现新的 Skill 引用，递归加载直到无新文件"
+            "【Skill 加载后处理原则】\n"
+            "1. 完整阅读返回的 Skill 文档（含已自动内联的附属文件内容）\n"
+            "2. 文档中出现的「读取附属文件」「加载示例」「参考 X.md」等指令，"
+            "系统已自动把附属文件内容内联到返回结果里，**不要**再调用 run_command/file_operation 去读\n"
+            "3. 文档中提到的 `scripts/xxx.py` 是**命令模板**（用于 run_command 执行），不是要读取的文件\n"
+            "4. 文档中的反引号包裹内容（如 `session_id`、`title`、`href`）是**字段名**，不是文件路径\n"
+            "5. 仅当文档明确写「执行脚本」「运行命令」时，才调用 run_command，并**必须**传 skill_id 参数\n"
+            "6. 不要陷入循环：同一 skill_id 不要重复 select_skill；附属文件已内联无需额外读取"
         ),
         "parameters": {
             "type": "object",
@@ -169,7 +169,7 @@ CONTROL_TOOL_DEFINITIONS: list[dict] = [
                 "query": {"type": "string", "description": "检索关键词，用于语义搜索相关经验。不提供则返回最近的记录。"},
                 "limit": {"type": "integer", "description": "返回经验记录的最大数量，默认 5。"},
             },
-            "required": ["skill_id","query","limit"],
+            "required": ["skill_id"],
         },
     },
 ]
@@ -178,40 +178,48 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
     {
         "name": "run_command",
         "description": (
-            "执行命令行程序或脚本。\n"
+            "执行 Python 命令或 PowerShell 命令。仅支持这两种命令类型。\n"
             "常用场景：\n"
             "- 运行 Python 脚本: python script.py\n"
+            "- 运行模块: python -m pytest / python -m http.server\n"
             "- 安装依赖: pip install package\n"
-            "- 运行测试: pytest\n"
-            "- Git 操作: git status\n"
+            "- PowerShell 命令: powershell Get-CimInstance Win32_OperatingSystem\n"
             "参数：command(必需)、cwd(可选)、skill_id(可选)、timeout_sec(可选，默认60秒)。\n\n"
-            "【文件操作编码规范】（必须遵守）\n"
-            "1. 写入或修改文件时，优先使用 Write 或 SearchReplace 工具（原生支持 UTF-8 编码）\n"
-            "2. 若必须使用 run_command 进行文件写入，必须显式指定 UTF-8 编码：\n"
-            "   - PowerShell: 使用 -Encoding UTF8 参数（如 Set-Content -Path file.txt -Value \"内容\" -Encoding UTF8）\n"
-            "   - 禁止使用裸重定向 > 或不带编码参数的 Set-Content、Out-File 等命令\n"
-            "3. 违反编码规范会导致文件乱码，影响后续处理\n\n"
-            "【错误处理规范】执行后根据错误类型决定处理方式：\n"
-            "- 简单错误（命令拼写错误、路径笔误等）：直接修正参数后重试 run_command\n"
-            "- 复杂错误（依赖缺失、配置问题等）或连续失败 ≥ 1 次：先调用 load_skill_memory 获取相关经验，再尝试修正\n"
-            "- 同一命令重试超过 2 次仍失败：放弃该方案并重新规划任务\n\n"
-            "【错误反馈和重试流程】\n"
-            "1. 命令执行失败时，返回结果会包含【重试引导】段落，请根据其中的提示分析错误原因\n"
-            "2. 返回中会针对常见错误类型提供具体建议（如命令不存在、权限不足、文件找不到、缺少模块等）\n"
-            "3. 重试步骤：分析【错误输出】→ 参考【重试引导】建议 → 修正命令参数 → 重新调用 run_command\n"
-            "4. 同一命令重试超过 2 次仍失败时，应放弃该方案并重新规划任务\n"
-            "5. 超时命令会返回已捕获的部分输出，可增加 timeout_sec 参数或检查命令是否需要交互输入\n\n"
+            "【文件操作编码规范】写入或修改文件时，优先使用 file_operation 或 edit 工具。\n"
+            "若必须用 run_command 写文件，必须显式指定 UTF-8 编码：\n"
+            "- PowerShell: Set-Content -Path file -Value \"内容\" -Encoding UTF8\n"
+            "- 禁止使用裸重定向 > 或不带编码参数的 Set-Content、Out-File\n\n"
+            "【错误处理规范】\n"
+            "- 简单错误（拼写错误、路径笔误）：修正后重试\n"
+            "- 复杂错误或连续失败：先 load_skill_memory 获取经验再修正\n"
+            "- 同一命令重试超 2 次仍失败：放弃并重新规划任务\n"
+            "- 超时命令会返回部分输出，可增加 timeout_sec 或检查是否需要交互输入\n"
+            "- 失败时返回结果会包含【重试引导】，请参考其中建议修正命令\n\n"
             "【注意事项】\n"
-            "- 避免使用需要用户交互输入的命令（如 ping 不带 -n 参数、pause 等）\n"
-            "- 超时后子进程会被自动清理，不会产生僵尸进程\n"
-            "- 输出超过 12000 字符时会被截断"
+            "- 避免使用需要交互输入的命令（如 ping 不带 -n、pause）\n"
+            "- 输出超过 12000 字符时会被截断\n"
+            "- **读取 skill 包内文件请用 file_operation(action=\"read\", skill_id=...)**，不要用 run_command + type/Get-Content\n"
+            "- 执行 skill 包内脚本时**必须**传 skill_id 参数，命令中的相对路径（如 scripts/xxx.py）会自动相对于 skill 包目录解析"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "要执行的命令行指令字符串。\n\n【命令编写规范】（必须遵守）\n1. Windows 系统优先使用 PowerShell 命令：命令以 powershell 开头，如 powershell Get-CimInstance Win32_OperatingSystem\n2. 【禁止模式列表】以下模式会被自动检测并转换/拒绝，请避免使用：\n   - findstr /C:\"...\" → 会被转换为 PowerShell Select-String。正确做法：直接使用 powershell Get-CimInstance 获取结构化数据\n   - wmic <class> get <properties> → 会被转换为 Get-CimInstance。正确做法：直接写 powershell Get-CimInstance Win32_OperatingSystem\n   - %%a, %%i 等批处理变量 → 会被拒绝执行。正确做法：使用 PowerShell 的 $variable 和 ForEach-Object\n   - 复杂 && / || 链 → 建议拆分为多条简单命令\n3. 系统信息查询推荐命令：\n   - 操作系统: powershell Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,TotalVisibleMemorySize\n   - CPU: powershell Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors\n   - 内存: powershell Get-CimInstance Win32_PhysicalMemory | Select-Object Capacity,Speed,Manufacturer\n   - 计算机: powershell Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,TotalPhysicalMemory\n4. 避免在单条命令中混合使用过多管道符(|)、重定向符(>)和逻辑运算符(&&、||)\n5. 复杂的系统信息查询建议拆分为多条简单命令依次执行",
+                    "description": (
+                        "要执行的命令行指令字符串。仅支持 Python 命令和 PowerShell 命令。\n\n"
+                        "【命令编写规范】\n"
+                        "1. Python 命令：直接以 python 开头，如 python script.py、python -m pytest\n"
+                        "   - pip 命令也可直接使用：pip install requests\n"
+                        "   - 会自动使用虚拟环境的 Python，无需手动激活\n"
+                        "2. PowerShell 命令：以 powershell 开头，如 powershell Get-CimInstance Win32_OperatingSystem\n"
+                        "3. 禁止使用 CMD 批处理语法（如 %%a、findstr /C:\"...\"、wmic 等），改用 PowerShell 等效命令\n"
+                        "4. 避免在单条命令中混合使用过多管道符、重定向符和逻辑运算符\n"
+                        "5. 常用系统信息查询示例：\n"
+                        "   - 操作系统: powershell Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version\n"
+                        "   - CPU: powershell Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores\n"
+                        "   - 进程列表: powershell Get-Process | Select-Object Name,Id,CPU"
+                    ),
                 },
                 "cwd": {
                     "type": "string",
@@ -226,7 +234,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                     "description": "超时秒数，默认 60，最大 180。对于长时间运行的命令请适当增加此值。",
                 },
             },
-            "required": ["command","cwd"],
+            "required": ["command"],
         },
     },
     {

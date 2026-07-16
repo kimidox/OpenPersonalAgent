@@ -335,6 +335,41 @@ def _detect_dangerous_command(command: str) -> bool:
     return False
 
 
+def _detect_skills_path_misuse(command: str, args: dict) -> str:
+    """检测 LLM 是否直接拼了 Skills\\xxx\\... 这种路径访问 skill 包内文件。
+
+    若检测到，返回引导文本；否则返回空字符串。
+    """
+    if not command:
+        return ""
+    cmd = command.replace("\\", "/")
+    # 命令里出现 Skills/ 且本次调用没传 skill_id
+    has_skills_prefix = "skills/" in cmd.lower()
+    has_skill_id = bool(args.get("skill_id"))
+    if not has_skills_prefix or has_skill_id:
+        return ""
+
+    # 判断是读文件类命令（type/Get-Content/cat/Read-Host）还是执行脚本
+    read_cmd_patterns = (
+        r"\btype\b", r"\bget-content\b", r"\bcat\b", r"\bread-host\b",
+        r"\bget-childitem\b", r"\bdir\b", r"\bls\b",
+    )
+    is_read_op = any(re.search(p, cmd, re.IGNORECASE) for p in read_cmd_patterns)
+
+    if is_read_op:
+        return (
+            "\n\n【路径提示】检测到直接拼 `Skills\\xxx\\...` 路径访问 skill 包内文件。\n"
+            "- 工作目录不是 Skills 的父目录，这种路径无法解析。\n"
+            "- 正确做法：使用 `file_operation(action=\"read\"|\"list\", path=\"<相对skill包的路径>\", skill_id=\"<id>\")`。\n"
+            "- 例：读取 skill 包下 example/a.md → file_operation(action=\"read\", path=\"example/a.md\", skill_id=\"<当前skill_id>\")"
+        )
+    return (
+        "\n\n【路径提示】检测到命令中含 `Skills\\xxx\\...` 路径但未传 skill_id。\n"
+        "- 执行 skill 包内脚本时，应使用 `run_command(command=\"python scripts/xxx.py ...\", skill_id=\"<id>\")`，"
+        "命令中只写相对 skill 包目录的路径（如 scripts/xxx.py），不要拼 `Skills\\xxx\\` 前缀。"
+    )
+
+
 def _get_error_suggestions(stderr: str, stdout: str = "") -> str:
     """根据错误内容返回针对性的建议"""
     combined = (stderr or "") + (stdout or "")
@@ -706,9 +741,13 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
             return f"错误: 写入文件失败: {e}"
 
     if name == "run_command":
-        command = str(args.get("command", "") or "").strip()
+        # 兼容 LLM 误用 cmd 参数名（实际期望 command）
+        command = str(args.get("command") or args.get("cmd") or "").strip()
         if not command:
-            return "错误: 缺少 command 参数。请提供要执行的命令行指令。"
+            return (
+                "错误: 缺少 command 参数。请提供要执行的命令行指令。\n"
+                "提示：参数名是 `command`（不是 `cmd`）。"
+            )
 
         # 危险命令检测
         if _detect_dangerous_command(command):
@@ -922,12 +961,16 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                 # 根据错误内容添加针对性建议
                 error_suggestions = _get_error_suggestions(stderr, stdout)
 
+                # 检测 LLM 是否直接拼了 Skills\xxx\... 这种路径
+                skills_path_hint = _detect_skills_path_misuse(command, args)
+
                 result = (
                     f"【执行结果】命令执行失败\n"
                     f"【退出码】exit_code: {returncode}\n"
                     f"【标准输出】{stdout_section}\n"
                     f"【错误输出】{stderr_section}"
                     f"{error_suggestions}"
+                    f"{skills_path_hint}"
                     f"{timeout_note}\n\n"
                     f"【重试引导】请分析上述错误信息，检查参数（路径、命令拼写、权限等）是否正确，修正后重新调用 run_command 重试。连续失败时请调用 load_skill_memory 获取相关经验。"
                 )

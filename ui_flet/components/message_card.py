@@ -16,7 +16,7 @@ from ui_flet.theme import ThemeManager, get_color
 from ui_flet.utils.markdown_utils import create_markdown_content
 
 if TYPE_CHECKING:
-    pass
+    from ui_flet.utils.file_upload_manager import UploadedFileInfo
 
 # 消息类型
 MessageType = Literal["user", "assistant", "tool", "think", "tool_call"]
@@ -51,6 +51,7 @@ class MessageCard(ft.Container):
         message_id: str = "",
         timestamp: datetime | None = None,
         token_usage: dict[str, Any] | None = None,
+        files: list[UploadedFileInfo] | None = None,
         on_copy: callable = None,
         on_speak: callable = None,
     ):
@@ -63,6 +64,7 @@ class MessageCard(ft.Container):
             message_id: 消息ID
             timestamp: 时间戳
             token_usage: Token用量信息
+            files: 附件文件列表（仅用户消息显示）
             on_copy: 复制按钮回调
             on_speak: 朗读按钮回调
         """
@@ -77,6 +79,7 @@ class MessageCard(ft.Container):
         self._is_finalized = False
         self._on_copy = on_copy
         self._on_speak = on_speak
+        self._files = files or []
         self._mode_badge_text: str | None = None
 
         # 主题管理器
@@ -133,7 +136,10 @@ class MessageCard(ft.Container):
             [
                 self._title_row,
                 self._bubble,  # 直接放气泡，按内容自适应宽度
-            ],
+            ]
+            + (
+                [self._create_file_info_row()] if self._files else []
+            ),
             horizontal_alignment=self._get_alignment(),
             spacing=4,
             # tight=True,  # 移除以修复"消息卡片不渲染"问题
@@ -150,6 +156,46 @@ class MessageCard(ft.Container):
             return ft.CrossAxisAlignment.END
         else:
             return ft.CrossAxisAlignment.START
+
+    def _create_file_info_row(self) -> ft.Container:
+        """创建文件信息行（显示在用户消息气泡下方）"""
+        chips = []
+        for f in self._files:
+            chip = ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.ATTACH_FILE, size=12, color=self._colors.text_muted),
+                        ft.Text(f.original_name, size=10, color=self._colors.text_muted),
+                        ft.Text(
+                            f.get_file_size_display(),
+                            size=9,
+                            color=self._colors.text_muted,
+                        ),
+                    ],
+                    spacing=4,
+                    tight=True,
+                ),
+                bgcolor=self._colors.bg_page,
+                border_radius=6,
+                padding=ft.Padding(left=8, top=3, right=8, bottom=3),
+                border=ft.Border(
+                    left=ft.BorderSide(0.5, self._colors.border),
+                    top=ft.BorderSide(0.5, self._colors.border),
+                    right=ft.BorderSide(0.5, self._colors.border),
+                    bottom=ft.BorderSide(0.5, self._colors.border),
+                ),
+            )
+            chips.append(chip)
+
+        return ft.Container(
+            content=ft.Row(
+                chips,
+                alignment=ft.MainAxisAlignment.END,
+                spacing=4,
+                wrap=True,
+            ),
+            margin=ft.Margin(top=2, left=0, right=0, bottom=0),
+        )
 
     def _get_caption(self) -> str:
         """获取消息标题（与旧版 PySide6 一致）"""

@@ -70,6 +70,16 @@ AGENT_CONVERSATION_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户的
 - 任务完成后必须调用 finish 工具
 - **必须先输出工具调用，再输出解释文本**
 
+【工作目录与路径规范】（避免路径错误的关键）
+- 工作目录为项目根目录，Skills 实际位于 `PersonalData/Skills/` 下
+- **访问 skill 包内文件**（如读取附属 .md、列出 example/ 目录）：
+  必须使用 `file_operation(action="read"|"list", path="<相对skill包的路径>", skill_id="<当前skill_id>")`
+  禁止用 `run_command` + `type`/`Get-Content` 拼接 `Skills\\xxx\\...` 路径
+- **执行 skill 包内脚本**（如 `python scripts/do_search.py ...`）：
+  必须用 `run_command(command="python scripts/xxx.py ...", skill_id="<当前skill_id>")`
+  传 skill_id 后，命令中的相对路径会自动相对于 skill 包目录解析
+- 禁止凭空猜测路径，禁止拼 `Skills\\<skill名>\\...` 这种绝对相对路径
+
 【防重复执行铁律】（强制执行）
 1. 收到工具返回结果后，**必须**先分析内容是否满足任务需求，禁止盲目发起下一次调用
 2. 当已获得有效结果或任务目标已达成时，**必须立即调用 finish** 结束对话

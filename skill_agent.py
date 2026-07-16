@@ -167,6 +167,20 @@ class SkillAgent:
     def set_uploaded_files_content(self, content: str) -> None:
         self._uploaded_files_content = content or ""
 
+    def _consume_uploaded_files_content(self, user_content: str) -> str:
+        """将上传文件内容追加到用户消息内容中，并清空缓存（一次性消费）。
+
+        文件内容嵌入用户消息而非系统提示词，原因：
+        - 文件内容是用户数据，不属于系统指令
+        - 仅在当前轮次出现一次，不会在 agent 多步循环中重复注入系统提示词
+        - 覆盖所有路径（direct_reply / plan_confirm / agent loop）
+        """
+        if self._uploaded_files_content:
+            result = user_content + "\n\n" + self._uploaded_files_content
+            self._uploaded_files_content = ""
+            return result
+        return user_content
+
     @property
     def _get_compactor(self) -> ContextCompactor | None:
         if self._compactor is None and self.memory is not None:
@@ -354,8 +368,6 @@ class SkillAgent:
             self._dynamic_prompt.update_recent_memory_summary(recent_summary_section)
         if self._conversation_constraints:
             self._dynamic_prompt.update_conversation_constraints(self._conversation_constraints)
-        if self._uploaded_files_content:
-            self._dynamic_prompt.update_uploaded_files(self._uploaded_files_content)
         return self._dynamic_prompt.build()
 
     @property
@@ -512,9 +524,12 @@ class SkillAgent:
         try:
             model = get_chat_model(enable_thinking=self._enable_thinking)
 
+            # 将上传文件内容追加到用户消息
+            user_content = self._consume_uploaded_files_content(user_query.strip())
+
             messages = [
                 {"role": "system", "content": f"你是一个友好的助手。请直接用简洁的语言回答用户问题。\n\n{self.get_base_info()}"},
-                {"role": "user", "content": user_query.strip()},
+                {"role": "user", "content": user_content},
             ]
 
             # 使用流式 API 进行回复
@@ -542,7 +557,7 @@ class SkillAgent:
                 log_callback(json.dumps(asdict(result.token_usage), ensure_ascii=False), "token_usage")
 
             if self.memory is not None:
-                self.memory.append_message(self._conversation_id, "user", user_query.strip())
+                self.memory.append_message(self._conversation_id, "user", user_content)
                 self.memory.append_message(self._conversation_id, "assistant", reply)
 
             logger.debug("直接回复完成，回复长度: %s", len(reply))
@@ -681,7 +696,9 @@ class SkillAgent:
             if hasattr(self, "_last_uploaded_files") and self._last_uploaded_files is not None:
                 metadata["files"] = self._last_uploaded_files
                 self._last_uploaded_files = None
-            self.memory.append_message(cid, "user", user_query.strip(), metadata=metadata)
+            # 将上传文件内容追加到用户消息（一次性消费）
+            user_content = self._consume_uploaded_files_content(user_query.strip())
+            self.memory.append_message(cid, "user", user_content, metadata=metadata)
             # 持久化计划展示
             self.memory.append_message(cid, "assistant", plan_display, metadata={"type": "plan"})
             # 持久化确认请求（type=plan_confirm 区别于普通 ask_user，避免被现有 ask_user 历史检测误触）
@@ -1068,8 +1085,10 @@ class SkillAgent:
             metadata["files"] = self._last_uploaded_files
             # Clear after using
             self._last_uploaded_files = None
-        self.memory.append_message(cid, "user", user_query.strip(), metadata=metadata)
-        messages.append({"role": "user", "content": user_query.strip()})
+        # 将上传文件内容追加到用户消息（一次性消费，计划确认流程已在 _request_plan_confirmation 中消费）
+        user_content = self._consume_uploaded_files_content(user_query.strip())
+        self.memory.append_message(cid, "user", user_content, metadata=metadata)
+        messages.append({"role": "user", "content": user_content})
 
     def _persist_after_tool_turn(
         self,
@@ -1080,10 +1099,55 @@ class SkillAgent:
         active_skill_ids: list[str],
         messages: list[dict[str, Any]],
         log_callback: Optional[Callable[[str, str], Any]] = None,
+        *,
+        tool_call_id: str | None = None,
+        reasoning_content: str | None = None,
+        arg_str: str | None = None,
     ) -> None:
+        """持久化并追加一轮工具调用的完整消息序列。
+
+        关键修复：同时向 messages 追加 assistant(tool_calls) 与 tool(result) 两条消息，
+        并为二者持久化相同的 tool_call_id，使跨轮重建历史时仍能正确关联。
+        遵守 OpenAI tool calling 协议：tool 消息前必须有带 tool_calls 的 assistant 消息。
+        """
         assert self.memory is not None
         cid = self._conversation_id
-        args_str=json.dumps(args, ensure_ascii=False, indent=2)
+        if arg_str is None:
+            args_str = json.dumps(args, ensure_ascii=False, indent=2)
+        else:
+            args_str = arg_str
+        if tool_call_id is None:
+            tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
+
+        # 1) 持久化 assistant 工具调用消息（带 tool_calls 元数据，供 get_messages 还原）
+        assistant_content = reasoning_content or None
+        assistant_metadata: dict[str, Any] = {
+            "type": "tool_call",
+            "name": fname,
+            "args": args_str,
+            "tool_call_id": tool_call_id,
+        }
+        if reasoning_content:
+            assistant_metadata["reasoning_content"] = reasoning_content
+        self.memory.append_message(
+            cid,
+            "assistant",
+            reasoning_content or "",
+            metadata=assistant_metadata,
+        )
+
+        # 2) 追加 assistant tool_call 到 messages（OpenAI 协议必需）
+        messages.append({
+            "role": "assistant",
+            "content": assistant_content,
+            "tool_calls": [{
+                "id": tool_call_id,
+                "type": "function",
+                "function": {"name": fname, "arguments": arg_str or args_str},
+            }],
+        })
+
+        # 3) 持久化 tool 结果消息
         if fname == "select_skill":
             meta_type = "skill"
         elif fname == "ask_user":
@@ -1094,9 +1158,17 @@ class SkillAgent:
             cid,
             "tool",
             str(result),
-            metadata={"type": meta_type, "name": fname, "args": args_str},
+            metadata={"type": meta_type, "name": fname, "args": args_str, "tool_call_id": tool_call_id},
         )
-        messages.append({"role": "tool", "name": fname, "content": str(result)})
+
+        # 4) 追加 tool 结果到 messages（带 tool_call_id 关联）
+        messages.append({
+            "role": "tool",
+            "name": fname,
+            "tool_call_id": tool_call_id,
+            "content": str(result),
+        })
+
         if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
             self.memory.set_active_skills(cid, list(active_skill_ids))
             active_skills_text = self._build_active_skills_text(active_skill_text, active_skill_ids)
@@ -1106,6 +1178,98 @@ class SkillAgent:
                     messages[i] = {"role": "system", "content": self._dynamic_prompt.build()}
                     logger.debug("更新系统提示词_dynamic_prompt：%s", self._dynamic_prompt.build())
                     break
+
+    def _append_tool_pair(
+        self,
+        fname: str,
+        args: dict | str,
+        result: str,
+        messages: list[dict[str, Any]],
+        *,
+        reasoning_content: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> str:
+        """向 messages 追加 assistant(tool_calls)+tool(result) 完整序列（不持久化）。
+
+        用于不进入 LLM 循环的「用户确认后立即执行」等特殊路径，避免出现孤立 tool 消息。
+        返回生成的 tool_call_id。
+        """
+        if tool_call_id is None:
+            tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
+        if isinstance(args, str):
+            arg_str = args
+        else:
+            arg_str = json.dumps(args, ensure_ascii=False)
+        messages.append({
+            "role": "assistant",
+            "content": reasoning_content or None,
+            "tool_calls": [{
+                "id": tool_call_id,
+                "type": "function",
+                "function": {"name": fname, "arguments": arg_str},
+            }],
+        })
+        messages.append({
+            "role": "tool",
+            "name": fname,
+            "tool_call_id": tool_call_id,
+            "content": str(result),
+        })
+        return tool_call_id
+
+    def _persist_tool_pair_only(
+        self,
+        fname: str,
+        args: dict | str,
+        result: str,
+        messages: list[dict[str, Any]],
+        *,
+        meta_type: str = "base_tool",
+        tool_call_id: str | None = None,
+        reasoning_content: str | None = None,
+    ) -> str:
+        """持久化并追加 assistant(tool_calls)+tool(result) 序列，但不动 active skills。
+
+        专用于 ask_user 历史恢复等特殊路径，避免重复触发 select_skill 逻辑。
+        """
+        assert self.memory is not None
+        cid = self._conversation_id
+        if isinstance(args, str):
+            arg_str = args
+        else:
+            arg_str = json.dumps(args, ensure_ascii=False, indent=2)
+        if tool_call_id is None:
+            tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
+
+        assistant_metadata: dict[str, Any] = {
+            "type": "tool_call",
+            "name": fname,
+            "args": arg_str,
+            "tool_call_id": tool_call_id,
+        }
+        if reasoning_content:
+            assistant_metadata["reasoning_content"] = reasoning_content
+        self.memory.append_message(
+            cid,
+            "assistant",
+            reasoning_content or "",
+            metadata=assistant_metadata,
+        )
+        self.memory.append_message(
+            cid,
+            "tool",
+            str(result),
+            metadata={"type": meta_type, "name": fname, "args": arg_str, "tool_call_id": tool_call_id},
+        )
+        self._append_tool_pair(
+            fname,
+            arg_str,
+            result,
+            messages,
+            reasoning_content=reasoning_content,
+            tool_call_id=tool_call_id,
+        )
+        return tool_call_id
 
     def _summarize_session_skills(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
         import threading
@@ -1450,8 +1614,11 @@ class SkillAgent:
                                             if fname == "run_command":
                                                 command = str(args.get("command", "") or "").strip()
                                                 result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
-                                                self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
-                                                messages.append({"role": "tool", "name": fname, "content": str(result)})
+                                                # 关键修复：追加完整 assistant(tool_calls)+tool 序列
+                                                self._persist_tool_pair_only(
+                                                    fname, args, str(result), messages,
+                                                    meta_type="base_tool",
+                                                )
                                                 if log_callback:
                                                     log_callback(f"执行命令: {command}", "base_tool")
                                                     log_callback(str(result), "base_tool")
@@ -1484,19 +1651,29 @@ class SkillAgent:
                                                         return err_msg
                                                     if log_callback:
                                                         log_callback(f"依赖安装成功: {msg}", "base_tool")
-                                                    self.memory.append_message(self._conversation_id, "tool", f"依赖安装成功: {msg}", metadata={"name": "install_dependencies"})
-                                                    messages.append({"role": "tool", "name": "install_dependencies", "content": f"依赖安装成功: {msg}"})
+                                                    # 关键修复：依赖安装结果也作为完整 tool pair 追加
+                                                    self._persist_tool_pair_only(
+                                                        "install_dependencies",
+                                                        {"msg": msg},
+                                                        f"依赖安装成功: {msg}",
+                                                        messages,
+                                                        meta_type="base_tool",
+                                                    )
                                                     
                                                     result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
-                                                    self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
-                                                    messages.append({"role": "tool", "name": fname, "content": str(result)})
+                                                    self._persist_tool_pair_only(
+                                                        fname, args, str(result), messages,
+                                                        meta_type="base_tool",
+                                                    )
                                                     if log_callback:
                                                         log_callback(f"执行命令: {command}", "base_tool")
                                                         log_callback(str(result), "base_tool")
                                                 else:
                                                     result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
-                                                    self.memory.append_message(self._conversation_id, "tool", str(result), metadata={"name": fname})
-                                                    messages.append({"role": "tool", "name": fname, "content": str(result)})
+                                                    self._persist_tool_pair_only(
+                                                        fname, args, str(result), messages,
+                                                        meta_type="base_tool",
+                                                    )
                                                     if log_callback:
                                                         log_callback(f"执行命令: {command}", "base_tool")
                                                         log_callback(str(result), "base_tool")
@@ -1673,13 +1850,9 @@ class SkillAgent:
                     args = {}
                 logger.debug("解析工具调用: fname=%s, args keys=%s", fname, list(args.keys()) if isinstance(args, dict) else type(args))
 
-                if full_thinking and self.memory is not None:
-                    self.memory.append_message(
-                        self._conversation_id,
-                        "assistant",
-                        full_thinking,
-                        metadata={"type": "think"},
-                    )
+                # 关键修复：full_thinking 不再单独作为一条 assistant(think) 消息持久化，
+                # 而是作为 assistant tool_call 消息的 content 一起写入，
+                # 避免出现 tool 前面只有 think assistant 而无 tool_calls 的断裂结构。
 
                 if fname == "request_tool_details":
                     tool_names = args.get("tool_names", [])
@@ -1714,7 +1887,7 @@ class SkillAgent:
                     if definitions_missing:
                         result_parts.append(f"\n⚠️ 以下工具未找到定义：{', '.join(definitions_missing)}")
                     
-                    result = "\n".join(result_parts)
+                    tool_result = "\n".join(result_parts)
                     
                     for tool_name, tool_def in self._supplied_tool_definitions.items():
                         tool_schema = model.format_tool_for_request(tool_def)
@@ -1728,19 +1901,41 @@ class SkillAgent:
                             logger.debug("  工具 [%s] 已动态添加到可用工具集", tool_name)
                             logger.debug("  当前 tools 列表大小: %s", len(tools))
                     
+                    # 关键修复：通过 _persist_after_tool_turn 同时追加 assistant(tool_calls) + tool(result)
                     if self.memory is not None:
-                        self.memory.append_message(
-                            self._conversation_id,
-                            "tool",
-                            str(result),
-                            metadata={"type": "tool_definition", "name": fname, "args": arg_str},
+                        self._persist_after_tool_turn(
+                            fname,
+                            args,
+                            tool_result,
+                            active_skill_text,
+                            active_skill_ids,
+                            messages,
+                            log_callback,
+                            reasoning_content=full_thinking or None,
+                            arg_str=arg_str,
                         )
-                    messages.append({"role": "tool", "name": fname, "content": str(result)})
+                    else:
+                        _call_id = f"call_{uuid.uuid4().hex[:12]}"
+                        messages.append({
+                            "role": "assistant",
+                            "content": full_thinking or None,
+                            "tool_calls": [{
+                                "id": _call_id,
+                                "type": "function",
+                                "function": {"name": fname, "arguments": arg_str},
+                            }],
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "name": fname,
+                            "tool_call_id": _call_id,
+                            "content": str(tool_result),
+                        })
                     
                     if log_callback:
                         found_names = [d.get("name", "") for d in definitions_found]
                         log_callback(f"获取工具定义: {', '.join(found_names)}", "tool")
-                        log_callback(str(result), "base_tool")
+                        log_callback(str(tool_result), "base_tool")
                     
                     continue
 
@@ -1811,9 +2006,14 @@ class SkillAgent:
                                     active_skill_text,
                                     active_skill_ids,
                                     messages,
+                                    reasoning_content=full_thinking or None,
+                                    arg_str=json.dumps(ask_args, ensure_ascii=False),
                                 )
                             else:
-                                messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
+                                self._append_tool_pair(
+                                    "ask_user", ask_args, str(result), messages,
+                                    reasoning_content=full_thinking or None,
+                                )
                             if log_callback:
                                 log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
                             _emit_token_usage()
@@ -1845,9 +2045,14 @@ class SkillAgent:
                                 active_skill_text,
                                 active_skill_ids,
                                 messages,
+                                reasoning_content=full_thinking or None,
+                                arg_str=json.dumps(ask_args, ensure_ascii=False),
                             )
                         else:
-                            messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
+                            self._append_tool_pair(
+                                "ask_user", ask_args, str(result), messages,
+                                reasoning_content=full_thinking or None,
+                            )
                         if log_callback:
                             log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
                         _emit_token_usage()
@@ -1877,9 +2082,14 @@ class SkillAgent:
                                 active_skill_text,
                                 active_skill_ids,
                                 messages,
+                                reasoning_content=full_thinking or None,
+                                arg_str=json.dumps(ask_args, ensure_ascii=False),
                             )
                         else:
-                            messages.append({"role": "tool", "name": "ask_user", "content": str(result)})
+                            self._append_tool_pair(
+                                "ask_user", ask_args, str(result), messages,
+                                reasoning_content=full_thinking or None,
+                            )
                         if log_callback:
                             log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
                         _emit_token_usage()
@@ -2022,11 +2232,39 @@ class SkillAgent:
                     log_callback(r, "base_tool")
 
                 if terminate and final is not None:
+                    # 关键修复：终止型工具（如 finish）也要先追加 assistant(tool_calls)+tool 完整序列
                     if self.memory is not None:
+                        self._persist_after_tool_turn(
+                            fname,
+                            args,
+                            str(result),
+                            active_skill_text,
+                            active_skill_ids,
+                            messages,
+                            log_callback,
+                            reasoning_content=full_thinking or None,
+                            arg_str=arg_str,
+                        )
                         cid = self._conversation_id
-                        self.memory.append_message(cid, "tool", str(result), metadata={"name": fname})
                         metadata = {"token_usage": asdict(self._token_usage)}
                         self.memory.append_message(cid, "assistant", str(final), metadata=metadata)
+                    else:
+                        _call_id = f"call_{uuid.uuid4().hex[:12]}"
+                        messages.append({
+                            "role": "assistant",
+                            "content": full_thinking or None,
+                            "tool_calls": [{
+                                "id": _call_id,
+                                "type": "function",
+                                "function": {"name": fname, "arguments": arg_str},
+                            }],
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "name": fname,
+                            "tool_call_id": _call_id,
+                            "content": str(result),
+                        })
                     self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     if log_callback:
                         log_callback(str(final), "assistant")
@@ -2044,9 +2282,26 @@ class SkillAgent:
                             active_skill_ids,
                             messages,
                             log_callback,
+                            reasoning_content=full_thinking or None,
+                            arg_str=arg_str,
                         )
                     else:
-                        messages.append({"role": "tool", "name": fname, "content": str(result)})
+                        _call_id = f"call_{uuid.uuid4().hex[:12]}"
+                        messages.append({
+                            "role": "assistant",
+                            "content": full_thinking or None,
+                            "tool_calls": [{
+                                "id": _call_id,
+                                "type": "function",
+                                "function": {"name": fname, "arguments": arg_str},
+                            }],
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "name": fname,
+                            "tool_call_id": _call_id,
+                            "content": str(result),
+                        })
                     if log_callback:
                         log_callback(_ask_user_ui_log_payload(args), "await_user")
                     _emit_token_usage()
@@ -2054,9 +2309,34 @@ class SkillAgent:
                     return SKILL_AGENT_AWAITING_USER_REPLY
 
                 if self.memory is not None:
-                    self._persist_after_tool_turn(fname, args,str(result), active_skill_text, active_skill_ids, messages, log_callback)
+                    self._persist_after_tool_turn(
+                        fname,
+                        args,
+                        str(result),
+                        active_skill_text,
+                        active_skill_ids,
+                        messages,
+                        log_callback,
+                        reasoning_content=full_thinking or None,
+                        arg_str=arg_str,
+                    )
                 else:
-                    messages.append({"role": "tool", "name": fname, "content": str(result)})
+                    _call_id = f"call_{uuid.uuid4().hex[:12]}"
+                    messages.append({
+                        "role": "assistant",
+                        "content": full_thinking or None,
+                        "tool_calls": [{
+                            "id": _call_id,
+                            "type": "function",
+                            "function": {"name": fname, "arguments": arg_str},
+                        }],
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "name": fname,
+                        "tool_call_id": _call_id,
+                        "content": str(result),
+                    })
                     if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
                         active_skills_text = self._build_active_skills_text(active_skill_text, active_skill_ids)
                         self._dynamic_prompt.update_active_skills(active_skills_text)

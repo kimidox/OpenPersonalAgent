@@ -805,6 +805,19 @@ class BaseChatModel(ABC):
             if log_callback:
                 log_callback(str({fname: {"args": args}}), "response")
 
+            # 关键修复：追加 assistant(tool_calls) 消息，满足 OpenAI 协议
+            # （tool 消息前必须有带 tool_calls 的 assistant 消息）
+            _call_id = f"call_{id(args):x}"
+            current_messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": _call_id,
+                    "type": "function",
+                    "function": {"name": fname, "arguments": arg_str},
+                }],
+            })
+
             result = self.execute_function_call(fname, args, executor)
 
             if log_callback:
@@ -815,7 +828,12 @@ class BaseChatModel(ABC):
                     log_callback("任务完成", "response")
                 return "任务完成"
 
-            current_messages.append({"role": "tool", "name": fname, "content": str(result)})
+            current_messages.append({
+                "role": "tool",
+                "name": fname,
+                "tool_call_id": _call_id,
+                "content": str(result),
+            })
             current_screenshot = executor.screenshot()
             current_messages.append(
                 {

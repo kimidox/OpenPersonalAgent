@@ -261,15 +261,12 @@ class InputArea:
 
         self._logger.info(f"InputArea: 发送消息: {text[:50] if text else ''}...")
 
-        # 将文件摘要注入消息
-        final_text = self._file_upload_area.inject_summary_to_message(text)
-
         # 获取文件列表
         files = self._file_upload_area.get_files()
 
-        # 调用回调
+        # 调用回调（文件内容由 main_window 嵌入系统提示词，不注入用户消息）
         if self._on_send:
-            self._on_send(final_text, files)
+            self._on_send(text, files)
 
         # 清空输入和文件
         self._input_field.value = ""

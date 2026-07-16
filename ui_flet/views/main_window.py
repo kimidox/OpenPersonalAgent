@@ -234,6 +234,9 @@ class MainWindow:
             self._save_window_state()
             self._dismiss_close_dialog()
             self._page.window.prevent_close = False
+            # 必须先 update 同步 prevent_close=False 到客户端，
+            # 否则 window.close() 触发的关闭会被客户端的旧值(True)阻止
+            self._page.update()
             await self._page.window.close()
 
         # 创建对话框
@@ -608,7 +611,7 @@ class MainWindow:
         """
         self._logger.info(f"发送消息: {text[:50] if text else ''}...")
         if files:
-            self._logger.info(f"附带文件: {[f.name for f in files]}")
+            self._logger.info(f"附带文件: {[f.original_name for f in files]}")
 
         # 检查 SkillAgent 是否初始化
         if not self.skill_agent:
@@ -638,9 +641,15 @@ class MainWindow:
         if self._input_area:
             self._input_area.clear()
 
+        # 将文件内容嵌入系统提示词
+        if self.skill_agent:
+            from ui_flet.utils.file_upload_controller import FileUploadController
+            files_content = FileUploadController.generate_full_content_from_list(files)
+            self.skill_agent.set_uploaded_files_content(files_content)
+
         # 添加用户消息到消息列表
         if self._message_list:
-            self._message_list.add_message("user", text)
+            self._message_list.add_message("user", text, files=files)
 
         # 设置 UI 状态为运行中
         self._app_state.ui.set_task_running(True)
@@ -1096,25 +1105,19 @@ class MainWindow:
             self._logger.exception(f"[StreamCallback] _on_stream_started 执行异常: {e}")
 
     def _on_stream_tick(self, session_id: str, shown_chars: int) -> None:
-        """流推进回调"""
-        self._logger.debug(f"[StreamCallback] _on_stream_tick 被调用: session_id={session_id}, shown_chars={shown_chars}")
-        try:
-            if not self._message_list:
-                self._logger.warning("[StreamCallback] _on_stream_tick: _message_list 为空，跳过更新")
-                return
+        """流推进回调（已废弃 UI 副作用）
 
-            full_text = self._app_state.stream.get_full_text()
-            shown_text = full_text[:shown_chars]
-            self._logger.debug(f"[StreamCallback] _on_stream_tick: full_text长度={len(full_text)}, shown_text长度={len(shown_text)}")
+        历史问题：此处调用 `_message_list.update_last_message(shown_text)`，会把流式
+        assistant 文本写到"最后一条卡片"。但多 step 场景下"最后一条卡片"经常不是本次流
+        的目标卡片（tool_call/tool 卡片刚被插入到末尾），导致 assistant 文本被错误写进
+        tool 卡片，表现为"工具消息卡片和助手消息卡片内容一样"。
 
-            # 更新最后一条消息的内容
-            success = self._message_list.update_last_message(shown_text)
-            if not success:
-                self._logger.warning(f"[StreamCallback] _on_stream_tick: update_last_message 返回 False")
-            else:
-                self._logger.debug(f"[StreamCallback] _on_stream_tick: UI 更新完成")
-        except Exception as e:
-            self._logger.exception(f"[StreamCallback] _on_stream_tick 执行异常: {e}")
+        修复后：UI 增量直接由 `typing_loop` 通过闭包内捕获的 `target_card` 驱动，
+        此回调仅保留用于调试观测，不再产生任何 UI 副作用。
+        """
+        self._logger.debug(
+            f"[StreamCallback] _on_stream_tick (no-op): session_id={session_id}, shown_chars={shown_chars}"
+        )
 
     def _on_stream_completed(self, session_id: str, token_usage: dict[str, Any] | None) -> None:
         """流完成回调"""
@@ -1146,12 +1149,15 @@ class MainWindow:
                     f"[StreamCallback] 已更新并完成目标卡片 (id={id(target_card)}, length={len(full_text)})"
                 )
             else:
-                # 回退：目标卡片丢失时仍按"最后一条卡片"行为兜底
-                success = self._message_list.update_last_message(full_text)
-                if not success:
-                    self._logger.warning("[StreamCallback] update_last_message 返回 False")
-                self._message_list.finalize_last_message(token_usage)
-                self._logger.info("[StreamCallback] 已完成最后一条消息的渲染（fallback）")
+                # 目标卡片丢失：放弃写入，而不是回退到 update_last_message。
+                # 历史回退路径会调用 update_last_message(full_text)，但多 step 场景下
+                # "最后一条卡片"可能是新一轮流刚创建的卡片，写入会造成跨流污染
+                # （表现为"工具卡片内容 == 助手卡片内容"）。丢失单条消息比污染更可接受。
+                self._logger.warning(
+                    f"[StreamCallback] 目标卡片为空，跳过写入 "
+                    f"(full_text 长度={len(full_text)})；"
+                    f"该情况通常意味着 _on_stream_started 未创建卡片"
+                )
 
             # 同步完整消息到悬浮窗口
             if self._floating_chat_window:
@@ -1202,6 +1208,21 @@ class MainWindow:
                 if not stream_state.is_streaming():
                     self._logger.info(
                         f"[打字机] typing_loop: 流已停止，退出循环 (迭代 #{iteration_count})"
+                    )
+                    break
+
+                # 关键修复（脆弱点 A）：目标卡片漂移检测。
+                # 闭包内捕获的 target_card 是局部变量，但 buf 每轮从 stream_state 重新取。
+                # 如果新一轮流已经在 _on_stream_started 中把 _current_typing_card 替换成
+                # 新卡片，本轮 typing_loop 就不该再写旧卡片——否则会把新流的 buffer 文本
+                # 错误地写入上一轮已 finalize 的 assistant / tool 卡片，表现为
+                # "工具消息卡片和助手消息卡片内容一样"。
+                if target_card is not self._current_typing_card:
+                    self._logger.info(
+                        f"[打字机] typing_loop: 目标卡片已切换"
+                        f"（my_target={target_card_id}, "
+                        f"current={id(self._current_typing_card) if self._current_typing_card else None}），"
+                        f"退出循环 (迭代 #{iteration_count})"
                     )
                     break
 
@@ -1572,6 +1593,8 @@ class MainWindow:
         try:
             self._save_window_state()
             self._page.window.prevent_close = False
+            # 先 update 同步 prevent_close=False 到客户端，避免 close 被旧值阻止
+            self._page.update()
             await self._page.window.close()
         except Exception as e:
             self._logger.exception(f"退出应用失败: {e}")

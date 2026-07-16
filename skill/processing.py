@@ -1,8 +1,23 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from .types import SkillDefinition
+
+# 内联附属文件的大小上限（字节），避免一次内联过大文件
+_INLINE_FILE_MAX_BYTES = 16 * 1024  # 16 KB
+
+# 可内联的文件扩展名
+_INLINEABLE_EXTS = (".md", ".markdown", ".txt", ".json", ".yaml", ".yml", ".csv")
+
+# 匹配 SKILL.md 中「读取/加载/参考 <path>」等附属文件引用。
+# 支持：读取`./example/x.md`、读取 'example/x.md'、读取附属文件 example/x.md、加载 "x.md"
+_ATTACH_RE = re.compile(
+    r"(?:读取附属文件|读取附属|读取|加载|参考|引用|引入)\s*"
+    r"[`'\"]?\s*\.?/?([^\s`'\"\)\]]+\.(?:md|markdown|txt|json|yaml|yml|csv))\s*[`'\"]?",
+    re.IGNORECASE,
+)
 
 
 def normalize_skill_id(skill_id: str) -> str:
@@ -107,6 +122,89 @@ def skills_auto_matched_for_query(skills: list[SkillDefinition], user_query: str
     return always + keyed
 
 
+def _collect_referenced_attach_paths(body: str) -> list[str]:
+    """从 SKILL.md 正文中提取应被内联的附属文件相对路径。
+
+    过滤掉明显是命令模板的反引号内容（如 scripts/xxx.py、session_id、title 等字段名）。
+    仅保留 .md/.txt/.json/.yaml/.yml/.csv 等文档类文件。
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for m in _ATTACH_RE.finditer(body or ""):
+        rel = m.group(1).strip().strip("'\"").lstrip("./").replace("\\", "/")
+        # 排除 scripts/ 下的脚本（它们是命令模板，不是要读取的附属文件）
+        if rel.startswith("scripts/"):
+            continue
+        # 排除 SKILL.md 自身
+        if rel.lower() in ("skill.md", "skill_memory.md"):
+            continue
+        if rel.lower().endswith(_INLINEABLE_EXTS) and rel not in seen:
+            seen.add(rel)
+            ordered.append(rel)
+    return ordered
+
+
+def _inline_attach_files(skill: SkillDefinition) -> str:
+    """读取并内联 SKILL.md 中引用的附属文件内容。
+
+    返回附加到正文后的文本块；如果没有任何可内联文件，返回空字符串。
+    """
+    if not skill.relative_path:
+        return ""
+
+    try:
+        import config
+        skill_pkg_dir = Path(config.WORKER_DIR) / skill.relative_path.parent
+    except Exception:
+        return ""
+
+    if not skill_pkg_dir.is_dir():
+        return ""
+
+    refs = _collect_referenced_attach_paths(skill.body or "")
+    if not refs:
+        return ""
+
+    blocks: list[str] = []
+    for rel in refs:
+        target = (skill_pkg_dir / rel).resolve()
+        # 安全检查：目标必须在 skill 包目录下
+        try:
+            target.relative_to(skill_pkg_dir.resolve())
+        except ValueError:
+            blocks.append(f"\n\n---\n⚠️ 引用的附属文件超出 skill 包范围，已忽略：`{rel}`")
+            continue
+
+        if not target.exists():
+            blocks.append(f"\n\n---\n⚠️ 文档引用的附属文件不存在：`{rel}`（请勿再尝试读取该文件）")
+            continue
+        if not target.is_file():
+            blocks.append(f"\n\n---\n⚠️ 引用的路径不是文件：`{rel}`")
+            continue
+
+        try:
+            size = target.stat().st_size
+        except OSError:
+            continue
+
+        if size > _INLINE_FILE_MAX_BYTES:
+            blocks.append(
+                f"\n\n---\n⚠️ 附属文件 `{rel}` 体积过大（{size} 字节），未自动内联。"
+                f"如需读取，请用 file_operation(action=\"read\", path=\"{rel}\", skill_id=\"{skill.skill_id}\")"
+            )
+            continue
+
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace").rstrip()
+        except Exception as e:
+            blocks.append(f"\n\n---\n⚠️ 读取附属文件 `{rel}` 失败：{e}")
+            continue
+
+        blocks.append(f"\n\n---\n## 附属文件：`{rel}`（已自动内联，无需再调用工具读取）\n\n{content}")
+
+    return "".join(blocks)
+
+
 def format_skill_for_prompt(s: SkillDefinition) -> str:
     res=""
     header = f"# Skill: {s.name} (`{s.skill_id}`)\n"
@@ -117,6 +215,11 @@ def format_skill_for_prompt(s: SkillDefinition) -> str:
         res+= f"\n{s.description}\n\n"
 
     res += "---\n\n" + s.body
+
+    # 自动内联附属文件（避免 LLM 再发工具调用读取导致路径问题）
+    inlined = _inline_attach_files(s)
+    if inlined:
+        res += inlined
 
     # 追加执行记忆（如果存在且非空）
     if s.memory_content and s.memory_content.strip():

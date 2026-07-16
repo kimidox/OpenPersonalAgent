@@ -149,13 +149,12 @@ class SqliteMemory(Memory):
         if limit is not None and limit > 0:
             rows = rows[-limit:]
         
-        filtered_rows = []
-        for r in rows:
-            ext = r.ext if r.ext else {}
-            if ext.get("type") != "tool_call":
-                filtered_rows.append(r)
-        
-        return [Message.from_orm(r).to_llm_dict() for r in filtered_rows]
+        # 关键修复：不再过滤 type=="tool_call" 的 assistant 消息。
+        # 这些消息保存的是 LLM 发起的工具调用，必须在历史中还原为
+        # 带 tool_calls 的 assistant 消息（由 Message.to_llm_dict 处理），
+        # 否则后续的 tool 结果会变成"孤立 tool 消息"，违反 OpenAI 协议，
+        # 导致 LLM 无法理解任务进度并重复执行工具。
+        return [Message.from_orm(r).to_llm_dict() for r in rows]
 
     def get_message_records(
         self,

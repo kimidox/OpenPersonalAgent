@@ -423,27 +423,25 @@ class SkillManagementPage:
         """删除按钮点击事件"""
         self._confirm_delete(skill_id)
 
-    def _on_import_click(self, e) -> None:
+    async def _on_import_click(self, e) -> None:
         """导入按钮点击事件"""
-        if self._file_picker:
-            self._file_picker.on_result = self._on_import_result
-            self._file_picker.pick_files(
-                allowed_extensions=["md"],
-                allow_multiple=False,
-            )
-
-    def _on_import_result(self, e: ft.ControlEvent) -> None:
-        """导入文件选择结果"""
-        if e.files and len(e.files) > 0:
-            file_path = e.files[0].path
-            try:
-                manager = self._get_skill_manager()
-                skill_id = manager.import_skill(file_path)
-                self._load_skills()
-                self._show_snackbar("Skill已导入", success=True)
-            except Exception as ex:
-                self._logger.exception("导入Skill失败")
-                self._show_snackbar(f"导入失败: {ex}", success=False)
+        if not self._file_picker:
+            return
+        files = await self._file_picker.pick_files(
+            allowed_extensions=["md"],
+            allow_multiple=False,
+        )
+        if not files:
+            return
+        file_path = files[0].path
+        try:
+            manager = self._get_skill_manager()
+            skill_id = manager.import_skill(file_path)
+            self._load_skills()
+            self._show_snackbar("Skill已导入", success=True)
+        except Exception as ex:
+            self._logger.exception("导入Skill失败")
+            self._show_snackbar(f"导入失败: {ex}", success=False)
 
     def _on_export_click(self, skill_id: str) -> None:
         """导出按钮点击事件"""
@@ -453,22 +451,27 @@ class SkillManagementPage:
             return
 
         if self._file_picker:
-            self._file_picker.on_result = lambda e: self._on_export_result(e, skill_id)
-            self._file_picker.save_file(
-                file_name=f"{skill.name}.md",
-                allowed_extensions=["md"],
+            self._page.run_task(
+                self._export_skill,
+                skill_id,
+                f"{skill.name}.md",
             )
 
-    def _on_export_result(self, e: ft.ControlEvent, skill_id: str) -> None:
-        """导出文件选择结果"""
-        if e.path:
-            try:
-                manager = self._get_skill_manager()
-                manager.export_skill(skill_id, e.path)
-                self._show_snackbar(f"Skill已导出到 {e.path}", success=True)
-            except Exception as ex:
-                self._logger.exception("导出Skill失败")
-                self._show_snackbar(f"导出失败: {ex}", success=False)
+    async def _export_skill(self, skill_id: str, file_name: str) -> None:
+        """导出 Skill 到文件"""
+        path = await self._file_picker.save_file(
+            file_name=file_name,
+            allowed_extensions=["md"],
+        )
+        if not path:
+            return
+        try:
+            manager = self._get_skill_manager()
+            manager.export_skill(skill_id, path)
+            self._show_snackbar(f"Skill已导出到 {path}", success=True)
+        except Exception as ex:
+            self._logger.exception("导出Skill失败")
+            self._show_snackbar(f"导出失败: {ex}", success=False)
 
     def _on_publish_click(self, skill_id: str) -> None:
         """发布按钮点击事件"""

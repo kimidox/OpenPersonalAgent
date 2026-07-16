@@ -111,7 +111,7 @@ class FileUploadController:
             file_path=file_path,
             file_size=file_path.stat().st_size,
             extension=extension,
-            mime_type=UploadedFileInfo().mime_map.get(extension),
+            mime_type=UploadedFileInfo.mime_map.get(extension),
             upload_time=datetime.now(),
         )
 
@@ -298,6 +298,27 @@ class FileUploadController:
 
         files_content = "\n\n".join(contents)
         return f"<user_upload_files>\n{files_content}\n</user_upload_files>"
+
+    @staticmethod
+    def generate_full_content_from_list(files: list[UploadedFileInfo]) -> str:
+        """从文件列表生成完整内容（用于系统提示词），不依赖控制器内部状态"""
+        contents = []
+        for file_info in files:
+            if not file_info.is_success:
+                continue
+            result = file_info.parse_result
+            if not result:
+                continue
+            content = result.content or ""
+            if not content:
+                continue
+            contents.append(
+                f"<filename>{file_info.original_name}</filename>\n"
+                f"<file_content>\n{content}\n</file_content>"
+            )
+        if not contents:
+            return ""
+        return f"<user_upload_files>\n" + "\n\n".join(contents) + "\n</user_upload_files>"
 
     def inject_summary_to_message(self, user_message: str) -> str:
         combined_summary = self.generate_combined_summary()

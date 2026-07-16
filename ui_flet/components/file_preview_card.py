@@ -183,7 +183,7 @@ class FilePreviewCard(ft.Container):
         )
         self.width = 240
         self.height = 64
-        self.animate = ft.animation.Animation(150, ft.AnimationCurve.EASE_OUT)
+        self.animate = ft.Animation(150, ft.AnimationCurve.EASE_OUT)
 
         if not self._is_read_only:
             self.on_hover = self._on_hover

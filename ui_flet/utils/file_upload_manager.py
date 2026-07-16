@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 
 SUPPORTED_EXTENSIONS = ["docx", "pdf", "md", "txt", "json", "xlsx", "xls"]
@@ -33,18 +33,15 @@ class UploadedFileInfo:
     parse_status: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    mime_map: dict[str, str] = field(
-        default_factory=lambda: {
-            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "pdf": "application/pdf",
-            "md": "text/markdown",
-            "txt": "text/plain",
-            "json": "application/json",
-            "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "xls": "application/vnd.ms-excel",
-        },
-        repr=False,
-    )
+    mime_map: ClassVar[dict[str, str]] = {
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "pdf": "application/pdf",
+        "md": "text/markdown",
+        "txt": "text/plain",
+        "json": "application/json",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls": "application/vnd.ms-excel",
+    }
 
     @property
     def is_success(self) -> bool:
