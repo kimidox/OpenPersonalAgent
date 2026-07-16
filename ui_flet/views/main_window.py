@@ -107,6 +107,15 @@ class MainWindow:
         # 流式打字机任务
         self._stream_typing_task: asyncio.Task | None = None
         self._stream_typing_active = False
+        # 打字机目标卡片：用于把"打字机只更新最后一条卡片"改为"打字机只更新该具体卡片"，
+        # 避免 LLM 在一个 step 内既输出思考文本又调用工具时，旧打字机任务把
+        # 已积累的 assistant 文本写入随后追加的 tool_call/tool 卡片中。
+        self._current_typing_card: Any = None
+        # 打字机代数计数器：每次启动新任务时 +1，typing_loop 在每轮迭代检查；
+        # 配合 _stream_typing_active，可保证旧任务在收到 _stop_stream_typing
+        # 信号后立即退出，不会因为后续 _start_stream_typing 再次把 active
+        # 置 True 而"复活"。
+        self._typing_generation: int = 0
 
         # 初始化窗口配置
         self._setup_window()
@@ -115,9 +124,9 @@ class MainWindow:
         # 创建布局
         self._build_layout()
 
-        # 加载初始会话
-        self._logger.info("MainWindow: 开始加载初始会话")
-        self._load_initial_conversations()
+        # 异步加载初始会话
+        self._logger.info("MainWindow: 开始异步加载初始会话")
+        self._page.run_task(self._load_initial_conversations_async)
         self._logger.info("MainWindow: 初始化完成")
 
     def _setup_window(self) -> None:
@@ -728,43 +737,68 @@ class MainWindow:
         # 检查是否有正在运行的任务
         if self._worker_thread and self._worker_thread.is_alive():
             self._logger.warning("该会话正在执行中，请结束后再删除")
+            self._show_snackbar("该会话正在执行中，请结束后再删除", error=True)
             return
 
         # 检查是否只剩一个会话
-        if self._app_state.session.conversation_count() <= 1:
+        if self._app_state.session.conversation_count() < 1:
             self._logger.warning("至少保留一个会话")
+            self._show_snackbar("至少保留一个会话", error=True)
             return
 
+        # 记录当前会话 ID（用于后续判断是否需要清空消息列表）
+        current_cid = self._app_state.session.get_current_conversation()
+        is_current_conversation = current_cid == conversation_id
+
+        # Step 1: 如果删除的是当前会话，先切换到另一个会话
+        if is_current_conversation:
+            all_sessions = self._app_state.session.get_all_conversations()
+            for session in all_sessions:
+                if session.conversation_id != conversation_id:
+                    self._switch_to_conversation(session.conversation_id)
+                    break
+
+        # Step 2: 先执行数据库删除（确保持久化成功后再更新 UI）
         try:
-            # 如果删除的是当前会话，切换到另一个会话
-            current_cid = self._app_state.session.get_current_conversation()
-            if current_cid == conversation_id:
-                # 找到另一个会话
-                all_sessions = self._app_state.session.get_all_conversations()
-                for session in all_sessions:
-                    if session.conversation_id != conversation_id:
-                        self._switch_to_conversation(session.conversation_id)
-                        break
-
-            # 更新侧边栏
-            if self._conversation_sidebar:
-                self._conversation_sidebar.remove_conversation(conversation_id)
-
-            # 从内存中删除会话
             if self._memory:
                 self._memory.clear_conversation(conversation_id)
-
-            # 从状态管理中移除
-            self._app_state.session.remove_conversation(conversation_id)
-
-            # 清空消息列表（如果删除的是当前会话）
-            if current_cid == conversation_id and self._message_list:
-                self._message_list.clear()
-
-            self._logger.info(f"已删除会话: {conversation_id}")
-
+            self._logger.info(f"数据库删除成功: {conversation_id}")
         except Exception as e:
-            self._logger.exception(f"删除会话失败: {e}")
+            self._logger.exception(f"数据库删除失败: {e}")
+            self._show_snackbar("删除会话失败，请重试", error=True)
+            # 数据库删除失败，不更新 UI，保持原状态
+            return
+
+        # Step 3: 数据库删除成功后，更新 UI 和状态
+        # 更新侧边栏
+        if self._conversation_sidebar:
+            self._conversation_sidebar.remove_conversation(conversation_id)
+
+        # 从状态管理中移除
+        self._app_state.session.remove_conversation(conversation_id)
+
+        # 清空消息列表（如果删除的是当前会话）
+        if is_current_conversation and self._message_list:
+            self._message_list.clear()
+
+        self._logger.info(f"已删除会话: {conversation_id}")
+        self._show_snackbar("会话已删除")
+
+    def _show_snackbar(self, message: str, error: bool = False) -> None:
+        """
+        显示提示消息
+
+        Args:
+            message: 提示消息内容
+            error: 是否为错误消息
+        """
+        colors = ThemeManager().get_color_scheme()
+        self._page.snack_bar = ft.SnackBar(
+            content=ft.Text(message, color=colors.text_on_primary),
+            bgcolor=colors.error if error else colors.success,
+        )
+        self._page.snack_bar.open = True
+        self._page.update()
 
     def _handle_rename_conversation(self, conversation_id: str, new_title: str) -> None:
         """
@@ -954,7 +988,32 @@ class MainWindow:
         except Exception as e:
             self._logger.exception(f"加载会话消息失败: {e}")
 
-    def _load_initial_conversations(self) -> None:
+    async def _load_initial_conversations_async(self) -> None:
+        """异步加载初始会话"""
+        try:
+            self._logger.info("开始异步加载初始会话")
+
+            # 显示加载状态
+            if self._conversation_sidebar:
+                self._conversation_sidebar.show_loading()
+
+            # 在后台线程执行同步操作
+            await asyncio.get_event_loop().run_in_executor(
+                None, self._load_initial_conversations_sync
+            )
+
+            # 隐藏加载状态
+            if self._conversation_sidebar:
+                self._conversation_sidebar.hide_loading()
+
+            self._logger.info("初始会话加载完成")
+        except Exception:
+            self._logger.exception("异步加载初始会话失败")
+            # 发生异常时也要隐藏加载状态
+            if self._conversation_sidebar:
+                self._conversation_sidebar.hide_loading()
+
+    def _load_initial_conversations_sync(self) -> None:
         """加载初始会话列表"""
         if not self.skill_agent or not self._conversation_sidebar:
             return
@@ -966,12 +1025,17 @@ class MainWindow:
                 if (c.conversation_id or "").strip()
             ]
 
-            # 过滤出有消息的会话
-            sessions_with_messages = []
-            for conv in all_sessions:
-                cid = (conv.conversation_id or "").strip()
-                if cid and self._memory and self._memory.get_message_records(cid):
-                    sessions_with_messages.append(conv)
+            # 使用单次查询获取所有有消息的会话 ID
+            conversation_ids_with_messages = (
+                self._memory.get_conversations_with_messages()
+                if self._memory else set()
+            )
+
+            # 筛选有消息的会话
+            sessions_with_messages = [
+                conv for conv in all_sessions
+                if (conv.conversation_id or "").strip() in conversation_ids_with_messages
+            ]
 
             # 如果没有会话，创建新会话
             if not sessions_with_messages:
@@ -1018,9 +1082,12 @@ class MainWindow:
             msg_type = "think" if stream_type == StreamType.THINK else "assistant"
             self._logger.info(f"[StreamCallback] 流类型: {stream_type}, 消息类型: {msg_type}")
 
-            # 添加一条空消息卡片
-            self._message_list.add_message(msg_type, "")
-            self._logger.info("[StreamCallback] 已添加空消息卡片")
+            # 添加一条空消息卡片，并立即把它登记为本次流的"打字机目标卡片"。
+            # 之后无论 LLM 在同一 step 内追加多少 tool_call/tool 卡片，
+            # 打字机任务都只更新这张卡片，不会污染后续卡片。
+            new_card = self._message_list.add_message(msg_type, "")
+            self._current_typing_card = new_card
+            self._logger.info(f"[StreamCallback] 已添加空消息卡片, target_card_id={id(new_card)}")
 
             # 启动打字机效果任务
             self._start_stream_typing()
@@ -1053,6 +1120,9 @@ class MainWindow:
         """流完成回调"""
         self._logger.info(f"[StreamCallback] _on_stream_completed 被调用, session_id={session_id}, token_usage={token_usage}")
         try:
+            # 先在清除目标卡片之前保留引用——下面 _stop_stream_typing 会清空它
+            target_card = self._current_typing_card
+
             # 停止打字机效果
             self._stop_stream_typing()
             self._logger.info("[StreamCallback] 打字机效果已停止")
@@ -1065,13 +1135,23 @@ class MainWindow:
             full_text = self._app_state.stream.get_full_text()
             self._logger.info(f"[StreamCallback] 完整文本长度: {len(full_text)}")
 
-            success = self._message_list.update_last_message(full_text)
-            if not success:
-                self._logger.warning("[StreamCallback] update_last_message 返回 False")
-
-            # 完成最后一条消息的渲染
-            self._message_list.finalize_last_message(token_usage)
-            self._logger.info("[StreamCallback] 消息渲染已完成")
+            # 关键：直接更新"目标卡片"（即本次流开始时新建的卡片），
+            # 而不是 update_last_message。原因：在 tool/base_tool 处理器中，
+            # 流的 complete 会在 add_message 之前触发；如果按最后一条卡片更新，
+            # 会把 assistant 的最终文本写进刚追加的 tool_call/tool 卡片。
+            if target_card is not None:
+                target_card.update_content(full_text)
+                target_card.finalize_content(token_usage)
+                self._logger.info(
+                    f"[StreamCallback] 已更新并完成目标卡片 (id={id(target_card)}, length={len(full_text)})"
+                )
+            else:
+                # 回退：目标卡片丢失时仍按"最后一条卡片"行为兜底
+                success = self._message_list.update_last_message(full_text)
+                if not success:
+                    self._logger.warning("[StreamCallback] update_last_message 返回 False")
+                self._message_list.finalize_last_message(token_usage)
+                self._logger.info("[StreamCallback] 已完成最后一条消息的渲染（fallback）")
 
             # 同步完整消息到悬浮窗口
             if self._floating_chat_window:
@@ -1091,48 +1171,107 @@ class MainWindow:
             return
 
         self._stream_typing_active = True
-        self._logger.info("[打字机] _stream_typing_active 已设置为 True")
+        # 增加代数：让可能仍在跑的旧任务在下一轮迭代立刻退出。
+        # 配合 _stream_typing_active，避免"旧任务被取消后被新任务的 active=True 复活"。
+        self._typing_generation += 1
+        current_generation = self._typing_generation
+        # 在闭包内捕获目标卡片。后续无论 message_list 追加多少 tool_call/tool 卡片，
+        # 打字机都只更新这一张卡片，绝不调用 update_last_message。
+        target_card = self._current_typing_card
+        target_card_id = id(target_card) if target_card is not None else None
+        self._logger.info(
+            f"[打字机] _stream_typing_active 已设置为 True, "
+            f"generation={current_generation}, target_card_id={target_card_id}"
+        )
 
         async def typing_loop() -> None:
-            self._logger.info("[打字机] typing_loop 开始执行")
+            self._logger.info(
+                f"[打字机] typing_loop 开始执行, generation={current_generation}, target_card_id={target_card_id}"
+            )
             iteration_count = 0
 
-            while self._stream_typing_active:
+            while self._stream_typing_active and self._typing_generation == current_generation:
                 iteration_count += 1
                 stream_state = self._app_state.stream
 
-                self._logger.debug(f"[打字机] typing_loop 迭代 #{iteration_count}: is_streaming={stream_state.is_streaming()}, _stream_typing_active={self._stream_typing_active}")
+                self._logger.debug(
+                    f"[打字机] typing_loop 迭代 #{iteration_count}: is_streaming={stream_state.is_streaming()}, "
+                    f"active={self._stream_typing_active}, gen_ok={self._typing_generation == current_generation}"
+                )
 
                 if not stream_state.is_streaming():
-                    self._logger.info(f"[打字机] typing_loop: 流已停止，退出循环 (迭代 #{iteration_count})")
+                    self._logger.info(
+                        f"[打字机] typing_loop: 流已停止，退出循环 (迭代 #{iteration_count})"
+                    )
                     break
 
-                # 如果已经显示完所有字符，等待更多内容
-                if stream_state.get_buffer().is_complete():
-                    self._logger.debug(f"[打字机] typing_loop: 缓冲区已完成，等待更多内容 (迭代 #{iteration_count})")
+                buf = stream_state.get_buffer()
+                if buf.is_complete():
+                    self._logger.debug(
+                        f"[打字机] typing_loop: 缓冲区已完成，等待更多内容 (迭代 #{iteration_count})"
+                    )
                     await asyncio.sleep(0.05)
                     continue
 
-                # 推进流显示
-                self._logger.debug(f"[打字机] typing_loop: 调用 advance_stream() (迭代 #{iteration_count})")
-                stream_state.advance_stream()
+                # 手动推进 buffer——直接修改 shown_chars，**不再调用 stream_state.advance_stream()**，
+                # 因为 advance_stream 会触发 _on_stream_tick → update_last_message，
+                # 在一个 step 内"思考 + 工具调用 + 工具结果 + 下一轮 assistant 文本"混在一起时，
+                # 旧任务的最后一次 advance_stream 会把上一次残留的 assistant 文本
+                # 写进本轮新增的 tool_call/tool 卡片，表现为"调用工具卡片/工具卡片
+                # 重复显示 assistant 文本"。这里只更新本次流的目标卡片。
+                next_shown = min(
+                    len(buf.full_text),
+                    buf.shown_chars + max(1, buf.chars_per_tick),
+                )
+                buf.shown_chars = next_shown
+
+                if target_card is not None:
+                    shown_text = buf.full_text[:next_shown]
+                    try:
+                        target_card.update_content(shown_text)
+                    except Exception as e:
+                        self._logger.warning(f"[打字机] 更新目标卡片失败: {e}")
+
+                # 二次检查 generation：即便 active 被新任务置 True，也能立即识别
+                if self._typing_generation != current_generation:
+                    self._logger.info(
+                        f"[打字机] typing_loop: 代数已变更，退出循环 (迭代 #{iteration_count})"
+                    )
+                    break
 
                 # 控制打字速度
                 await asyncio.sleep(0.03)
 
-            self._logger.info(f"[打字机] typing_loop 循环结束，共迭代 {iteration_count} 次")
             self._stream_typing_active = False
+            self._logger.info(
+                f"[打字机] typing_loop 循环结束，共迭代 {iteration_count} 次, generation={current_generation}"
+            )
 
         try:
             self._logger.info("[打字机] 准备调用 run_task(typing_loop)")
             self._stream_typing_task = self._page.run_task(typing_loop)
-            self._logger.info(f"[打字机] run_task 已调用，task={self._stream_typing_task}")
+            self._logger.info(
+                f"[打字机] run_task 已调用，task={self._stream_typing_task}, generation={current_generation}"
+            )
         except Exception as e:
             self._logger.warning(f"[打字机] 启动打字机效果失败: {e}")
             self._stream_typing_active = False
+            # 失败时让下一次 _start_stream_typing 可以重新启动
+            self._typing_generation += 1
 
     def _stop_stream_typing(self) -> None:
         """停止打字机效果循环"""
+        self._logger.info(
+            f"[打字机] _stop_stream_typing 被调用, current generation={self._typing_generation}"
+        )
+        # 关键修复 1：先让代数 +1，让 typing_loop 在下一轮迭代立刻退出，
+        # 不再受后续 _start_stream_typing 把 active 重新置 True 的影响。
+        self._typing_generation += 1
+        # 关键修复 2：立刻清空目标卡片引用，避免 typing_loop 还在飞的最后一帧
+        # advance_stream 把残留的 assistant 文本写入本 step 内后续追加的
+        # tool_call/tool 卡片（即使 typing_loop 已经"读"了 target_card 的局部变量，
+        # 这一步仍可作为防御性兜底）。
+        self._current_typing_card = None
         self._stream_typing_active = False
         if self._stream_typing_task and not self._stream_typing_task.done():
             try:
@@ -1216,19 +1355,26 @@ class MainWindow:
             self._handle_stream_message(message, "think", conversation_id)
             # 注意：不在此处同步到悬浮窗口，流式消息已在 _handle_stream_message 中处理
         elif msg_type == "tool":
-            # 工具调用消息
+            # 工具调用消息（只在主窗口显示）
+            # 关键修复：必须先 complete 当前流，再添加 tool_call 卡片。
+            # 否则打字机任务仍会继续运行，把 stream buffer 累积的 assistant
+            # 文本通过 update_last_message 写入新创建的 tool_call 卡片，
+            # 同时下一个 step 的 LLM 流来时 stream_state.is_streaming() 仍为
+            # True，会走 append_to_stream 分支造成 buffer 跨 step 累积，
+            # 最终导致多个"调用工具"卡片重复显示流式 assistant 文本。
+            stream_state = self._app_state.stream
+            if stream_state.is_streaming():
+                stream_state.complete_stream()
             if self._message_list:
                 self._message_list.add_message("tool_call", message)
-            # 同步到悬浮窗口
-            if self._floating_chat_window:
-                self._floating_chat_window.add_message("tool_call", message)
         elif msg_type == "base_tool":
-            # 基础工具结果
+            # 基础工具结果（只在主窗口显示）
+            # 同样需要先 complete 当前流，避免 typing 写入新的 tool 卡片
+            stream_state = self._app_state.stream
+            if stream_state.is_streaming():
+                stream_state.complete_stream()
             if self._message_list:
                 self._message_list.add_message("tool", message)
-            # 同步到悬浮窗口
-            if self._floating_chat_window:
-                self._floating_chat_window.add_message("tool", message)
         elif msg_type == "token_usage":
             # Token 使用信息
             self._handle_token_usage(message, conversation_id)
@@ -1259,6 +1405,10 @@ class MainWindow:
             pass  # 可以在这里添加模式徽章显示
         elif msg_type == "plan":
             # 计划消息
+            # 同样需要先 complete 当前流，避免 typing 写入新的 assistant 卡片
+            stream_state = self._app_state.stream
+            if stream_state.is_streaming():
+                stream_state.complete_stream()
             if self._message_list:
                 self._message_list.add_message("assistant", message)
             # 同步到悬浮窗口
@@ -1300,8 +1450,15 @@ class MainWindow:
             if stream_state.is_streaming():
                 stream_state.complete_stream()
 
-            if result and result.strip() and not stream_state.is_streaming():
-                # 如果有结果且流式消息未完成，添加最终消息
+            # 仅在流**从未启动**时把 result 补成一张 assistant 卡片。
+            # 注意：不能用 `not is_streaming()`，因为 is_streaming() 在流
+            # 被 complete_stream 关闭后也会变 False（_is_completed=True），
+            # 那样会把已经流式渲染过的 result 重复再写一张卡。
+            if (
+                result
+                and result.strip()
+                and stream_state.get_current_type() == StreamType.NONE
+            ):
                 if self._message_list:
                     self._message_list.add_message("assistant", result)
 

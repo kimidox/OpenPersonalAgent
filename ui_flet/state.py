@@ -236,6 +236,16 @@ class StreamState:
         self._current_type: StreamType = StreamType.NONE
         self._current_session_id: str | None = None
         self._buffer: StreamBuffer = StreamBuffer()
+        # 关键状态机字段：流是否已被 complete_stream() 关闭。
+        # 修复前：complete_stream() 只触发 _on_stream_completed 回调，并没有把流
+        # 标记为"已结束"，导致 _current_type/_current_session_id 不变，
+        # is_streaming() 仍返回 True。结果是 LLM 在"流式思考→调工具→流式思考"
+        # 这种循环里，下一段流式文本被 append_to_stream 追加到已经完成的缓冲区，
+        # 工具完成时 _on_stream_completed 被多次触发，最终文本累积到了
+        # "调用工具"卡片。
+        # 修复后：complete_stream() 把 _is_completed 置 True，is_streaming()
+        # 在此基础上返回 False，_handle_stream_message 看到 False 后会开新流。
+        self._is_completed: bool = False
 
         # 状态变化回调
         self._on_stream_started: Callable[[str], None] | None = None
@@ -304,12 +314,18 @@ class StreamState:
             marker_end=marker_end,
             chars_per_tick=chars_per_tick,
         )
+        # 新流开启，重置完成标志
+        self._is_completed = False
 
         if self._on_stream_started:
             self._on_stream_started(session_id)
 
     def append_to_stream(self, text: str) -> None:
         """追加文本到流"""
+        # 防御：流已完成后若仍有人调用 append_to_stream，直接忽略，
+        # 避免把内容追加到一个已 finalize 的缓冲区。
+        if self._is_completed:
+            return
         self._buffer.append_text(text)
 
     def advance_stream(self, chars: int | None = None) -> int:
@@ -328,14 +344,30 @@ class StreamState:
         return next_shown
 
     def complete_stream(self, token_usage: dict[str, Any] | None = None) -> None:
-        """完成流"""
+        """完成流
+
+        注意：此方法是幂等的，重复调用只会触发一次回调（基于 _is_completed 标志）。
+        修复前重复调用 complete_stream() 会反复触发 _on_stream_completed，
+        配合 is_streaming() 永远 True 的 bug，文本被反复写入。
+        """
+        if self._is_completed:
+            return
+        self._is_completed = True
         self._buffer.token_usage = token_usage
         if self._on_stream_completed:
             self._on_stream_completed(self._current_session_id or "", token_usage)
 
     def is_streaming(self) -> bool:
         """是否正在流式输出"""
-        return self._current_type != StreamType.NONE and self._current_session_id is not None
+        return (
+            self._current_type != StreamType.NONE
+            and self._current_session_id is not None
+            and not self._is_completed
+        )
+
+    def is_completed(self) -> bool:
+        """流是否已被 complete_stream 关闭（但尚未 clear）"""
+        return self._is_completed
 
     def is_active_for_session(self, session_id: str) -> bool:
         """指定会话是否有活跃流"""
@@ -348,6 +380,7 @@ class StreamState:
         """清除流状态"""
         self._current_type = StreamType.NONE
         self._current_session_id = None
+        self._is_completed = False
         self._buffer.reset()
 
     def get_full_text(self) -> str:

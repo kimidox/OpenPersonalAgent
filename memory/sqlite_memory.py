@@ -350,3 +350,19 @@ class SqliteMemory(Memory):
         }
         result["long_term_memory"] = self._long_term_memory.migrate_from_file()
         return result
+
+    def get_conversations_with_messages(self) -> set[str]:
+        """
+        获取所有有消息记录的会话 ID
+
+        使用单次 SQL DISTINCT 查询一次性获取所有有消息的会话 ID，
+        避免 N+1 查询问题。
+
+        Returns:
+            所有有消息记录的会话 ID 集合
+        """
+        with get_session() as db:
+            # 使用 DISTINCT 查询所有有消息的 conversation_id
+            result = db.query(Messages.conversation_id).distinct().all()
+            # 过滤掉 None 和空字符串，返回集合
+            return {row[0] for row in result if row[0]}

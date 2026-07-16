@@ -206,6 +206,9 @@ class ConversationSidebar(ft.Column):
         self._conversation_items: dict[str, ConversationListItem] = {}
         self._list_container: ft.Column | None = None
 
+        # 加载状态控件
+        self._loading_indicator: ft.ProgressRing | None = None
+
         # 设置状态回调
         self._setup_state_callbacks()
 
@@ -543,3 +546,40 @@ class ConversationSidebar(ft.Column):
         item = self._conversation_items.get(conversation_id)
         if item:
             item.set_title(title)
+
+    def show_loading(self) -> None:
+        """显示加载状态"""
+        if self._loading_indicator is None:
+            self._loading_indicator = ft.ProgressRing(
+                width=24,
+                height=24,
+                stroke_width=2,
+            )
+
+        # 清空现有会话列表
+        if self._list_container:
+            self._list_container.controls.clear()
+
+        # 显示加载指示器
+        if self._list_container:
+            self._list_container.controls.append(
+                ft.Container(
+                    content=self._loading_indicator,
+                    alignment=ft.Alignment(0.5, 0.5),  # 中心对齐 (x=0.5, y=0.5)
+                    padding=20,
+                )
+            )
+
+        self._page.update()
+
+    def hide_loading(self) -> None:
+        """隐藏加载状态"""
+        if self._loading_indicator and self._list_container:
+            # 移除包含 ProgressRing 的所有容器（更可靠的方式）
+            self._list_container.controls = [
+                c for c in self._list_container.controls
+                if not (isinstance(c, ft.Container) and 
+                       isinstance(c.content, ft.ProgressRing))
+            ]
+
+        self._page.update()

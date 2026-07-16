@@ -1,6 +1,7 @@
 {
   "skill_bindings": {
     "2": [
+      "agent_conversation",
       "human_chat_conversation"
     ],
     "meeting_minutes_generator": [

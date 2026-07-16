@@ -245,11 +245,17 @@ class SkillAgent:
         # 根据会话类型设置模板
         self._dynamic_prompt.set_template_for_conversation_type(conv_type)
 
+        # 重建工具目录，避免 clear_all_placeholders() 清空 TOOL_CATALOG 占位符
+        model = get_chat_model(enable_thinking=self._enable_thinking)
+        tool_catalog = model.build_tool_catalog()
+        tool_catalog_text = self._build_tool_catalog_text(tool_catalog)
+
         new_system_prompt = self._build_dynamic_system_prompt(
             catalog,
             active_skill_text=active_skill_text if active_skill_text else None,
             active_skill_ids=active_skill_ids if active_skill_ids else None,
-            user_query=self._last_user_query
+            user_query=self._last_user_query,
+            tool_catalog=tool_catalog_text,
         )
 
         logger.debug(f"更新系统提示词（会话类型: {conv_type}）：{new_system_prompt[:200]}...")
