@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime, timedelta
-
-from PySide6.QtCore import QObject, QTimer
 
 from logger import get_module_logger
 from notification import send_notification
@@ -11,46 +11,50 @@ from scheduled_tasks import ScheduledTask, get_pending_tasks, update_task, updat
 logger = get_module_logger("scheduler")
 
 
-class TaskScheduler(QObject):
+class TaskScheduler:
     CHECK_INTERVAL_MS: int = 5000
 
     def __init__(self, tray_icon=None, main_window=None):
-        super().__init__()
         self._tray_icon = tray_icon
         self._main_window = main_window
-        self._timer: QTimer | None = None
+        self._timer: threading.Timer | None = None
         self._running: bool = False
+        self._lock = threading.Lock()
+        self._timer_thread: threading.Thread | None = None
         logger.info("TaskScheduler 初始化完成")
 
     def start(self) -> None:
-        if self._running:
-            logger.warning("TaskScheduler 已在运行中，跳过启动")
-            return
+        with self._lock:
+            if self._running:
+                logger.warning("TaskScheduler 已在运行中，跳过启动")
+                return
 
-        logger.info("TaskScheduler 启动中...")
-        self._running = True
+            logger.info("TaskScheduler 启动中...")
+            self._running = True
 
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._check_tasks)
-        self._timer.start(self.CHECK_INTERVAL_MS)
+            def _timer_loop():
+                while self._running:
+                    try:
+                        self._check_tasks()
+                    except Exception as e:
+                        logger.exception(f"检查任务时发生错误: {e}")
+                    time.sleep(self.CHECK_INTERVAL_MS / 1000)
 
-        self._check_tasks()
-        logger.info(f"TaskScheduler 已启动，检查间隔: {self.CHECK_INTERVAL_MS}ms")
+            self._timer_thread = threading.Thread(target=_timer_loop, daemon=True)
+            self._timer_thread.start()
+
+            logger.info(f"TaskScheduler 已启动，检查间隔: {self.CHECK_INTERVAL_MS}ms")
 
     def stop(self) -> None:
-        if not self._running:
-            logger.warning("TaskScheduler 未在运行，跳过停止")
-            return
+        with self._lock:
+            if not self._running:
+                logger.warning("TaskScheduler 未在运行，跳过停止")
+                return
 
-        logger.info("TaskScheduler 停止中...")
-        self._running = False
+            logger.info("TaskScheduler 停止中...")
+            self._running = False
 
-        if self._timer:
-            self._timer.stop()
-            self._timer.deleteLater()
-            self._timer = None
-
-        logger.info("TaskScheduler 已停止")
+            logger.info("TaskScheduler 已停止")
 
     def _check_tasks(self) -> None:
         if not self._running:

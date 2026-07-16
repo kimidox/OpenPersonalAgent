@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QTextEdit, QToolButton, QVBoxLayout, QWidget
 
 from ui.styles.style_manager import StyleManager
@@ -28,6 +29,9 @@ class MessageCardWidget(QWidget):
         self._is_finalized = False
         self._token_usage: dict[str, Any] | None = None
         self._files: list[UploadedFileInfo] = files or []
+        self._available_width: int = 0
+        self._stream_throttle_timer: QTimer | None = None
+        self._pending_stream_text: str | None = None
         self._setup_ui()
         if content:
             self.update_content(content)
@@ -36,17 +40,17 @@ class MessageCardWidget(QWidget):
 
     def set_available_width(self, available_width: int) -> None:
         """根据可用宽度设置气泡的最大宽度"""
+        self._available_width = available_width
         if self._msg_type == "user":
             max_width = min(700, int(available_width * 0.6))
-            self._bubble_frame.setMaximumWidth(max_width)
-            self._bubble_container.setMaximumWidth(max_width)
         else:
-            # max_width = min(int(available_width * 0.80), 1200)
-            max_width=int(available_width)
-            self._bubble_frame.setMaximumWidth(max_width)
-            self._bubble_container.setMaximumWidth(max_width)
+            max_width = min(int(available_width * 0.80), 1200)
+        self._bubble_frame.setMaximumWidth(max_width)
+        self._bubble_container.setMaximumWidth(max_width)
         # 确保布局更新
         self.updateGeometry()
+        # 宽度变化后重新计算内容高度
+        QTimer.singleShot(0, self._adjust_content_label_height)
 
     def _setup_ui(self) -> None:
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -89,12 +93,9 @@ class MessageCardWidget(QWidget):
         self._bubble_layout.setContentsMargins(12, 10, 12, 10)
         self._bubble_layout.setSpacing(0)
 
-        # 内容 - 使用 QLabel 但确保正确的换行行为
+        # 内容 - 使用 QLabel，统一开启自动换行
         self._content_label = QLabel()
-        if self._msg_type == "user":
-            self._content_label.setWordWrap(False)
-        else:
-            self._content_label.setWordWrap(True)
+        self._content_label.setWordWrap(True)
         self._content_label.setTextFormat(Qt.RichText)
         self._content_label.setOpenExternalLinks(True)
         self._content_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
@@ -255,13 +256,29 @@ class MessageCardWidget(QWidget):
         trimmed_text = text.strip() if text else ""
         self._raw_content = trimmed_text
         if self._is_finalized:
-            html = markdown_to_html_fragment(trimmed_text)
-            self._content_label.setText(html)
+            self._render_content(trimmed_text)
         else:
-            from html import escape
-            escaped = escape(trimmed_text)
-            escaped = escaped.replace("\n", "<br>")
-            self._content_label.setText(escaped)
+            # 流式输出时节流渲染，避免高频 chunk 导致卡顿
+            self._pending_stream_text = trimmed_text
+            if self._stream_throttle_timer is None:
+                self._stream_throttle_timer = QTimer(self)
+                self._stream_throttle_timer.setSingleShot(True)
+                self._stream_throttle_timer.timeout.connect(self._flush_pending_stream)
+            self._stream_throttle_timer.start(60)
+
+    def _flush_pending_stream(self) -> None:
+        """节流定时器触发：渲染最新的待处理流式文本"""
+        if self._pending_stream_text is None:
+            return
+        text = self._pending_stream_text
+        self._pending_stream_text = None
+        self._render_content(text)
+
+    def _render_content(self, text: str) -> None:
+        """将文本渲染为 HTML 并更新内容标签与高度"""
+        html = markdown_to_html_fragment(text)
+        self._content_label.setText(html)
+        QTimer.singleShot(0, self._adjust_content_label_height)
 
     def append_content(self, text: str) -> None:
         self._raw_content += text
@@ -271,12 +288,17 @@ class MessageCardWidget(QWidget):
         if self._is_finalized:
             return
         self._is_finalized = True
+        # 停止节流定时器，丢弃待渲染文本，确保用最终完整文本渲染
+        if self._stream_throttle_timer is not None:
+            self._stream_throttle_timer.stop()
+        self._pending_stream_text = None
         if token_usage is not None:
             self._token_usage = token_usage
-        
+
         html = markdown_to_html_fragment(self._raw_content)
         self._content_label.setText(html)
-        
+        QTimer.singleShot(0, self._adjust_content_label_height)
+
         if self._token_usage and self._msg_type == "assistant":
             import config
             if config.TOKEN_USAGE_SHOW_IN_UI:
@@ -349,6 +371,61 @@ class MessageCardWidget(QWidget):
     def minimumSizeHint(self):
         return super().minimumSizeHint()
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # 宽度变化后需要按新宽度重新计算内容标签高度
+        QTimer.singleShot(0, self._adjust_content_label_height)
+
+    def _adjust_content_label_height(self) -> None:
+        """根据内容自动调整气泡宽度与内容标签高度。
+
+        QLabel 在开启 wordWrap + RichText 时，adjustSize/sizeHint 无法正确
+        计算富文本换行后的高度。这里用 QTextDocument 按实际宽度计算高度，
+        同时根据内容理想宽度自动收缩气泡，避免短内容也占满整宽。
+        流式输出期间保持最大宽度，避免气泡宽度随内容增长抖动。
+        """
+        label = self._content_label
+        if label is None:
+            return
+        html = label.text()
+        if not html:
+            label.setMaximumHeight(16777215)
+            return
+
+        doc = QTextDocument()
+        doc.setDocumentMargin(0)  # 移除文档边距，与 QLabel 渲染一致
+        doc.setDefaultFont(label.font())  # 使用与 QLabel 相同的字体，确保行高一致
+        doc.setHtml(html)
+
+        if self._msg_type == "user":
+            max_width = (
+                min(700, int(self._available_width * 0.6))
+                if self._available_width > 0 else 700
+            )
+        else:
+            max_width = (
+                min(int(self._available_width * 0.80), 1200)
+                if self._available_width > 0 else 1200
+            )
+        # 流式输出时保持最大宽度（避免宽度随内容增长抖动），完成后才按内容收缩
+        if self._is_finalized:
+            ideal_width = int(doc.idealWidth()) + 24  # 24 为 bubble 左右内边距
+            bubble_width = max(min(ideal_width, max_width), 150)
+        else:
+            bubble_width = max(max_width, 150)
+        old_max = self._bubble_frame.maximumWidth()
+        if old_max != bubble_width:
+            self._bubble_frame.setMaximumWidth(bubble_width)
+            self._bubble_container.setMaximumWidth(bubble_width)
+
+        # 按气泡宽度计算内容高度
+        w = bubble_width - 24
+        if w <= 0:
+            w = 200
+        doc.setTextWidth(w)
+        h = int(doc.size().height())
+        label.setFixedHeight(h)
+
     def _apply_copy_button_style(self) -> None:
         self._copy_button.setObjectName("skillAgentCopyButton")
         style = StyleManager.get_style("message_card_copy_button")
@@ -365,7 +442,6 @@ class MessageCardWidget(QWidget):
         clipboard = QApplication.clipboard()
         clipboard.setText(self._raw_content)
         self._copy_button.setText("已复制")
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(1500, lambda: self._copy_button.setText("复制"))
 
     def _on_speak_clicked(self) -> None:
@@ -403,7 +479,6 @@ class MessageCardWidget(QWidget):
             QMessageBox.warning(self, "警告", f"朗读失败: {str(e)}")
         
         # 恢复按钮状态
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(2000, lambda: self._speak_button.setText("朗读"))
         QTimer.singleShot(2000, lambda: self._speak_button.setEnabled(True))
 
@@ -425,11 +500,7 @@ class MessageCardWidget(QWidget):
         """Add files to the message card"""
         self._files.extend(files)
         self._add_files_to_ui()
-        
-    def get_files(self) -> list[UploadedFileInfo]:
-        """Get the files associated with this message"""
-        return self._files.copy()
-        
+
     def _add_files_to_ui(self) -> None:
         """Add all stored files to the UI"""
         if not self._files:

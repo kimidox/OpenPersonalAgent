@@ -168,6 +168,12 @@ if REPEAT_DETECTION_WINDOW_SIZE < 1:
 _ice = get_config("INPUT_CLASSIFICATION_ENABLED")
 INPUT_CLASSIFICATION_ENABLED = _env_bool(_ice, True)
 
+# 是否启用复杂任务计划确认环节（true/false，默认 True）
+# 启用后：复杂任务生成执行计划后，会先让用户确认（确认执行/取消/调整计划）再逐步执行
+# 禁用后：计划生成后直接执行（保持原有行为）
+_pce = get_config("PLAN_CONFIRMATION_ENABLED")
+PLAN_CONFIRMATION_ENABLED = _env_bool(_pce, True)
+
 _tusiu = get_config("TOKEN_USAGE_SHOW_IN_UI")
 TOKEN_USAGE_SHOW_IN_UI = _env_bool(_tusiu, True)
 

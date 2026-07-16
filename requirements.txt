@@ -1,5 +1,12 @@
 # GUI框架
-PySide6>=6.5.0
+flet==0.85.3
+PySide6>=6.6.0  # 桌面悬浮球独立进程
+
+# 屏幕信息（用于窗口位置验证，支持多显示器）
+screeninfo>=0.8.0
+
+# 系统通知（可选）
+plyer>=2.1.0  # 用于系统原生通知
 
 # LLM API
 openai>=1.0.0
@@ -29,7 +36,7 @@ jieba>=0.42.1
 
 # 音频处理
 sounddevice>=0.4.6
-numpy>=1.20.0
+numpy>=1.26.0,<2  # onnxruntime 1.17.x / sherpa-onnx 1.10.x 基于 NumPy 1.x ABI，暂不兼容 NumPy 2
 scipy>=1.9.0
 
 # ASR/TTS
@@ -44,4 +51,4 @@ live2d-py>=0.7.0
 PyOpenGL>=3.1.0
 
 # sherpa-onnx[cuda] --extra-index-url https://k2-fsa.github.io/sherpa-onnx/
-sherpa-onnx==1.10.15
+sherpa-onnx==1.10.46

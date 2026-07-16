@@ -1,0 +1,306 @@
+"""
+文件上传控制器
+
+提供文件校验、解析调度、状态管理以及给 LLM 的消息注入功能。
+"""
+from __future__ import annotations
+
+import asyncio
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from logger import get_logger
+from ui_flet.utils.file_upload_manager import UploadedFileInfo, SUPPORTED_EXTENSIONS
+
+logger = get_logger()
+
+
+class FileUploadController:
+    """文件上传控制器"""
+
+    def __init__(self, max_files: int = 5) -> None:
+        self._files: dict[str, UploadedFileInfo] = {}
+        self._max_files = max_files
+        self._callbacks: dict[str, list[Callable[[], None]]] = {
+            "file_added": [],
+            "file_removed": [],
+            "file_parse_started": [],
+            "file_parse_finished": [],
+            "file_parse_error": [],
+            "files_changed": [],
+            "upload_error": [],
+        }
+
+        try:
+            import config
+            self._max_file_size: int = getattr(config, "FILE_UPLOAD_MAX_SIZE_MB", 10) * 1024 * 1024
+        except Exception:
+            self._max_file_size = 10 * 1024 * 1024
+
+    def register_callback(self, event: str, callback: Callable[[], None]) -> None:
+        """注册状态变化回调"""
+        if event in self._callbacks:
+            self._callbacks[event].append(callback)
+
+    def unregister_callback(self, event: str, callback: Callable[[], None]) -> None:
+        """注销状态变化回调"""
+        if event in self._callbacks and callback in self._callbacks[event]:
+            self._callbacks[event].remove(callback)
+
+    def _emit(self, event: str, file_info: Optional[UploadedFileInfo] = None) -> None:
+        for callback in self._callbacks.get(event, []):
+            try:
+                if file_info is not None:
+                    callback(file_info)
+                else:
+                    callback()
+            except Exception:
+                logger.exception(f"FileUploadController: {event} 回调异常")
+
+    def get_supported_extensions(self) -> list[str]:
+        return SUPPORTED_EXTENSIONS
+
+    def get_file_filter(self) -> str:
+        extensions = self.get_supported_extensions()
+        filter_parts = [f"*.{ext}" for ext in extensions]
+        return f"支持的文件 ({' '.join(filter_parts)})"
+
+    def can_add_file(self) -> bool:
+        return len(self._files) < self._max_files
+
+    def get_remaining_slots(self) -> int:
+        """获取剩余可上传文件数量"""
+        return max(0, self._max_files - len(self._files))
+
+    def validate_file(self, file_path: Path) -> Optional[str]:
+        if not file_path.exists():
+            return f"文件不存在: {file_path}"
+        if not file_path.is_file():
+            return f"路径不是文件: {file_path}"
+
+        extension = file_path.suffix.lower().lstrip(".")
+        if extension not in SUPPORTED_EXTENSIONS:
+            return f"不支持的文件类型: {file_path.suffix}"
+
+        file_size = file_path.stat().st_size
+        if file_size > self._max_file_size:
+            size_mb = file_size / (1024 * 1024)
+            max_mb = self._max_file_size / (1024 * 1024)
+            return f"文件过大 ({size_mb:.1f} MB)，最大支持 {max_mb:.0f} MB"
+
+        return None
+
+    def add_file(self, file_path: Path) -> Optional[UploadedFileInfo]:
+        validation_error = self.validate_file(file_path)
+        if validation_error:
+            self._emit_upload_error(validation_error)
+            return None
+
+        if not self.can_add_file():
+            self._emit_upload_error(f"最多只能上传 {self._max_files} 个文件")
+            return None
+
+        file_id = uuid.uuid4().hex
+        extension = file_path.suffix.lower().lstrip(".")
+
+        file_info = UploadedFileInfo(
+            file_id=file_id,
+            original_name=file_path.name,
+            file_path=file_path,
+            file_size=file_path.stat().st_size,
+            extension=extension,
+            mime_type=UploadedFileInfo().mime_map.get(extension),
+            upload_time=datetime.now(),
+        )
+
+        self._files[file_id] = file_info
+        self._emit("file_added", file_info)
+        self._emit("files_changed", file_info)
+
+        self._start_parse(file_id)
+        return file_info
+
+    def remove_file(self, file_id: str) -> None:
+        if file_id not in self._files:
+            return
+
+        file_info = self._files[file_id]
+        del self._files[file_id]
+        self._emit("file_removed", file_info)
+        self._emit("files_changed", file_info)
+
+    def clear_all_files(self) -> None:
+        for file_id in list(self._files.keys()):
+            self.remove_file(file_id)
+
+    def get_file(self, file_id: str) -> Optional[UploadedFileInfo]:
+        return self._files.get(file_id)
+
+    def get_all_files(self) -> list[UploadedFileInfo]:
+        return list(self._files.values())
+
+    def get_parsed_files(self) -> list[UploadedFileInfo]:
+        return [f for f in self._files.values() if f.is_success]
+
+    def has_files(self) -> bool:
+        return len(self._files) > 0
+
+    def file_count(self) -> int:
+        return len(self._files)
+
+    def _start_parse(self, file_id: str) -> None:
+        file_info = self._files.get(file_id)
+        if not file_info:
+            return
+
+        file_info.is_parsing = True
+        file_info.is_parsed = False
+        file_info.parse_error = None
+        file_info.parse_progress = 0
+        file_info.parse_status = "开始解析..."
+        self._emit("file_parse_started", file_info)
+
+        try:
+            from document_parser import parse_file, ParserFactory
+
+            if not ParserFactory.is_supported(file_info.file_path):
+                error = f"不支持的文件类型: {file_info.file_path.suffix}"
+                self._on_parse_error(file_id, error)
+                return
+
+            asyncio.create_task(self._parse_async(file_id, file_info.file_path))
+        except Exception as e:
+            logger.exception("FileUploadController: 启动解析失败")
+            self._on_parse_error(file_id, str(e))
+
+    async def _parse_async(self, file_id: str, file_path: Path) -> None:
+        """异步解析文件"""
+        try:
+            from document_parser import parse_file
+
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, parse_file, file_path)
+
+            if result.is_success:
+                self._on_parse_finished(file_id, result)
+            else:
+                self._on_parse_error(file_id, result.error or "解析失败")
+        except Exception as e:
+            self._on_parse_error(file_id, str(e))
+
+    def _on_parse_finished(self, file_id: str, result: Any) -> None:
+        file_info = self._files.get(file_id)
+        if not file_info:
+            return
+
+        file_info.is_parsing = False
+        file_info.is_parsed = True
+        file_info.parse_result = result
+        file_info.parse_error = None
+        file_info.parse_progress = 100
+        file_info.parse_status = "解析完成"
+        self._emit("file_parse_finished", file_info)
+        logger.info(f"FileUploadController: 文件解析完成 {file_info.original_name}")
+
+    def _on_parse_error(self, file_id: str, error: str) -> None:
+        file_info = self._files.get(file_id)
+        if not file_info:
+            return
+
+        file_info.is_parsing = False
+        file_info.is_parsed = False
+        file_info.parse_result = None
+        file_info.parse_error = error
+        file_info.parse_progress = 0
+        file_info.parse_status = "解析失败"
+        self._emit("file_parse_error", file_info)
+        logger.error(f"FileUploadController: 文件解析失败 {file_info.original_name}: {error}")
+
+    def _emit_upload_error(self, message: str) -> None:
+        logger.warning(f"FileUploadController: {message}")
+        for callback in self._callbacks.get("upload_error", []):
+            try:
+                callback(message)
+            except Exception:
+                logger.exception("FileUploadController: upload_error 回调异常")
+
+    def generate_file_summary(self, file_info: UploadedFileInfo) -> str:
+        if not file_info.is_success:
+            return ""
+
+        result = file_info.parse_result
+        if not result:
+            return ""
+
+        content = result.content or ""
+        summary = result.summary or ""
+        preview = content[:300] if len(content) > 300 else content
+
+        summary_parts = [
+            f"【文件: {file_info.original_name}】",
+            f"类型: {file_info.extension.upper()}",
+            f"大小: {file_info.get_file_size_display()}",
+        ]
+
+        if summary:
+            summary_parts.append(f"摘要: {summary}")
+        if preview:
+            summary_parts.append(f"内容预览:\n{preview}")
+
+        return "\n".join(summary_parts)
+
+    def generate_combined_summary(self) -> str:
+        parsed_files = self.get_parsed_files()
+        if not parsed_files:
+            return ""
+
+        summaries = []
+        for file_info in parsed_files:
+            summary = self.generate_file_summary(file_info)
+            if summary:
+                summaries.append(summary)
+
+        if not summaries:
+            return ""
+
+        header = f"已上传 {len(parsed_files)} 个文件，以下是文件内容摘要："
+        return header + "\n\n" + "\n\n---\n\n".join(summaries)
+
+    def generate_file_full_content(self, file_info: UploadedFileInfo) -> str:
+        if not file_info.is_success:
+            return ""
+
+        result = file_info.parse_result
+        if not result:
+            return ""
+
+        content = result.content or ""
+        if not content:
+            return ""
+
+        return f"<filename>{file_info.original_name}</filename>\n<file_content>\n{content}\n</file_content>"
+
+    def generate_combined_full_content(self) -> str:
+        parsed_files = self.get_parsed_files()
+        if not parsed_files:
+            return ""
+
+        contents = []
+        for file_info in parsed_files:
+            full_content = self.generate_file_full_content(file_info)
+            if full_content:
+                contents.append(full_content)
+
+        if not contents:
+            return ""
+
+        files_content = "\n\n".join(contents)
+        return f"<user_upload_files>\n{files_content}\n</user_upload_files>"
+
+    def inject_summary_to_message(self, user_message: str) -> str:
+        combined_summary = self.generate_combined_summary()
+        if not combined_summary:
+            return user_message
+        return f"{combined_summary}\n\n---\n\n用户消息:\n{user_message}"

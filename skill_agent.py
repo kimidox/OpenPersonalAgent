@@ -155,6 +155,11 @@ class SkillAgent:
         self._step_plan: list[dict] = []
         self._current_step: int = 0
         self._success_criteria: str = ""
+        # 计划确认环节相关状态
+        self._pending_plan: list[dict] = []
+        self._pending_success_criteria: str = ""
+        self._pending_plan_analysis: str = ""
+        self._plan_confirmed: bool = False
 
     def set_file_upload_controller(self, controller: Any) -> None:
         self._tool_ctx.file_upload_controller = controller
@@ -500,31 +505,40 @@ class SkillAgent:
         """无需规划模式：直接由 LLM 生成文本回答。"""
         try:
             model = get_chat_model(enable_thinking=self._enable_thinking)
-            
+
             messages = [
                 {"role": "system", "content": f"你是一个友好的助手。请直接用简洁的语言回答用户问题。\n\n{self.get_base_info()}"},
                 {"role": "user", "content": user_query.strip()},
             ]
-            
-            response = model.client.chat.completions.create(
-                model=model.model_name,
-                messages=messages,
-            )
-            
-            reply = response.choices[0].message.content or ""
-            
-            if log_callback:
-                log_callback(reply, "assistant")
-                # 发送 token_usage 触发 stream_renderer.complete()，使 badge 被应用到卡片
-                if config.TOKEN_USAGE_ENABLED:
-                    from dataclasses import asdict
-                    tu = self._token_usage
-                    log_callback(json.dumps(asdict(tu), ensure_ascii=False), "token_usage")
-            
+
+            # 使用流式 API 进行回复
+            def stream_callback(content: str, msg_type: str) -> None:
+                """流式回调：将 'content' 映射为 'assistant'，'think' 保持不变"""
+                logger.debug("[_direct_reply.stream_callback] 回调被触发: type=%s, content前50字=%s",
+                             msg_type, content[:50] if content else "(空)")
+                if log_callback:
+                    # BaseChatModel 的回调类型是 "content" 或 "think"
+                    # 前端期望的类型是 "assistant" 或 "think"
+                    mapped_type = msg_type if msg_type == "think" else "assistant"
+                    logger.debug("[_direct_reply.stream_callback] 映射类型: %s -> %s, log_callback已提供",
+                                 msg_type, mapped_type)
+                    log_callback(content, mapped_type)
+                else:
+                    logger.debug("[_direct_reply.stream_callback] log_callback 未提供，跳过发送")
+
+            result = model.stream_complete(messages, stream_callback)
+
+            reply = result.content or ""
+
+            # 发送 token_usage 触发 stream_renderer.complete()，使 badge 被应用到卡片
+            if log_callback and config.TOKEN_USAGE_ENABLED and result.token_usage:
+                from dataclasses import asdict
+                log_callback(json.dumps(asdict(result.token_usage), ensure_ascii=False), "token_usage")
+
             if self.memory is not None:
                 self.memory.append_message(self._conversation_id, "user", user_query.strip())
                 self.memory.append_message(self._conversation_id, "assistant", reply)
-            
+
             logger.debug("直接回复完成，回复长度: %s", len(reply))
             return reply
         except Exception as e:
@@ -534,11 +548,11 @@ class SkillAgent:
             logger.error("直接回复失败: %s", e)
             return err
 
-    def _plan_steps(self, user_query: str, tool_catalog_text: str = "", log_callback: Optional[Callable[[str, str], Any]] = None) -> Optional[str]:
+    def _plan_steps(self, user_query: str, tool_catalog_text: str = "", log_callback: Optional[Callable[[str, str], Any]] = None) -> Optional[dict]:
         """对复杂任务制定结构化执行计划。
         
         Returns:
-            格式化后的计划文本（供日志/展示），如果解析失败则返回 None
+            包含 analysis/plan/total_steps/success_criteria 的 dict，如果解析失败则返回 None
         """
         if not config.INPUT_CLASSIFICATION_ENABLED:
             return None
@@ -570,34 +584,164 @@ class SkillAgent:
             json_match = re.search(r'\{[\s\S]*\}', content)
             if json_match:
                 plan_data = json.loads(json_match.group())
-                
+
                 # 保存计划到实例变量
                 self._step_plan = plan_data.get("plan", [])
                 self._current_step = 0
                 self._success_criteria = plan_data.get("success_criteria", "")
-                
-                # 格式化计划供日志展示
-                analysis = plan_data.get("analysis", "")
-                steps = self._step_plan
-                total = plan_data.get("total_steps", len(steps))
-                
-                plan_display = f"📋 **执行计划**（共 {total} 步）\n\n{analysis}\n\n"
-                for s in steps:
-                    plan_display += f"**步骤{s.get('step', '?')}**: {s.get('action', '')}\n"
-                    plan_display += f"  工具: {s.get('tool', '?')} | 预期: {s.get('expected_result', '?')}\n"
-                    plan_display += f"  验证: {s.get('checkpoint', '?')}\n\n"
-                plan_display += f"**成功标准**: {self._success_criteria}"
-                
-                if log_callback:
-                    log_callback(plan_display, "plan")
-                
+                # 同步保存到 pending 变量，供确认环节使用
+                self._pending_plan = list(self._step_plan)
+                self._pending_success_criteria = self._success_criteria
+                self._pending_plan_analysis = plan_data.get("analysis", "")
+
+                total = plan_data.get("total_steps", len(self._step_plan))
                 logger.debug("执行计划制定完成: %s 步, 成功标准: %s", total, self._success_criteria)
-                return plan_display
+                return plan_data
             
             return None
         except Exception as e:
             logger.warning("制定执行计划失败，跳过计划阶段: %s", e)
             return None
+
+    def _format_plan_display(self, plan_data: dict) -> str:
+        """将结构化计划格式化为用户可读的展示文本。"""
+        analysis = plan_data.get("analysis", "") or self._pending_plan_analysis
+        steps = plan_data.get("plan", []) or self._pending_plan
+        total = plan_data.get("total_steps", len(steps))
+        success_criteria = plan_data.get("success_criteria", "") or self._pending_success_criteria
+
+        plan_display = f"📋 **执行计划**（共 {total} 步）\n\n{analysis}\n\n"
+        for s in steps:
+            plan_display += f"**步骤{s.get('step', '?')}**: {s.get('action', '')}\n"
+            plan_display += f"  工具: {s.get('tool', '?')} | 预期: {s.get('expected_result', '?')}\n"
+            plan_display += f"  验证: {s.get('checkpoint', '?')}\n\n"
+        plan_display += f"**成功标准**: {success_criteria}"
+        return plan_display
+
+    def _build_plan_constraints(self) -> str:
+        """将已确认的计划构建为系统提示词约束文本，指导 LLM 按计划执行。"""
+        steps = self._pending_plan
+        if not steps:
+            return ""
+        lines = [
+            "",
+            "【已确认的执行计划 - 必须严格按照计划逐步执行】",
+            f"任务分析：{self._pending_plan_analysis}",
+            "",
+        ]
+        for s in steps:
+            step_no = s.get("step", "?")
+            action = s.get("action", "")
+            tool = s.get("tool", "?")
+            expected = s.get("expected_result", "")
+            checkpoint = s.get("checkpoint", "")
+            lines.append(f"步骤{step_no}: {action}")
+            lines.append(f"  使用工具: {tool}")
+            lines.append(f"  预期结果: {expected}")
+            lines.append(f"  验证方式: {checkpoint}")
+            lines.append("")
+        lines.append(f"成功标准: {self._pending_success_criteria}")
+        lines.append("")
+        lines.append("执行要求：")
+        lines.append("1. 请严格按照上述步骤顺序执行，不要遗漏或跳跃")
+        lines.append("2. 每完成一步，对照 checkpoint 验证是否成功")
+        lines.append("3. 如某步骤失败，分析原因并调整，但不要偏离整体计划")
+        lines.append("4. 所有步骤完成后，对照成功标准确认任务完成，再调用 finish 结束")
+        return "\n".join(lines)
+
+    def _request_plan_confirmation(
+        self,
+        user_query: str,
+        plan_data: dict,
+        log_callback: Optional[Callable[[str, str], Any]] = None,
+    ) -> str:
+        """生成计划后，请求用户确认。返回 SKILL_AGENT_AWAITING_USER_REPLY 以暂停等待用户。"""
+        plan_display = self._format_plan_display(plan_data)
+
+        # 展示计划
+        if log_callback:
+            log_callback(plan_display, "plan")
+
+        confirm_payload = {
+            "question": "以上是为您制定的执行计划，请确认是否开始执行：",
+            "context": plan_display,
+            "choices": ["确认执行", "取消", "调整计划"],
+        }
+
+        if self.memory is not None:
+            cid = self._conversation_id
+            # 持久化原用户需求（此时 run() 尚未走到 _append_model_messages）
+            metadata: dict[str, Any] = {}
+            if hasattr(self, "_last_uploaded_files") and self._last_uploaded_files is not None:
+                metadata["files"] = self._last_uploaded_files
+                self._last_uploaded_files = None
+            self.memory.append_message(cid, "user", user_query.strip(), metadata=metadata)
+            # 持久化计划展示
+            self.memory.append_message(cid, "assistant", plan_display, metadata={"type": "plan"})
+            # 持久化确认请求（type=plan_confirm 区别于普通 ask_user，避免被现有 ask_user 历史检测误触）
+            self.memory.append_message(
+                cid,
+                "tool",
+                json.dumps(confirm_payload, ensure_ascii=False),
+                metadata={
+                    "type": "plan_confirm",
+                    "name": "plan_confirm",
+                    "args": json.dumps(confirm_payload, ensure_ascii=False),
+                },
+            )
+
+        # 触发 UI 确认卡片
+        if log_callback:
+            log_callback(json.dumps(confirm_payload, ensure_ascii=False), "await_user")
+            if config.TOKEN_USAGE_ENABLED:
+                log_callback(json.dumps(asdict(self._token_usage), ensure_ascii=False), "token_usage")
+
+        logger.debug("计划已生成，等待用户确认")
+        return SKILL_AGENT_AWAITING_USER_REPLY
+
+    def _check_plan_confirmation_resume(self, user_query: str) -> Optional[str]:
+        """检测当前是否为「计划确认后的续跑」。
+        
+        Returns:
+            "execute" - 用户确认执行，应跳过分类与重新规划直接进入执行
+            "cancel"  - 用户取消
+            "replan"  - 用户要求调整计划
+            None      - 非计划确认续跑，走正常分类流程
+        """
+        if self.memory is None:
+            return None
+        cid = self._conversation_id
+        if not cid:
+            return None
+        records = self.memory.get_message_records(cid)
+        if not records:
+            return None
+        last = records[-1]
+        if last.get("role") != "tool":
+            return None
+        meta = last.get("metadata") or {}
+        if meta.get("type") != "plan_confirm":
+            return None
+
+        choice = (user_query or "").strip()
+        if choice == "确认执行":
+            self._plan_confirmed = True
+            logger.debug("用户确认执行计划，进入续跑")
+            return "execute"
+        elif choice == "取消":
+            logger.debug("用户取消计划执行")
+            self._pending_plan = []
+            self._pending_success_criteria = ""
+            self._pending_plan_analysis = ""
+            return "cancel"
+        elif choice == "调整计划":
+            logger.debug("用户要求调整计划")
+            self._pending_plan = []
+            self._pending_success_criteria = ""
+            self._pending_plan_analysis = ""
+            return "replan"
+        # 用户输入了其他内容，视为正常新输入
+        return None
 
     def get_conversation_constraints(self) -> str:
         return self._conversation_constraints
@@ -1109,9 +1253,40 @@ class SkillAgent:
         try:
             # 保存当前用户查询，用于后续更新系统提示词时的语义检索
             self._last_user_query = user_query
-            
+
+            # 计划确认续跑检测：若上一轮在等待用户确认计划，根据用户选择决定走向
+            plan_resume = self._check_plan_confirmation_resume(user_query)
+            if plan_resume == "cancel":
+                cancel_msg = "已取消任务执行。"
+                if log_callback:
+                    log_callback(cancel_msg, "assistant")
+                if self.memory is not None:
+                    self.memory.append_message(self._conversation_id, "user", user_query.strip())
+                    self.memory.append_message(
+                        self._conversation_id, "assistant", cancel_msg,
+                        metadata={"token_usage": asdict(self._token_usage)},
+                    )
+                _emit_token_usage()
+                return cancel_msg
+            elif plan_resume == "replan":
+                replan_msg = "好的，请重新描述您的需求或补充说明，我将重新制定执行计划。"
+                if log_callback:
+                    log_callback(replan_msg, "assistant")
+                if self.memory is not None:
+                    self.memory.append_message(self._conversation_id, "user", user_query.strip())
+                    self.memory.append_message(
+                        self._conversation_id, "assistant", replan_msg,
+                        metadata={"token_usage": asdict(self._token_usage)},
+                    )
+                _emit_token_usage()
+                return replan_msg
+
             # 输入分类：判断是否需要规划
-            plan_mode = self._classify_input(user_query)
+            if plan_resume == "execute":
+                plan_mode = PlanMode.COMPLEX_TASK
+                logger.debug("计划确认续跑，跳过分类，直接进入复杂任务执行")
+            else:
+                plan_mode = self._classify_input(user_query)
             logger.debug("输入分类: %s", plan_mode.value)
             
             if log_callback:
@@ -1127,7 +1302,16 @@ class SkillAgent:
                 return self._direct_reply(user_query, log_callback)
             
             if plan_mode == PlanMode.COMPLEX_TASK:
-                planning_instruction = """
+                if self._plan_confirmed:
+                    # 续跑：用户已确认计划，注入已确认计划作为约束
+                    plan_constraints = self._build_plan_constraints()
+                    existing_constraints = self._conversation_constraints
+                    if existing_constraints:
+                        self._conversation_constraints = existing_constraints + plan_constraints
+                    else:
+                        self._conversation_constraints = plan_constraints.lstrip()
+                else:
+                    planning_instruction = """
 
 【复杂任务执行要求 - 强制执行】
 1. 你必须在执行任何工具调用前，先在思考过程中制定完整的执行计划
@@ -1136,11 +1320,11 @@ class SkillAgent:
 4. 如果某步骤失败，请分析原因并调整后续计划
 5. 所有步骤完成后，必须对照计划的 success_criteria 逐项确认任务是否成功
 6. 只有确认所有步骤完成后，才能调用 finish 结束任务"""
-                existing_constraints = self._conversation_constraints
-                if existing_constraints:
-                    self._conversation_constraints = existing_constraints + planning_instruction
-                else:
-                    self._conversation_constraints = planning_instruction.lstrip()
+                    existing_constraints = self._conversation_constraints
+                    if existing_constraints:
+                        self._conversation_constraints = existing_constraints + planning_instruction
+                    else:
+                        self._conversation_constraints = planning_instruction.lstrip()
             
             model = get_chat_model(enable_thinking=self._enable_thinking)
             # 根据会话类型过滤skill目录
@@ -1153,16 +1337,36 @@ class SkillAgent:
             system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query, tool_catalog=tool_catalog_text)
             logger.debug("初始系统提示词：%s", system_prompt)
             
-            # 复杂任务：制定结构化执行计划
+            # 复杂任务：制定结构化执行计划并请求用户确认
             if plan_mode == PlanMode.COMPLEX_TASK:
-                plan_display = self._plan_steps(user_query, tool_catalog_text, log_callback)
-                if plan_display and self.memory is not None:
-                    self.memory.append_message(
-                        self._conversation_id,
-                        "assistant",
-                        plan_display,
-                        metadata={"type": "plan"},
-                    )
+                if self._plan_confirmed:
+                    # 续跑：计划已确认，展示已有计划后直接进入执行
+                    if log_callback and self._pending_plan:
+                        plan_display = self._format_plan_display({
+                            "analysis": self._pending_plan_analysis,
+                            "plan": self._pending_plan,
+                            "total_steps": len(self._pending_plan),
+                            "success_criteria": self._pending_success_criteria,
+                        })
+                        log_callback("✅ 计划已确认，开始按计划执行：\n\n" + plan_display, "plan")
+                else:
+                    # 首次：生成计划
+                    plan_data = self._plan_steps(user_query, tool_catalog_text, log_callback)
+                    if plan_data is not None:
+                        # 启用确认环节：请求用户确认后再执行
+                        if config.PLAN_CONFIRMATION_ENABLED:
+                            return self._request_plan_confirmation(user_query, plan_data, log_callback)
+                        # 未启用确认环节：展示计划后直接执行（保持原有行为）
+                        plan_display = self._format_plan_display(plan_data)
+                        if log_callback:
+                            log_callback(plan_display, "plan")
+                        if self.memory is not None:
+                            self.memory.append_message(
+                                self._conversation_id,
+                                "assistant",
+                                plan_display,
+                                metadata={"type": "plan"},
+                            )
             
             tools = model.build_skill_agent_tools_initial()
             self._supplied_tool_definitions: dict[str, dict] = {}
@@ -1333,12 +1537,20 @@ class SkillAgent:
                 show_thinking = self._enable_thinking
 
                 def _stream_callback(content: str, msg_type: str) -> None:
+                    logger.debug("[run._stream_callback] 回调被触发: type=%s, content前50字=%s",
+                                 msg_type, content[:50] if content else "(空)")
                     if log_callback:
                         # 只有当启用思考模式时才发送 think 类型的消息
                         if msg_type == "think" and not show_thinking:
+                            logger.debug("[run._stream_callback] think消息已禁用，跳过发送")
                             pass  # 不发送思考消息
                         else:
-                            log_callback(content, msg_type)
+                            # 将 'content' 映射为 'assistant'，'think' 保持不变
+                            mapped_type = msg_type if msg_type == "think" else "assistant"
+                            logger.debug("[run._stream_callback] 发送到前端: type=%s -> %s", msg_type, mapped_type)
+                            log_callback(content, mapped_type)
+                    else:
+                        logger.debug("[run._stream_callback] log_callback 未提供，跳过发送")
                     if msg_type == "think":
                         thinking_parts.append(content)
                     elif msg_type == "content":
@@ -1882,4 +2094,6 @@ class SkillAgent:
             return err_msg
         finally:
             self._uploaded_files_content = ""
+            # 重置计划确认标志（pending_plan 不清空，供续跑使用；下次首次规划会覆盖）
+            self._plan_confirmed = False
             logger.debug("===== run() 结束执行 =====")

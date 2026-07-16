@@ -8,6 +8,6 @@ def escape_html(text: str) -> str:
 
 
 def plain_block_html(text: str) -> str:
-    t = text.replace("\r\n", "\n")
-    t = t.replace("\\r\\n", "\n").replace("\\n", "\n")
+    # 仅处理真实换行符，不转换字面量的 "\n"，避免破坏代码内容
+    t = text.replace("\r\n", "\n").replace("\r", "\n")
     return f"<p>{escape(t).replace(chr(10), '<br/>')}</p>"

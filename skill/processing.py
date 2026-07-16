@@ -27,8 +27,7 @@ def summarize_skill(s: SkillDefinition) -> str:
 def build_skills_catalog_text(skills: list[SkillDefinition]) -> str:
     if not skills:
         return (
-            "（当前 Skills 目录下没有可用 Skill；请在 skill/Skills/ 下为每个 Skill 建一级子文件夹，"
-            "并在其中放置与文件夹同名的 .md，或任意一个 .md 作为主文档。）"
+            "当前 Skills 目录下没有可用 Skill"
         )
     lines = [summarize_skill(s) for s in skills]
     lines_str= f"""<Skills>{"".join(lines)}</Skills>"""

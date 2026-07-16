@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from executor import Executor
     from memory.memory import Memory
-    from ui.utils.file_upload_controller import FileUploadController
+    # PySide6 UI 已迁移到备份目录，保留类型提示
+    from ui_pyside6_backup.utils.file_upload_controller import FileUploadController
 
 
 @dataclass

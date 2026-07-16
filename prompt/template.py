@@ -205,7 +205,7 @@ UPLOADED_FILES_SECTION_TEMPLATE: Final[str] = """## 用户上传的文件
 
 # ===== 复杂任务结构化规划提示词模板 =====
 
-COMPLEX_TASK_PLANNING_TEMPLATE: Final[str] = """你是一个复杂任务规划器。请分析用户输入，制定完整的执行计划。
+COMPLEX_TASK_PLANNING_TEMPLATE: Final[str] = """你是一个复杂任务规划器。请分析用户输入，拆解为可逐步执行的 task 列表。
 
 【输出格式】
 请严格按以下JSON格式输出，不要输出任何其他内容：
@@ -214,7 +214,7 @@ COMPLEX_TASK_PLANNING_TEMPLATE: Final[str] = """你是一个复杂任务规划�
     "plan": [
         {{
             "step": 1,
-            "action": "具体要执行的动作描述",
+            "action": "具体要执行的动作描述（用户可读的自然语言）",
             "tool": "需要使用的工具名称（如 run_command, read_file 等）",
             "expected_result": "期望得到的结果",
             "checkpoint": "如何验证该步骤已成功完成"
@@ -226,10 +226,12 @@ COMPLEX_TASK_PLANNING_TEMPLATE: Final[str] = """你是一个复杂任务规划�
 
 【规划要求】
 1. 步骤必须具体可执行，每个步骤对应一个明确的工具调用
-2. 每个步骤必须包含 checkpoint，用于验证是否成功
-3. 步骤之间必须有逻辑依赖关系，不能跳跃
-4. 如果任务不确定需要几个步骤，请设计为最小必要步骤数
-5. 如果某些步骤可能失败，请考虑备选方案
+2. 每个步骤的 action 必须用清晰的自然语言描述，让用户能看懂这一步要做什么
+3. 每个步骤必须包含 checkpoint，用于验证是否成功
+4. 步骤之间必须有逻辑依赖关系，不能跳跃
+5. 如果任务不确定需要几个步骤，请设计为最小必要步骤数
+6. 如果某些步骤可能失败，请考虑备选方案
+7. 拆分粒度适中：每步应是一个独立可验证的子任务，不要过细也不要过粗
 
 【用户的输入】
 {user_query}

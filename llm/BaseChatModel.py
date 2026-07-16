@@ -11,6 +11,9 @@ from typing import Any, Callable, Literal, Optional
 from openai import OpenAI, APIError, BadRequestError, AuthenticationError, RateLimitError, APIConnectionError
 
 import config
+from logger import get_module_logger
+
+logger = get_module_logger("BaseChatModel")
 from executor import Executor
 from base_tool import ATOMIC_TOOL_DEFINITIONS, CONTROL_TOOL_DEFINITIONS, REQUEST_TOOL_DETAILS_DEFINITION
 from llm.token_usage import TokenUsage
@@ -164,11 +167,13 @@ class StreamParser:
             text = "".join(self._reasoning_buffer)
             self._all_reasoning_parts.append(text)
             self._reasoning_buffer.clear()
+            logger.debug("[StreamParser._flush_buffer] 调用回调: type=think, content前50字=%s", text[:50] if text else "(空)")
             self._callback(text, "think")
         if self._content_buffer:
             text = "".join(self._content_buffer)
             self._all_content_parts.append(text)
             self._content_buffer.clear()
+            logger.debug("[StreamParser._flush_buffer] 调用回调: type=content, content前50字=%s", text[:50] if text else "(空)")
             self._callback(text, "content")
         self._last_callback_time = _time.time()
 
@@ -484,16 +489,20 @@ class BaseChatModel(ABC):
         3. 找到的定义会被动态添加到 tools 列表，供后续调用
         
         参数：
-        - tool_name: 工具名称（如 "run_command", "file_operation"）
+        - tool_name: 工具名称（如 "run_command", "file_operation", "select_skill"）
         
         返回：
         - 找到：完整工具定义 dict
         - 未找到：None
         
-        注意：此方法只处理 ATOMIC_TOOL_DEFINITIONS 中的工具，
-              CONTROL 工具在初始化时已直接提供。
+        注意：此方法依次查找 ATOMIC_TOOL_DEFINITIONS 和 CONTROL_TOOL_DEFINITIONS。
         """
+        # 先查找原子工具定义
         for tool_def in ATOMIC_TOOL_DEFINITIONS:
+            if tool_def["name"] == tool_name:
+                return tool_def
+        # 再查找控制工具定义
+        for tool_def in CONTROL_TOOL_DEFINITIONS:
             if tool_def["name"] == tool_name:
                 return tool_def
         return None
@@ -616,6 +625,8 @@ class BaseChatModel(ABC):
           - type="content": 普通文本内容
         - 返回 StreamResult，包含文本回复或工具调用信息
         """
+        logger.debug("[stream_request_llm_with_tools] 方法入口: messages=%d 条, tools=%d 个, callback=%s",
+                     len(messages), len(tools), "已提供" if stream_callback else "未提供")
         try:
             stream = self.get_client().chat.completions.create(
                 model=self.model_name,
@@ -682,6 +693,7 @@ class BaseChatModel(ABC):
           - type="content": 普通文本内容
         - 返回 StreamResult，包含完整文本回复
         """
+        logger.debug("[stream_complete] 方法入口: messages=%d 条, callback=%s", len(messages), "已提供" if stream_callback else "未提供")
         try:
             stream = self.get_client().chat.completions.create(
                 model=self.model_name,

@@ -17,6 +17,11 @@ class MessageListWidget(QScrollArea):
         super().__init__(parent)
         self._message_cards = []
         self._released_cache_data: dict = {}
+        # 可重启的滚动定时器：高频流式 chunk 只保留一次滚动请求，避免定时器堆积
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.setInterval(50)
+        self._scroll_timer.timeout.connect(self.scroll_to_bottom)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -83,11 +88,12 @@ class MessageListWidget(QScrollArea):
         if card is None:
             return False
         card.update_content(content)
-        # 更新宽度
-        list_width = max(100, self.viewport().width())
-        card.set_available_width(list_width)
-        card.adjustSize()
-        QTimer.singleShot(50, self.scroll_to_bottom)
+        # 流式更新时无需每个 chunk 都重设宽度（宽度在创建/resize/finalize 时统一管理），
+        # 避免与卡片内部的宽度收缩逻辑冲突导致气泡宽度抖动
+        if card.is_finalized():
+            list_width = max(100, self.viewport().width())
+            card.set_available_width(list_width)
+        self._scroll_timer.start()  # 可重启定时器，避免高频 chunk 堆积定时器
         return True
 
     def append_to_last_message(self, text: str) -> bool:
@@ -95,10 +101,10 @@ class MessageListWidget(QScrollArea):
         if card is None:
             return False
         card.append_content(text)
-        list_width = max(100, self.viewport().width())
-        card.set_available_width(list_width)
-        card.adjustSize()
-        QTimer.singleShot(50, self.scroll_to_bottom)
+        if card.is_finalized():
+            list_width = max(100, self.viewport().width())
+            card.set_available_width(list_width)
+        self._scroll_timer.start()
         return True
 
     def finalize_last_message(self, token_usage: dict[str, Any] | None = None, mode_badge: str | None = None) -> bool:
@@ -110,7 +116,6 @@ class MessageListWidget(QScrollArea):
             card.set_mode_badge(mode_badge)
         list_width = max(100, self.viewport().width())
         card.set_available_width(list_width)
-        card.adjustSize()
         return True
 
     def scroll_to_bottom(self) -> None:
@@ -134,7 +139,6 @@ class MessageListWidget(QScrollArea):
         list_width = max(100, self.viewport().width())
         for card in self._message_cards:
             card.set_available_width(list_width)
-            card.adjustSize()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -222,14 +226,15 @@ class MessageListWidget(QScrollArea):
             if file_dicts and isinstance(file_dicts, list):
                 files = [UploadedFileInfo.from_dict(d) for d in file_dicts]
             
-            self.add_message(msg_type, content, token_usage=token_usage, files=files)
-        
-        def finalize_all_cards():
+            card = self.add_message(msg_type, content, token_usage=token_usage, files=files)
+            # 历史消息内容完整，立即 finalize，
+            # 避免先显示纯文本再跳变为 markdown 格式的视觉闪现
+            if card is not None and not card.is_finalized():
+                card.finalize_content()
+
+        # 等布局完成后再统一刷新宽度与高度，并滚动到底部
+        def _relayout_after_restore():
             self.update_all_cards_width()
-            for card in self._message_cards:
-                if not card.is_finalized():
-                    card.finalize_content()
             self.scroll_to_bottom()
-        
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(50, finalize_all_cards)
+
+        QTimer.singleShot(50, _relayout_after_restore)

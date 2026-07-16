@@ -1004,7 +1004,7 @@ class SkillAgentMainWindow(QMainWindow):
         if self.stream_renderer.is_active():
             conv_id = self.stream_renderer.get_conversation_id()
             if conv_id == session_tab.conversation_id:
-                self.stream_renderer.append_content("\n\n---\n\n" + plan_text)
+                self.stream_renderer.append("\n\n---\n\n" + plan_text)
 
     def _on_await_user_message(self, spec: dict, session_tab: ChatSessionTab) -> None:
         if self.stream_renderer.is_active():

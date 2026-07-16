@@ -15,7 +15,8 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('ui/styles/ui_skill_agent_styles.css', 'ui/styles'),
+        # PySide6 相关样式已移除
+        # ('ui/styles/ui_skill_agent_styles.css', 'ui/styles'),
         ('application.ico', '.'),
         # 只打包必要的PersonalData子目录，排除模型目录和临时文件
         ('PersonalData/data', 'PersonalData/data'),
@@ -64,9 +65,12 @@ a = Analysis(
         'skill.processing',
         'skill.registry',
         'skill.types',
-        'PySide6.QtWidgets',
-        'PySide6.QtCore',
-        'PySide6.QtGui',
+        # Flet 相关模块
+        'flet',
+        'flet_core',
+        'flet_core.app',
+        'flet_core.page',
+        'flet_core.controls',
         'sqlalchemy.dialects.sqlite',
         'sqlalchemy.orm',
         'openai',
@@ -129,6 +133,14 @@ a = Analysis(
         'autopep8',
         'yapf',
         'black',
+        # 排除 PySide6 相关库（已迁移到 Flet）
+        'PySide6',
+        'PySide6.QtWidgets',
+        'PySide6.QtCore',
+        'PySide6.QtGui',
+        'shiboken6',
+        'PyQt6',
+        'PyQt5',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

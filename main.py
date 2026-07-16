@@ -7,8 +7,10 @@ from database import init_db, engine
 from sqlalchemy import text
 from memory.migration import run_migration, is_migration_completed
 from memory.reindex_fts import reindex_all_memory_segments
-from ui import main as main_desktop_agent
-from ui_skill_agent import main as main_skill_agent
+# 已迁移到 Flet UI，不再使用 PySide6 版本的 ui 模块
+# from ui import main as main_desktop_agent
+# from ui_skill_agent import main as main_skill_agent
+from ui_flet.main import run_app as main_skill_agent
 from recorder import ensure_model_dirs, migrate_models_to_separate_dirs
 
 

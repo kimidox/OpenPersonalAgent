@@ -10,8 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable
 
-from PySide6.QtCore import QThread, Signal
-
 from logger import get_module_logger
 from resource_path import paths
 import config
@@ -161,8 +159,11 @@ def check_gpu_available() -> bool:
             else:
                 logger.info(f"CUDA GPU 不可用，可用 providers: {available_providers}")
                 return False
-        except ImportError:
-            logger.info("onnxruntime 未安装或无法获取 providers，默认使用 CPU")
+        except Exception as e:
+            # onnxruntime 可能因 NumPy 2.x ABI 不兼容、DLL 缺失等原因加载失败，
+            # 这些异常不一定是 ImportError（如 RuntimeError），故此处捕获所有异常，
+            # 保证调用方（如设置界面）不会因此崩溃，默认使用 CPU。
+            logger.info(f"onnxruntime 不可用，默认使用 CPU: {e}")
             return False
     except Exception as e:
         logger.warning(f"检测 GPU 时发生错误: {e}")
@@ -1474,26 +1475,27 @@ class AudioRecorder:
                 callback(str(audio_path), None, error_msg)
             return None
         
-        # 创建转录工作线程
-        worker = AudioTranscribeWorker(audio_path)
-        
-        # 连接信号
+        # 创建回调函数
         def on_finished(path: str, text: str):
             if callback:
                 callback(path, text, None)
-        
+
         def on_error(path: str, error: str):
             if callback:
                 callback(path, None, error)
-        
+
         def on_progress(progress: int, status: str):
             if progress_callback:
                 progress_callback(progress, status)
-        
-        worker.transcribe_finished.connect(on_finished)
-        worker.transcribe_error.connect(on_error)
-        worker.transcribe_progress.connect(on_progress)
-        
+
+        # 创建转录工作线程
+        worker = AudioTranscribeWorker(
+            audio_path,
+            on_finished=on_finished,
+            on_error=on_error,
+            on_progress=on_progress
+        )
+
         # 启动工作线程
         worker.start()
         
@@ -1512,74 +1514,95 @@ def get_recorder() -> AudioRecorder:
     return _recorder_instance
 
 
-class AudioTranscribeWorker(QThread):
+class AudioTranscribeWorker(threading.Thread):
     """
     音频转录工作线程
-    
+
     在后台线程中执行音频转录任务，避免阻塞主线程
     """
-    
-    # 转录完成信号: (audio_path, 转录文本)
-    transcribe_finished = Signal(str, str)
-    # 转录错误信号: (audio_path, 错误信息)
-    transcribe_error = Signal(str, str)
-    # 转录进度信号: (进度百分比, 状态描述)
-    transcribe_progress = Signal(int, str)
-    
-    def __init__(self, audio_path: Path, parent=None):
+
+    def __init__(self, audio_path: Path,
+                 on_finished: Callable[[str, str], None] = None,
+                 on_error: Callable[[str, str], None] = None,
+                 on_progress: Callable[[int, str], None] = None):
         """
         初始化转录工作线程
-        
+
         Args:
             audio_path: 音频文件路径
-            parent: 父对象
+            on_finished: 转录完成回调函数 (audio_path: str, text: str)
+            on_error: 转录错误回调函数 (audio_path: str, error: str)
+            on_progress: 转录进度回调函数 (progress: int, status: str)
         """
-        super().__init__(parent)
+        super().__init__(daemon=True)
         self._audio_path = Path(audio_path) if isinstance(audio_path, str) else audio_path
+        self._on_finished = on_finished
+        self._on_error = on_error
+        self._on_progress = on_progress
+        self._stop_event = threading.Event()
     
     def run(self):
         """执行转录任务"""
         try:
             # 发送开始进度
-            self.transcribe_progress.emit(0, "开始转录...")
-            
+            if self._on_progress:
+                self._on_progress(0, "开始转录...")
+
             # 检查是否被取消
-            if self.isInterruptionRequested():
-                self.transcribe_error.emit(str(self._audio_path), "转录已取消")
+            if self._stop_event.is_set():
+                if self._on_error:
+                    self._on_error(str(self._audio_path), "转录已取消")
                 return
-            
+
             # 检查音频文件是否存在
             if not self._audio_path.exists():
-                self.transcribe_error.emit(str(self._audio_path), f"音频文件不存在: {self._audio_path}")
+                if self._on_error:
+                    self._on_error(str(self._audio_path), f"音频文件不存在: {self._audio_path}")
                 return
-            
+
             # 发送进度
-            self.transcribe_progress.emit(10, "正在加载音频文件...")
-            
+            if self._on_progress:
+                self._on_progress(10, "正在加载音频文件...")
+
             # 检查是否被取消
-            if self.isInterruptionRequested():
-                self.transcribe_error.emit(str(self._audio_path), "转录已取消")
+            if self._stop_event.is_set():
+                if self._on_error:
+                    self._on_error(str(self._audio_path), "转录已取消")
                 return
-            
+
             # 发送进度
-            self.transcribe_progress.emit(30, "正在进行语音识别...")
-            
+            if self._on_progress:
+                self._on_progress(30, "正在进行语音识别...")
+
             # 执行转录
             result = transcribe_audio_with_onnx(self._audio_path)
-            
+
             # 检查是否被取消
-            if self.isInterruptionRequested():
-                self.transcribe_error.emit(str(self._audio_path), "转录已取消")
+            if self._stop_event.is_set():
+                if self._on_error:
+                    self._on_error(str(self._audio_path), "转录已取消")
                 return
-            
+
             # 发送完成进度
-            self.transcribe_progress.emit(100, "转录完成")
-            
+            if self._on_progress:
+                self._on_progress(100, "转录完成")
+
             if result is not None:
-                self.transcribe_finished.emit(str(self._audio_path), result)
+                if self._on_finished:
+                    self._on_finished(str(self._audio_path), result)
             else:
-                self.transcribe_error.emit(str(self._audio_path), "转录失败，返回空结果")
-                
+                if self._on_error:
+                    self._on_error(str(self._audio_path), "转录失败,返回空结果")
+
         except Exception as e:
             logger.exception(f"转录过程中发生错误: {e}")
-            self.transcribe_error.emit(str(self._audio_path), str(e))
+            if self._on_error:
+                self._on_error(str(self._audio_path), str(e))
+
+    def request_interruption(self):
+        """请求取消转录任务"""
+        self._stop_event.set()
+
+    def isInterruptionRequested(self):
+        """检查是否已请求取消"""
+        return self._stop_event.is_set()

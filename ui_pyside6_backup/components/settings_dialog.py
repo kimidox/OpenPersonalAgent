@@ -2689,7 +2689,11 @@ class SettingsDialog(QDialog):
         is_loaded = is_online_model_loaded()
         model_path = get_online_model_path()
         device = get_online_device()
-        gpu_available = check_gpu_available()
+        try:
+            gpu_available = check_gpu_available()
+        except Exception as e:
+            logger.warning(f"检测 GPU 可用性失败，默认使用 CPU: {e}")
+            gpu_available = False
         
         # 优先检查本地模型路径
         local_path = self._local_model_path_edit.text()
