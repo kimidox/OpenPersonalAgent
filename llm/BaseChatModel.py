@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time as _time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -134,6 +135,111 @@ class StreamParser:
     - finish_reason 检测（stop / tool_calls / function_call / length）
     - 流迭代器耗尽兜底
     """
+
+    # 已知工具名集合，用于 XML 兜底解析时的函数名验证，防止 prose 误判
+    _KNOWN_TOOL_NAMES = frozenset(
+        [t["name"] for t in ATOMIC_TOOL_DEFINITIONS]
+        + [t["name"] for t in CONTROL_TOOL_DEFINITIONS]
+        + [REQUEST_TOOL_DETAILS_DEFINITION["name"]]
+    )
+
+    @staticmethod
+    def _extract_tool_call_from_text(text: str) -> Optional[tuple[str, str]]:
+        """
+        从文本中提取 Qwen3 风格的 <tool_call> XML 工具调用。
+
+        用于本地后端（如 llama.cpp + thinking 模式）未把 <tool_call> XML 解析
+        为结构化 tool_calls 字段、而是原样输出到 reasoning_content / content
+        的兜底场景。
+
+        支持两种格式：
+        - 格式 A（Qwen3 原生）：
+            <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function></tool_call>
+        - 格式 B（Hermes JSON）：
+            <tool_call>{"name": "NAME", "arguments": {...}}</tool_call>
+
+        返回 (name, arguments_json_str) 或 None。
+        函数名必须在内置工具名集合中，否则返回 None（防止 prose 误判）。
+        """
+        if not text or "<tool_call>" not in text.lower():
+            return None
+
+        # 多 block 检测：Qwen3 一般单轮只调一个工具，多个时只取第一个但记录 warning
+        block_count = text.lower().count("<tool_call>")
+        if block_count > 1:
+            logger.warning(
+                "[StreamParser] 检测到多个 <tool_call> 块（%d 个），仅处理第一个",
+                block_count,
+            )
+
+        # 截取第一个 <tool_call>...</tool_call> 块
+        block_match = re.search(
+            r"<\s*tool_call\s*>(.*?)<\s*/tool_call\s*>",
+            text, re.DOTALL | re.IGNORECASE,
+        )
+        if not block_match:
+            return None
+        block = block_match.group(1)
+
+        # 格式 A：Qwen3 原生 <function=NAME>...<parameter=KEY>VALUE</parameter>...</function>
+        func_match = re.search(
+            r"<\s*function\s*=\s*([A-Za-z_][\w]*)\s*>(.*?)<\s*/function\s*>",
+            block, re.DOTALL | re.IGNORECASE,
+        )
+        if func_match:
+            name = func_match.group(1)
+            params_text = func_match.group(2)
+            params: dict[str, Any] = {}
+            for key, value in re.findall(
+                r"<\s*parameter\s*=\s*([A-Za-z_][\w]*)\s*>(.*?)<\s*/parameter\s*>",
+                params_text, re.DOTALL | re.IGNORECASE,
+            ):
+                value = value.strip()
+                # 仅对明确是 JSON 复合类型（array/object）的值做解析，
+                # 纯数字/布尔/字符串保持原样——避免 skill_id="8" 被误转为 int 8
+                # 导致与云端结构化 tool_calls 行为不一致（云端始终返回字符串）。
+                if value[:1] in "[{":
+                    try:
+                        params[key] = json.loads(value)
+                    except json.JSONDecodeError:
+                        params[key] = value
+                else:
+                    params[key] = value
+            # 函数名验证：必须在已知工具名集合中
+            if name not in StreamParser._KNOWN_TOOL_NAMES:
+                logger.warning(
+                    "[StreamParser] XML 解析到未知工具名 %r，忽略（可能是 prose 误判）",
+                    name,
+                )
+                return None
+            return name, json.dumps(params, ensure_ascii=False)
+
+        # 格式 B：Hermes / OpenAI JSON 兼容
+        json_match = re.search(r"\{.*\}", block, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group(0))
+                name = data.get("name")
+                if not name:
+                    return None
+                args = data.get("arguments", {})
+                if isinstance(args, dict):
+                    args_str = json.dumps(args, ensure_ascii=False)
+                elif isinstance(args, str):
+                    args_str = args
+                else:
+                    args_str = str(args)
+                if name not in StreamParser._KNOWN_TOOL_NAMES:
+                    logger.warning(
+                        "[StreamParser] JSON 解析到未知工具名 %r，忽略（可能是 prose 误判）",
+                        name,
+                    )
+                    return None
+                return str(name), args_str
+            except json.JSONDecodeError:
+                pass
+
+        return None
 
     def __init__(
         self,
@@ -275,6 +381,25 @@ class StreamParser:
         if not self._tool_call_chunks:
             content_text = "".join(self._all_content_parts).strip()
             reasoning_text = "".join(self._all_reasoning_parts).strip()
+
+            # XML 兜底解析：本地后端（如 llama.cpp + thinking 模式）可能把
+            # <tool_call> XML 输出到 reasoning_content 而非结构化 tool_calls 字段。
+            # 这里从 reasoning / content 中提取 XML 工具调用，转交 agent 执行。
+            parsed = self._extract_tool_call_from_text(reasoning_text) \
+                or self._extract_tool_call_from_text(content_text)
+            if parsed:
+                name, arguments = parsed
+                logger.warning(
+                    "[StreamParser] 从 reasoning/content 中解析到 XML 工具调用 "
+                    "(本地后端未返回结构化 tool_calls): name=%s", name,
+                )
+                return StreamResult.from_tool_call(
+                    name=name,
+                    arguments=arguments,
+                    reasoning_content=reasoning_text,
+                    token_usage=self._token_usage,
+                )
+
             if not content_text and not reasoning_text:
                 return StreamResult(
                     result_type="text",
@@ -375,7 +500,12 @@ class BaseChatModel(ABC):
         self.temperature = temperature
         self.top_p = top_p
         self.frequency_penalty = frequency_penalty
-        self.extra_body = extra_body if extra_body is not None else {"enable_thinking": True}
+        # 默认 extra_body 同时包含 DashScope 和 llama.cpp 两个后端的兼容字段，
+        # 让 enable_thinking 的意图在云端和本地都能生效（见 llm/__init__.py 的 get_chat_model）。
+        self.extra_body = extra_body if extra_body is not None else {
+            "enable_thinking": True,
+            "chat_template_kwargs": {"enable_thinking": True},
+        }
         self._client: Optional[OpenAI] = None
 
     def get_client(self) -> OpenAI:

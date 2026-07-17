@@ -55,14 +55,22 @@ def get_chat_model(
     fp = frequency_penalty if frequency_penalty is not None else current_config.frequency_penalty
     et = enable_thinking if enable_thinking is not None else current_config.enable_thinking
 
-    extra_body = {"enable_thinking": et}
+    # 同时传两个兼容字段：
+    # - enable_thinking (顶层): 阿里云 DashScope 私有字段
+    # - chat_template_kwargs.enable_thinking: llama.cpp 通过 gguf chat template 控制思考模式
+    # llama.cpp 不识别顶层 enable_thinking，会忽略；DashScope 通常忽略 chat_template_kwargs。
+    # 这样无论后端是云端还是本地 llama.cpp，关闭思考的意图都能真正生效。
+    extra_body = {
+        "enable_thinking": et,
+        "chat_template_kwargs": {"enable_thinking": et},
+    }
 
     if not model:
         return QwenChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
 
     if model == "glm-5" or model.startswith("glm"):
         return GLMChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
-    if model.startswith("qwen3.5") or model.startswith("qwen"):
+    if model.startswith("qwen3.5") or model.startswith("qwen") or model.startswith("Qwen"):
         return QwenChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
     if model.startswith("gemma"):
         return GemmaChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)

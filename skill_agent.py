@@ -1794,6 +1794,12 @@ class SkillAgent:
                         )
 
                     if not final_text:
+                        # 可观测性：记录 thinking 前 200 字，便于诊断"XML 进 reasoning 未被解析"等情况
+                        thinking_preview = (full_thinking or "")[:200]
+                        logger.warning(
+                            "[SkillAgent] final_text 为空，模型未返回内容。"
+                            "thinking 前 200 字: %r", thinking_preview,
+                        )
                         err = "模型未返回内容，无法继续。"
                         if log_callback:
                             log_callback(err, "assistant")

@@ -183,7 +183,10 @@ class SettingsDialog:
                 color="#00000033",
                 offset=ft.Offset(0, 8),
             ),
-            on_click=lambda e: e.stop_propagation(),  # 防止点击穿透到遮罩层
+            # 仅需定义 on_click 即可使 Container 在命中区域内消费点击事件，
+            # 阻止点击穿透到下方遮罩层 GestureDetector（Flet 的 Event 对象
+            # 没有 stop_propagation 方法，无需也无法调用）。
+            on_click=lambda e: None,
         )
 
         # 使用 Stack 来实现绝对定位
