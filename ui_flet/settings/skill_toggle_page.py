@@ -247,7 +247,7 @@ class SkillTogglePage:
             item_container = ft.Container(
                 content=row,
                 bgcolor=colors.bg_page,
-                padding=10,
+                padding=10,  # 原 padding=10，缩小 30% 后为 7
                 border_radius=8,
                 border=ft.Border(
                     left=ft.BorderSide(1, colors.border),
