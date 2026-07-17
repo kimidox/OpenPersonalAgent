@@ -146,12 +146,14 @@ class VoiceSettingsPage:
 
         info_text = ft.Text(
             "使用 sherpa-onnx 流式模型进行实时语音识别。支持边说边识别，适用于实时转写场景。",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
         self._asr_model_dropdown = ft.Dropdown(
             label="ASR 模型",
+            label_style=ft.TextStyle(size=11),
+            text_size=11,
             hint_text="选择语音识别模型",
             options=self._get_asr_model_options(),
             value=self._get_current_asr_model(),
@@ -161,12 +163,14 @@ class VoiceSettingsPage:
 
         self._asr_model_detail_text = ft.Text(
             "",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
         self._asr_local_path_field = ft.TextField(
             label="本地模型路径",
+            label_style=ft.TextStyle(size=11),
+            text_size=11,
             hint_text="选择或输入本地模型目录路径...",
             value=get_config("ASR_REALTIME_MODEL_PATH") or "",
             on_change=self._on_asr_local_path_changed,
@@ -186,7 +190,7 @@ class VoiceSettingsPage:
 
         self._asr_status_text = ft.Text(
             "",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -255,6 +259,7 @@ class VoiceSettingsPage:
 
         self._asr_test_result = ft.TextField(
             hint_text="实时识别结果将显示在这里...",
+            text_size=11,
             multiline=True,
             min_lines=3,
             max_lines=5,
@@ -290,7 +295,7 @@ class VoiceSettingsPage:
                     self._asr_interval_text,
                     self._asr_interval_slider,
                     ft.Container(height=16),
-                    ft.Text("实时测试", size=11, weight=ft.FontWeight.BOLD, color=colors.text),
+                    ft.Text("实时测试", size=12, weight=ft.FontWeight.BOLD, color=colors.text),
                     ft.Container(height=10),
                     ft.Row([self._asr_test_button, copy_result_btn]),
                     ft.Container(height=8),
@@ -405,12 +410,14 @@ class VoiceSettingsPage:
 
         info_text = ft.Text(
             "使用 sherpa-onnx VITS 模型进行本地文本转语音。支持自定义导入模型或使用默认中文模型。",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
         self._tts_model_dropdown = ft.Dropdown(
             label="TTS 模型类型",
+            label_style=ft.TextStyle(size=11),
+            text_size=11,
             hint_text="选择语音合成模型",
             options=self._get_tts_model_options(),
             value=self._get_current_tts_model(),
@@ -421,6 +428,8 @@ class VoiceSettingsPage:
         current_speaker = config.TTS_SPEAKER_ID
         self._tts_speaker_dropdown = ft.Dropdown(
             label="音色",
+            label_style=ft.TextStyle(size=11),
+            text_size=11,
             hint_text="加载模型后选择音色",
             options=[ft.dropdown.Option("0", "默认")],
             value=str(current_speaker),
@@ -467,7 +476,7 @@ class VoiceSettingsPage:
 
         self._tts_status_text = ft.Text(
             "",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -496,6 +505,8 @@ class VoiceSettingsPage:
 
         self._tts_test_text = ft.TextField(
             label="测试文本",
+            label_style=ft.TextStyle(size=11),
+            text_size=11,
             value="你好，这是一个语音合成测试。",
             expand=True,
         )
@@ -518,7 +529,7 @@ class VoiceSettingsPage:
         custom_info = ft.Text(
             "支持导入自定义 VITS ONNX 模型：模型目录需包含 model.onnx、tokens.txt、lexicon.txt；"
             "多音色模型需包含 dict/ 目录。可下载其他预训练模型：github.com/k2-fsa/sherpa-onnx/releases",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -544,7 +555,7 @@ class VoiceSettingsPage:
                     self._tts_auto_load_switch,
                     self._tts_auto_download_switch,
                     ft.Container(height=16),
-                    ft.Text("测试朗读", size=11, weight=ft.FontWeight.BOLD, color=colors.text),
+                    ft.Text("测试朗读", size=12, weight=ft.FontWeight.BOLD, color=colors.text),
                     ft.Container(height=10),
                     self._tts_test_text,
                     ft.Container(height=10),
@@ -628,12 +639,14 @@ class VoiceSettingsPage:
 
         info_text = ft.Text(
             "选择用于录音和播放的音频设备。",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
         self._input_device_dropdown = ft.Dropdown(
             label="输入设备",
+            label_style=ft.TextStyle(size=11),
+            text_size=11,
             hint_text="选择麦克风",
             options=self._get_audio_input_devices(),
             value=self._get_current_input_device(),
@@ -643,6 +656,8 @@ class VoiceSettingsPage:
 
         self._output_device_dropdown = ft.Dropdown(
             label="输出设备",
+            label_style=ft.TextStyle(size=11),
+            text_size=11,
             hint_text="选择扬声器",
             options=self._get_audio_output_devices(),
             value=self._get_current_output_device(),
@@ -652,7 +667,7 @@ class VoiceSettingsPage:
 
         self._audio_device_status = ft.Text(
             "",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -660,6 +675,7 @@ class VoiceSettingsPage:
             "刷新设备列表",
             on_click=self._on_refresh_audio_devices,
             icon=ft.Icons.REFRESH,
+            style=ft.ButtonStyle(icon_size=16),
         )
 
         test_device_btn = ft.ElevatedButton(

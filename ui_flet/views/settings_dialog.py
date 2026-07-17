@@ -80,6 +80,9 @@ class SettingsDialog:
         # 内容面板引用
         self._content_panels: dict[str, ft.Control] = {}
 
+        # 内容区域引用（用于动态添加面板）
+        self._content_area: ft.Column | None = None
+
         # 设置页面遮罩容器引用
         self._dialog: ft.Container | None = None
 
@@ -106,6 +109,14 @@ class SettingsDialog:
 
         # Live2D 设置页面引用
         self._live2d_settings_page: Live2DSettingsPage | None = None
+
+        # 拖动相关状态
+        self._is_dragging = False
+        self._dialog_x = 0
+        self._dialog_y = 0
+
+        # 内层容器引用（用于拖动）
+        self._inner_container: ft.Container | None = None
 
         # 创建对话框内容
         self._build_dialog()
@@ -153,10 +164,11 @@ class SettingsDialog:
         )
 
         # 内层容器（带边距、圆角和阴影，视觉上形成可拉宽拉高的设置页面）
-        inner_container = ft.Container(
+        # 使用 absolute positioning 来支持拖动
+        self._inner_container = ft.Container(
             content=main_container,
-            expand=True,
-            margin=self.PAGE_MARGIN,
+            width=960,  # 固定宽度（放大 20%）
+            height=800,  # 固定高度（放大 20%）
             bgcolor=colors.surface,
             border_radius=12,
             border=ft.Border(
@@ -171,15 +183,29 @@ class SettingsDialog:
                 color="#00000033",
                 offset=ft.Offset(0, 8),
             ),
-            on_click=lambda e: None,
+            on_click=lambda e: e.stop_propagation(),  # 防止点击穿透到遮罩层
+        )
+
+        # 使用 Stack 来实现绝对定位
+        # 遮罩层使用 GestureDetector 来检测点击（关闭设置页面）
+        stack = ft.Stack(
+            [
+                # 遮罩层（检测点击关闭）
+                ft.GestureDetector(
+                    content=ft.Container(expand=True),
+                    on_tap=self._on_backdrop_click,
+                ),
+                # 内层容器（可拖动）
+                self._inner_container,
+            ],
+            expand=True,
         )
 
         # 全屏遮罩容器（随主窗口大小变化自动拉宽拉高）
         self._dialog = ft.Container(
-            content=inner_container,
+            content=stack,
             expand=True,
             bgcolor="#00000059",
-            on_click=self._on_backdrop_click,
         )
         self._logger.info("SettingsDialog: 对话框构建完成")
 
@@ -195,7 +221,7 @@ class SettingsDialog:
         # 标题
         title = ft.Text(
             "设置",
-            size=12,
+            size=14,
             weight=ft.FontWeight.BOLD,
             color=colors.text,
         )
@@ -204,19 +230,29 @@ class SettingsDialog:
         close_button = ft.IconButton(
             icon=ft.Icons.CLOSE,
             icon_color=colors.text_muted,
-            icon_size=14,
+            icon_size=16,
             on_click=self._on_close_click,
         )
 
-        # 标题栏容器
+        # 标题栏内容
+        title_content = ft.Row(
+            [
+                title,
+                ft.Container(expand=True),
+                close_button,
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        )
+
+        # 标题栏容器（支持拖动）
+        # 使用 GestureDetector 来识别拖动手势
         title_bar = ft.Container(
-            content=ft.Row(
-                [
-                    title,
-                    ft.Container(expand=True),
-                    close_button,
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            content=ft.GestureDetector(
+                content=title_content,
+                on_pan_start=self._on_title_bar_pan_start,
+                on_pan_update=self._on_title_bar_pan_update,
+                on_pan_end=self._on_title_bar_pan_end,
+                drag_interval=10,  # 拖动更新频率（毫秒）
             ),
             bgcolor=colors.surface,
             padding=10,
@@ -313,25 +349,20 @@ class SettingsDialog:
         Returns:
             内容区域
         """
-        # 创建各个内容面板
-        panels = []
-        for category in self.SETTINGS_CATEGORIES:
-            panel = self._create_content_panel(category["id"])
-            self._content_panels[category["id"]] = panel
-            panels.append(panel)
+        # 只创建默认分类的内容面板（懒加载）
+        # 其他分类的面板在切换时才创建
+        default_panel = self._create_content_panel(self._current_category)
+        self._content_panels[self._current_category] = default_panel
+        default_panel.visible = True  # 默认面板可见
 
-        # 返回所有面板的容器（通过 visible 属性控制显示）
-        content_area = ft.Column(
-            panels,
+        # 返回面板容器（后续切换时动态添加面板）
+        self._content_area = ft.Column(
+            [default_panel],
             spacing=0,
             expand=True,
         )
 
-        # 设置初始面板为可见
-        if self._current_category in self._content_panels:
-            self._content_panels[self._current_category].visible = True
-
-        return content_area
+        return self._content_area
 
     def _create_content_panel(self, category_id: str) -> ft.Container:
         """
@@ -487,6 +518,16 @@ class SettingsDialog:
         for panel in self._content_panels.values():
             panel.visible = False
 
+        # 检查当前选中的面板是否存在，不存在则创建（懒加载）
+        if self._current_category not in self._content_panels:
+            self._logger.info(f"SettingsDialog: 懒加载创建面板 {self._current_category}")
+            # 创建新的面板
+            new_panel = self._create_content_panel(self._current_category)
+            self._content_panels[self._current_category] = new_panel
+            # 将新面板添加到内容区域
+            if self._content_area:
+                self._content_area.controls.append(new_panel)
+
         # 显示当前选中的面板
         if self._current_category in self._content_panels:
             self._content_panels[self._current_category].visible = True
@@ -504,6 +545,58 @@ class SettingsDialog:
         """点击遮罩层关闭设置页面"""
         self.close()
 
+    def _on_title_bar_pan_start(self, e) -> None:
+        """
+        标题栏拖动开始事件
+
+        Args:
+            e: 事件对象
+        """
+        self._is_dragging = True
+        self._logger.debug(f"拖动开始: local_x={e.local_position.x}, local_y={e.local_position.y}")
+
+    def _on_title_bar_pan_update(self, e) -> None:
+        """
+        标题栏拖动更新事件
+
+        Args:
+            e: 事件对象
+        """
+        if not self._is_dragging or not self._inner_container:
+            return
+
+        # 使用 local_delta.x/y 累加偏移，避免 local_x 因控件移动产生跳变
+        self._dialog_x += e.local_delta.x
+        self._dialog_y += e.local_delta.y
+
+        # 获取当前窗口大小
+        window_width = self._page.window.width or 1200
+        window_height = self._page.window.height or 800
+        dialog_width = self._inner_container.width
+        dialog_height = self._inner_container.height
+
+        max_x = window_width - dialog_width
+        max_y = window_height - dialog_height
+        self._dialog_x = max(0, min(self._dialog_x, max_x))
+        self._dialog_y = max(0, min(self._dialog_y, max_y))
+
+        # 更新 inner_container 的位置
+        self._inner_container.left = self._dialog_x
+        self._inner_container.top = self._dialog_y
+        self._inner_container.update()
+
+        self._logger.debug(f"拖动更新: delta_x={e.local_delta.x}, delta_y={e.local_delta.y}, x={self._dialog_x}, y={self._dialog_y}")
+
+    def _on_title_bar_pan_end(self, e) -> None:
+        """
+        标题栏拖动结束事件
+
+        Args:
+            e: 事件对象
+        """
+        self._is_dragging = False
+        self._logger.debug("拖动结束")
+
     def is_open(self) -> bool:
         """检查设置对话框是否处于打开状态"""
         return self._dialog is not None and self._dialog in self._page.overlay
@@ -514,6 +607,24 @@ class SettingsDialog:
             self._logger.info("SettingsDialog: 打开设置对话框")
             if self._dialog not in self._page.overlay:
                 self._page.overlay.append(self._dialog)
+
+            # 计算初始位置（居中显示）
+            if self._inner_container:
+                window_width = self._page.window.width or 1200
+                window_height = self._page.window.height or 800
+                dialog_width = self._inner_container.width
+                dialog_height = self._inner_container.height
+
+                # 计算居中位置
+                self._dialog_x = (window_width - dialog_width) / 2
+                self._dialog_y = (window_height - dialog_height) / 2
+
+                # 设置初始位置
+                self._inner_container.left = self._dialog_x
+                self._inner_container.top = self._dialog_y
+
+                self._logger.debug(f"设置页面初始位置: x={self._dialog_x}, y={self._dialog_y}")
+
             # 打开时刷新 Skill 相关页面，确保列表与磁盘状态一致
             if self._skill_toggle_page is not None:
                 self._skill_toggle_page.refresh()

@@ -68,13 +68,14 @@ class PromptTemplatePage:
         # 说明
         info = ft.Text(
             "为不同会话类型配置系统提示词模板。使用 {PLACEHOLDER} 格式引用动态内容。",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
         # 会话类型选择
         self._type_dropdown = ft.Dropdown(
             label="会话类型",
+            label_style=ft.TextStyle(size=11),
             options=[
                 ft.dropdown.Option(k, v) for k, v in CONVERSATION_TYPE_NAMES.items()
             ],
@@ -92,11 +93,11 @@ class PromptTemplatePage:
             expand=True,
             text_style=ft.TextStyle(
                 font_family="Consolas, Monaco, monospace",
-                size=15,
+                size=11,
                 color=colors.text,
             ),
             hint_text="在此输入系统提示词模板...",
-            hint_style=ft.TextStyle(color=colors.text_muted),
+            hint_style=ft.TextStyle(size=10, color=colors.text_muted),
             bgcolor=colors.surface,
             border_color=colors.border,
             focused_border_color=colors.primary,
@@ -119,7 +120,7 @@ class PromptTemplatePage:
         # 状态文本
         self._status_text = ft.Text(
             "",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -127,6 +128,7 @@ class PromptTemplatePage:
         save_btn = ft.ElevatedButton(
             "保存",
             icon=ft.Icons.SAVE,
+            style=ft.ButtonStyle(icon_size=16),
             on_click=self._on_save,
             bgcolor=colors.primary,
             color=colors.text_on_primary,
@@ -135,12 +137,14 @@ class PromptTemplatePage:
         reset_btn = ft.OutlinedButton(
             "重置为默认",
             icon=ft.Icons.RESTORE,
+            style=ft.ButtonStyle(icon_size=16),
             on_click=self._on_reset,
         )
 
         reset_all_btn = ft.OutlinedButton(
             "重置全部",
             icon=ft.Icons.RESTORE_PAGE,
+            style=ft.ButtonStyle(icon_size=16),
             on_click=self._on_reset_all,
         )
 
@@ -148,7 +152,7 @@ class PromptTemplatePage:
         editor_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("模板编辑", size=11, weight=ft.FontWeight.BOLD, color=colors.text),
+                    ft.Text("模板编辑", size=12, weight=ft.FontWeight.BOLD, color=colors.text),
                     ft.Container(height=4),
                     self._editor,
                 ],
@@ -162,7 +166,7 @@ class PromptTemplatePage:
         preview_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("实时预览", size=11, weight=ft.FontWeight.BOLD, color=colors.text),
+                    ft.Text("实时预览", size=12, weight=ft.FontWeight.BOLD, color=colors.text),
                     ft.Container(height=4),
                     ft.Container(
                         content=self._preview,
@@ -188,7 +192,7 @@ class PromptTemplatePage:
         help_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("可用占位符", size=11, weight=ft.FontWeight.BOLD, color=colors.text),
+                    ft.Text("可用占位符", size=12, weight=ft.FontWeight.BOLD, color=colors.text),
                     ft.Container(height=4),
                     self._placeholder_list,
                 ],
@@ -402,8 +406,8 @@ class PromptTemplatePage:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(title),
-            content=ft.Text(message),
+            title=ft.Text(title, size=14, weight=ft.FontWeight.BOLD),
+            content=ft.Text(message, size=11),
             actions=[
                 ft.TextButton("取消", on_click=lambda e: self._close_dialog(dialog)),
                 ft.ElevatedButton(
@@ -429,7 +433,7 @@ class PromptTemplatePage:
         """显示提示消息"""
         colors = self._theme_manager.get_color_scheme()
         self._page.snack_bar = ft.SnackBar(
-            content=ft.Text(message, color=colors.text_on_primary),
+            content=ft.Text(message, size=11, color=colors.text_on_primary),
             bgcolor=colors.success if success else colors.error,
         )
         self._page.snack_bar.open = True

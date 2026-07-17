@@ -91,7 +91,7 @@ class SkillManagementPage:
         info = ft.Text(
             "创建和管理自动化Skill，采用Markdown格式存储。\n"
             '支持通过"/"触发内置工具列表，大模型理解Markdown执行自动化操作。',
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -132,7 +132,9 @@ class SkillManagementPage:
 
         self._search_input = ft.TextField(
             hint_text="搜索Skill名称...",
+            hint_style=ft.TextStyle(size=11),
             prefix_icon=ft.Icons.SEARCH,
+            text_size=11,
             on_change=self._on_search_change,
             expand=True,
         )
@@ -175,7 +177,7 @@ class SkillManagementPage:
         # 状态栏
         self._status_text = ft.Text(
             "",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -527,20 +529,29 @@ class SkillManagementPage:
         # 名称输入
         name_input = ft.TextField(
             label="Skill名称",
+            label_style=ft.TextStyle(size=11),
             hint_text="输入Skill名称",
+            hint_style=ft.TextStyle(size=11),
+            text_size=11,
             autofocus=True,
         )
 
         # 描述输入
         desc_input = ft.TextField(
             label="Skill描述",
+            label_style=ft.TextStyle(size=11),
             hint_text="描述Skill的功能和用途",
+            hint_style=ft.TextStyle(size=11),
+            text_size=11,
         )
 
         # 标签输入
         tags_input = ft.TextField(
             label="Skill标签",
+            label_style=ft.TextStyle(size=11),
             hint_text="例如: automation, browser, search",
+            hint_style=ft.TextStyle(size=11),
+            text_size=11,
         )
 
         # 对话框内容
@@ -645,17 +656,6 @@ class SkillManagementPage:
             lambda: self._delete_skill(skill_id),
         )
 
-    def _delete_skill(self, skill_id: str) -> None:
-        """删除技能"""
-        try:
-            manager = self._get_skill_manager()
-            manager.delete_skill(skill_id)
-            self._load_skills()
-            self._show_snackbar("Skill已删除", success=True)
-        except Exception as ex:
-            self._logger.exception("删除Skill失败")
-            self._show_snackbar(f"删除失败: {ex}", success=False)
-
     def _show_confirm_dialog(
         self,
         title: str,
@@ -747,7 +747,7 @@ class SkillManagementPage:
 
         content = ft.Column(
             [
-                ft.Text(title, size=11, weight=ft.FontWeight.BOLD, color=colors.text),
+                ft.Text(title, size=14, weight=ft.FontWeight.BOLD, color=colors.text),
                 ft.Container(height=10),
                 ft.Text(message, size=11, color=colors.text_muted, selectable=True),
             ],
@@ -777,4 +777,4 @@ class SkillManagementPage:
 
     def refresh(self) -> None:
         """刷新页面"""
-        self._load_skills()
+        self._load_skills

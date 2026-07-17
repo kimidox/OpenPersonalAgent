@@ -120,7 +120,7 @@ class SkillEditorPage:
             expand=True,
             text_style=ft.TextStyle(
                 font_family="Consolas, Monaco, monospace",
-                size=12,
+                size=11,
                 color=self._colors.text,
             ),
             hint_text="输入 Markdown 内容...\n输入 '/' 可触发内置工具列表",
@@ -146,7 +146,7 @@ class SkillEditorPage:
         # 左侧编辑器区域
         editor_column = ft.Column(
             [
-                ft.Text("Markdown 编辑", size=11, weight=ft.FontWeight.BOLD, color=self._colors.text),
+                ft.Text("Markdown 编辑", size=12, weight=ft.FontWeight.BOLD, color=self._colors.text),
                 ft.Container(height=4),
                 self._editor,
             ],
@@ -157,7 +157,7 @@ class SkillEditorPage:
         # 右侧预览区域
         preview_column = ft.Column(
             [
-                ft.Text("实时预览", size=11, weight=ft.FontWeight.BOLD, color=self._colors.text),
+                ft.Text("实时预览", size=12, weight=ft.FontWeight.BOLD, color=self._colors.text),
                 ft.Container(height=4),
                 ft.Container(
                     content=self._preview,
@@ -199,7 +199,7 @@ class SkillEditorPage:
             [
                 ft.Text(
                     f"编辑 Skill: {self._skill_data.metadata.name}",
-                    size=11,
+                    size=12,
                     weight=ft.FontWeight.BOLD,
                     color=self._colors.text,
                 ),
@@ -338,7 +338,7 @@ class SkillEditorPage:
                 controls.append(
                     ft.Text(
                         f"── {category_name} ──",
-                        size=10,
+                        size=12,
                         color=self._colors.text_muted,
                         weight=ft.FontWeight.BOLD,
                     )
@@ -352,7 +352,7 @@ class SkillEditorPage:
             filtered_count += 1
             controls.append(
                 ft.Container(
-                    content=ft.Text(f"/{tool_name}", size=10, color=self._colors.text),
+                    content=ft.Text(f"/{tool_name}", size=11, color=self._colors.text),
                     padding=ft.Padding(left=8, top=6, right=8, bottom=6),
                     border_radius=4,
                     bgcolor={
@@ -469,7 +469,7 @@ class SkillEditorPage:
 
         content = ft.Column(
             [
-                ft.Text("内置工具列表", size=10, weight=ft.FontWeight.BOLD, color=self._colors.text),
+                ft.Text("内置工具列表", size=12, weight=ft.FontWeight.BOLD, color=self._colors.text),
                 ft.Text("以下是目前系统定义的所有工具，可在 Skill 中引用：", size=10, color=self._colors.text_muted),
                 ft.Container(height=8),
                 ft.Container(content=list_view, expand=True, height=400),
@@ -531,7 +531,7 @@ class SkillEditorPage:
     def _show_snackbar(self, message: str, success: bool = True) -> None:
         """显示提示消息"""
         self._page.snack_bar = ft.SnackBar(
-            content=ft.Text(message, color=self._colors.text_on_primary),
+            content=ft.Text(message, size=11, color=self._colors.text_on_primary),
             bgcolor=self._colors.success if success else self._colors.error,
         )
         self._page.snack_bar.open = True
@@ -541,7 +541,7 @@ class SkillEditorPage:
         """显示消息对话框"""
         content = ft.Column(
             [
-                ft.Text(title, size=10, weight=ft.FontWeight.BOLD, color=self._colors.text),
+                ft.Text(title, size=12, weight=ft.FontWeight.BOLD, color=self._colors.text),
                 ft.Container(height=8),
                 ft.Text(message, size=10, color=self._colors.text_muted, selectable=True),
             ],

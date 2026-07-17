@@ -86,7 +86,7 @@ class ScheduledTasksPage:
         # 说明
         info = ft.Text(
             "创建和管理定时触发的任务，支持发送通知或启动 Agent 对话。",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -94,6 +94,7 @@ class ScheduledTasksPage:
         create_btn = ft.ElevatedButton(
             "新建任务",
             icon=ft.Icons.ADD,
+            style=ft.ButtonStyle(icon_size=16),
             on_click=self._on_create_click,
             bgcolor=colors.primary,
             color=colors.text_on_primary,
@@ -107,6 +108,7 @@ class ScheduledTasksPage:
                 ft.dropdown.Option("cancelled", "已取消"),
             ],
             value="all",
+            text_size=11,
             width=210,
             on_select=self._on_filter_change,
         )
@@ -157,7 +159,7 @@ class ScheduledTasksPage:
         # 状态栏
         self._status_text = ft.Text(
             "",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -210,7 +212,7 @@ class ScheduledTasksPage:
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("启动设置", size=10, weight=ft.FontWeight.BOLD, color=colors.text),
+                    ft.Text("启动设置", size=12, weight=ft.FontWeight.BOLD, color=colors.text),
                     ft.Container(height=8),
                     self._autostart_switch,
                     self._autostart_status_text,
@@ -413,6 +415,8 @@ class ScheduledTasksPage:
             label="任务标题",
             value=task.title if task else "",
             autofocus=True,
+            text_size=11,
+            label_style=ft.TextStyle(size=11),
         )
 
         content_field = ft.TextField(
@@ -421,34 +425,46 @@ class ScheduledTasksPage:
             multiline=True,
             min_lines=5,
             max_lines=9,
+            text_size=11,
+            label_style=ft.TextStyle(size=11),
         )
 
         trigger_date_field = ft.TextField(
             label="触发日期 (YYYY-MM-DD)",
             value=(task.trigger_time if task else default_time).strftime("%Y-%m-%d"),
+            text_size=11,
+            label_style=ft.TextStyle(size=11),
         )
 
         trigger_time_field = ft.TextField(
             label="触发时间 (HH:MM)",
             value=(task.trigger_time if task else default_time).strftime("%H:%M"),
+            text_size=11,
+            label_style=ft.TextStyle(size=11),
         )
 
         repeat_dropdown = ft.Dropdown(
             label="重复类型",
             options=[ft.dropdown.Option(k, v) for k, v in REPEAT_TYPE_NAMES.items()],
             value=task.repeat_type if task else "none",
+            text_size=11,
+            label_style=ft.TextStyle(size=11),
         )
 
         notification_dropdown = ft.Dropdown(
             label="通知类型",
             options=[ft.dropdown.Option(k, v) for k, v in NOTIFICATION_TYPE_NAMES.items()],
             value=task.notification_type if task else "system",
+            text_size=11,
+            label_style=ft.TextStyle(size=11),
         )
 
         execution_dropdown = ft.Dropdown(
             label="执行方式",
             options=[ft.dropdown.Option(k, v) for k, v in EXECUTION_TYPE_NAMES.items()],
             value=task.execution_type if task else "notification",
+            text_size=11,
+            label_style=ft.TextStyle(size=11),
         )
 
         def on_save(e):
@@ -589,7 +605,7 @@ class ScheduledTasksPage:
         """显示提示消息"""
         colors = self._theme_manager.get_color_scheme()
         self._page.snack_bar = ft.SnackBar(
-            content=ft.Text(message, color=colors.text_on_primary),
+            content=ft.Text(message, size=11, color=colors.text_on_primary),
             bgcolor=colors.success if success else colors.error,
         )
         self._page.snack_bar.open = True

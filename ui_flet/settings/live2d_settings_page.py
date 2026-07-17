@@ -80,7 +80,7 @@ class Live2DSettingsPage:
         info_text = ft.Text(
             "配置 Live2D 模型作为悬浮球的视觉表现形式。模型文件应放置在 PersonalData/2DLiveFiles 目录下，"
             "支持 Live2D Cubism 3/4 格式（.model3.json）。",
-            size=11,
+            size=10,
             color=colors.text_muted,
         )
 
@@ -172,7 +172,10 @@ class Live2DSettingsPage:
 
         self._model_dropdown = ft.Dropdown(
             label="选择模型",
+            label_style=ft.TextStyle(size=11),
             hint_text="扫描后选择模型",
+            hint_style=ft.TextStyle(size=10),
+            text_size=11,
             width=480,
             on_select=self._on_model_selected,
         )
@@ -234,16 +237,20 @@ class Live2DSettingsPage:
 
         self._width_field = ft.TextField(
             label="宽度（像素）",
+            label_style=ft.TextStyle(size=11),
             value=str(width),
             width=240,
+            text_size=11,
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=self._on_size_changed,
         )
 
         self._height_field = ft.TextField(
             label="高度（像素）",
+            label_style=ft.TextStyle(size=11),
             value=str(height),
             width=240,
+            text_size=11,
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=self._on_size_changed,
         )

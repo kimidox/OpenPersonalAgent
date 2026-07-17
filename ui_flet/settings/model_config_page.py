@@ -12,6 +12,7 @@ import json
 from typing import TYPE_CHECKING, Optional
 
 import flet as ft
+from click import style
 
 from llm.llm_config_manager import (
     LLMConfigItem,
@@ -90,7 +91,7 @@ class ModelConfigPage:
         # 创建标题
         title = ft.Text(
             "模型配置",
-            size=12,
+            size=14,
             weight=ft.FontWeight.BOLD,
             color=colors.text,
         )
@@ -111,7 +112,7 @@ class ModelConfigPage:
                 # 左侧：模型列表
                 ft.Container(
                     content=config_list_panel,
-                    expand=1,
+                    expand=2,
                     bgcolor=colors.surface,
                     border_radius=8,
                     padding=10,
@@ -140,11 +141,11 @@ class ModelConfigPage:
             [
                 title,
                 ft.Container(height=14),
-                body,
-                ft.Container(height=10),
-                auto_switch_section,
+                ft.Container(content=body, expand=13),  # 占 10 份
                 ft.Container(height=8),
-                status_bar,
+                ft.Container(content=auto_switch_section, expand=1),  # 占 1 份
+                ft.Container(height=8),
+                ft.Container(content=status_bar, expand=1),  # 占 1 份
             ],
             spacing=0,
             expand=True,
@@ -195,11 +196,13 @@ class ModelConfigPage:
                 ft.TextButton(
                     "导入配置",
                     icon=ft.Icons.FILE_UPLOAD,
+                    style=ft.ButtonStyle(icon_size=16),
                     on_click=self._on_import_config_click,
                 ),
                 ft.TextButton(
                     "导出配置",
                     icon=ft.Icons.FILE_DOWNLOAD,
+                    style=ft.ButtonStyle(icon_size=16),
                     on_click=self._on_export_config_click,
                 ),
             ],
@@ -247,9 +250,9 @@ class ModelConfigPage:
             border_color=colors.border,
             focused_border_color=colors.primary,
             cursor_color=colors.primary,
-            text_style=ft.TextStyle(color=colors.text),
-            label_style=ft.TextStyle(color=colors.text_muted),
-            hint_style=ft.TextStyle(color=colors.text_muted),
+            text_style=ft.TextStyle(color=colors.text, size=11),
+            label_style=ft.TextStyle(color=colors.text_muted, size=11),
+            hint_style=ft.TextStyle(color=colors.text_muted, size=10),
         )
 
         self._model_name_field = ft.TextField(
@@ -258,9 +261,9 @@ class ModelConfigPage:
             border_color=colors.border,
             focused_border_color=colors.primary,
             cursor_color=colors.primary,
-            text_style=ft.TextStyle(color=colors.text),
-            label_style=ft.TextStyle(color=colors.text_muted),
-            hint_style=ft.TextStyle(color=colors.text_muted),
+            text_style=ft.TextStyle(color=colors.text, size=11),
+            label_style=ft.TextStyle(color=colors.text_muted, size=11),
+            hint_style=ft.TextStyle(color=colors.text_muted, size=10),
         )
 
         self._api_key_field = ft.TextField(
@@ -271,9 +274,9 @@ class ModelConfigPage:
             border_color=colors.border,
             focused_border_color=colors.primary,
             cursor_color=colors.primary,
-            text_style=ft.TextStyle(color=colors.text),
-            label_style=ft.TextStyle(color=colors.text_muted),
-            hint_style=ft.TextStyle(color=colors.text_muted),
+            text_style=ft.TextStyle(color=colors.text, size=11),
+            label_style=ft.TextStyle(color=colors.text_muted, size=11),
+            hint_style=ft.TextStyle(color=colors.text_muted, size=10),
         )
 
         self._base_url_field = ft.TextField(
@@ -282,9 +285,9 @@ class ModelConfigPage:
             border_color=colors.border,
             focused_border_color=colors.primary,
             cursor_color=colors.primary,
-            text_style=ft.TextStyle(color=colors.text),
-            label_style=ft.TextStyle(color=colors.text_muted),
-            hint_style=ft.TextStyle(color=colors.text_muted),
+            text_style=ft.TextStyle(color=colors.text, size=11),
+            label_style=ft.TextStyle(color=colors.text_muted, size=11),
+            hint_style=ft.TextStyle(color=colors.text_muted, size=10),
         )
 
         self._temperature_field = ft.TextField(
@@ -294,9 +297,9 @@ class ModelConfigPage:
             border_color=colors.border,
             focused_border_color=colors.primary,
             cursor_color=colors.primary,
-            text_style=ft.TextStyle(color=colors.text),
-            label_style=ft.TextStyle(color=colors.text_muted),
-            hint_style=ft.TextStyle(color=colors.text_muted),
+            text_style=ft.TextStyle(color=colors.text, size=11),
+            label_style=ft.TextStyle(color=colors.text_muted, size=11),
+            hint_style=ft.TextStyle(color=colors.text_muted, size=10),
             helper="0-2，值越高越随机",
             helper_style=ft.TextStyle(color=colors.text_muted, size=10),
         )
@@ -308,9 +311,9 @@ class ModelConfigPage:
             border_color=colors.border,
             focused_border_color=colors.primary,
             cursor_color=colors.primary,
-            text_style=ft.TextStyle(color=colors.text),
-            label_style=ft.TextStyle(color=colors.text_muted),
-            hint_style=ft.TextStyle(color=colors.text_muted),
+            text_style=ft.TextStyle(color=colors.text, size=11),
+            label_style=ft.TextStyle(color=colors.text_muted, size=11),
+            hint_style=ft.TextStyle(color=colors.text_muted, size=10),
             helper="0-1，值越小越聚焦",
             helper_style=ft.TextStyle(color=colors.text_muted, size=10),
         )
@@ -322,9 +325,9 @@ class ModelConfigPage:
             border_color=colors.border,
             focused_border_color=colors.primary,
             cursor_color=colors.primary,
-            text_style=ft.TextStyle(color=colors.text),
-            label_style=ft.TextStyle(color=colors.text_muted),
-            hint_style=ft.TextStyle(color=colors.text_muted),
+            text_style=ft.TextStyle(color=colors.text, size=11),
+            label_style=ft.TextStyle(color=colors.text_muted, size=11),
+            hint_style=ft.TextStyle(color=colors.text_muted, size=10),
             helper="值越高越避免重复",
             helper_style=ft.TextStyle(color=colors.text_muted, size=10),
         )
@@ -337,6 +340,7 @@ class ModelConfigPage:
             color=colors.text_on_primary,
             style=ft.ButtonStyle(
                 padding=ft.Padding.symmetric(horizontal=12, vertical=6),
+                icon_size=16,
             ),
             on_click=self._on_save_config_click,
         )
@@ -348,6 +352,7 @@ class ModelConfigPage:
             icon_color=colors.error,
             style=ft.ButtonStyle(
                 padding=ft.Padding.symmetric(horizontal=12, vertical=6),
+                icon_size=16,
             ),
             on_click=self._on_delete_config_click,
         )
@@ -477,7 +482,7 @@ class ModelConfigPage:
         activate_button = ft.IconButton(
             icon=ft.Icons.PLAY_ARROW if not is_active else ft.Icons.CHECK,
             icon_color=colors.primary if not is_active else colors.success,
-            icon_size=14,
+            icon_size=16,
             tooltip="设为激活" if not is_active else "当前激活",
             on_click=lambda e, config_id=config.id: self._on_activate_config_click(
                 config_id
@@ -855,6 +860,7 @@ class ModelConfigPage:
             content=ft.Text(
                 message,
                 color=colors.text_on_primary,
+                size=11,
             ),
             bgcolor=colors.error if error else colors.primary,
             duration=3000,

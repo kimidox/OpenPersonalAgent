@@ -69,7 +69,7 @@ class SkillTogglePage:
         # 标题
         title = ft.Text(
             "Skill 开关管理",
-            size=11,
+            size=12,
             weight=ft.FontWeight.BOLD,
             color=colors.text,
         )
@@ -93,7 +93,7 @@ class SkillTogglePage:
         list_container = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("已加载 Skill 列表", size=10, weight=ft.FontWeight.BOLD, color=colors.text),
+                    ft.Text("已加载 Skill 列表", size=12, weight=ft.FontWeight.BOLD, color=colors.text),
                     ft.Container(height=6),
                     self._skill_list,
                 ],
@@ -364,7 +364,7 @@ class SkillTogglePage:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(f"配置 Skill 会话绑定 - {name}", size=14),
+            title=ft.Text(f"配置 Skill 会话绑定 - {name}", size=12),
             content=ft.Column(
                 [
                     ft.Text(f"Skill ID：{skill_id}", size=11, color=colors.text_muted),
@@ -411,8 +411,8 @@ class SkillTogglePage:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(title),
-            content=ft.Text(message),
+            title=ft.Text(title, size=12),
+            content=ft.Text(message, size=10),
             actions=[
                 ft.TextButton("取消", on_click=lambda e: self._close_dialog(dialog)),
                 ft.ElevatedButton(

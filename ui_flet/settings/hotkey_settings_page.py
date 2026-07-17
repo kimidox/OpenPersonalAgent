@@ -1,4 +1,4 @@
-"""
+﻿"""
 Flet 快捷键设置页面
 
 提供快捷键配置界面，支持查看、修改和重置快捷键。
@@ -124,6 +124,7 @@ class HotkeySettingsPage:
             "重置所有快捷键",
             on_click=self._on_reset_all,
             icon=ft.Icons.RESTORE,
+            style=ft.ButtonStyle(icon_size=16),
         )
 
         # 主内容
@@ -464,8 +465,8 @@ class HotkeySettingsPage:
 
         # 显示提示
         self._page.snack_bar = ft.SnackBar(
-            content=ft.Text("所有快捷键已重置为默认值"),
+            content=ft.Text("所有快捷键已重置为默认值", size=11),
             action="确定",
         )
         self._page.snack_bar.open = True
-        self._page.update()
+
