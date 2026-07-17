@@ -975,8 +975,11 @@ class MainWindow:
             # 重放消息
             for record in records:
                 role = str(record.get("role", ""))
-                content = str(record.get("content", ""))
-                metadata = record.get("metadata", {})
+                # 防御性处理：to_record_dict 已将 None content 归一化为 ""，
+                # 此处仍用 or 兜底，避免任何历史脏数据导致 str(None) = "None" 渲染问题
+                raw_content = record.get("content")
+                content = "" if raw_content is None else str(raw_content)
+                metadata = record.get("metadata", {}) or {}
 
                 if role == "user":
                     msg_type = "user"
@@ -989,10 +992,65 @@ class MainWindow:
                 else:
                     continue
 
+                # 关键修复：tool_call 卡片在持久化时 content 为空（to_llm_dict
+                # 会把空字符串规范化为 None），从数据库加载时如果不补内容，
+                # 卡片正文会显示为空（甚至被某些 str 路径变成 "None"）。
+                # 运行时 `_handle_worker_message` 处理 log_callback("tool", ...) 时，
+                # 传入的是 "调用工具 `<fname>` · {args}" 这种可读格式。
+                # 这里从 metadata 中还原出同样的展示文本，保持加载历史与
+                # 实时会话的视觉一致。
+                if msg_type == "tool_call":
+                    tool_name = str(metadata.get("name", "") or "")
+                    args_value = metadata.get("args", "")
+                    if isinstance(args_value, (dict, list)):
+                        args_str = json.dumps(args_value, ensure_ascii=False)
+                    else:
+                        args_str = str(args_value or "")
+                    if tool_name:
+                        content = f"调用工具 `{tool_name}` · {args_str}" if args_str else f"调用工具 `{tool_name}`"
+                    else:
+                        content = "调用工具"
+
                 # 添加消息到列表
                 # update_ui=False：批量加载时不逐条触发 page.update()，
                 # 由 _switch_to_conversation 在全部加载完后统一更新
                 self._message_list.add_message(msg_type, content, update_ui=False)
+
+            # 方案 A 配合修复：检测"半截会话"。
+            # 正常结束的对话，最后一条 DB 消息必然是 assistant：
+            # - 任务型对话走 finish，最后一条是 finish(message=...) 的 assistant 总结
+            # - 闲聊型对话走 _direct_reply，最后一条也是 assistant
+            # 若最后一条是 tool_call / tool，说明会话异常中断（程序崩溃 / 用户强停 /
+            # 工具调用后未走完 finish 收尾），追加一条提示卡片告知用户。
+            if records:
+                last_role = str(records[-1].get("role", ""))
+                last_meta = records[-1].get("metadata", {}) or {}
+                last_type = last_meta.get("type", "")
+                # assistant + think 不算正常结束（think 是中间态）
+                is_abnormal_end = (
+                    last_role == "tool"
+                    or (last_role == "assistant" and last_type == "tool_call")
+                    or (last_role == "assistant" and last_type == "think")
+                )
+                if is_abnormal_end and self._message_list:
+                    if last_role == "tool":
+                        hint = (
+                            "⚠️ 本会话在工具执行后异常中断（缺少助手最终回复）。"
+                            "如需继续，请重新提问或追问上一轮结果。"
+                        )
+                    elif last_type == "tool_call":
+                        hint = (
+                            "⚠️ 本会话在调用工具后异常中断（缺少工具执行结果与助手回复）。"
+                            "如需继续，请重新提问。"
+                        )
+                    else:
+                        hint = (
+                            "⚠️ 本会话在助手思考阶段异常中断。如需继续，请重新提问。"
+                        )
+                    self._message_list.add_message("tool", hint, update_ui=False)
+                    self._logger.warning(
+                        f"检测到半截会话 {conversation_id}：last_role={last_role}, last_type={last_type}"
+                    )
 
         except Exception as e:
             self._logger.exception(f"加载会话消息失败: {e}")

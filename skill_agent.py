@@ -1355,17 +1355,26 @@ class SkillAgent:
         logger.info("后台线程已启动: name=%s, ident=%s, active_skill_ids=%s", t.name, t.ident, active_skill_ids)
         logger.debug("主线程继续执行 (总结线程独立运行)")
 
-    def _is_reasoning_text(self, text: str) -> bool:
+    def _is_reasoning_text(self, text: str, has_called_tool: bool = False) -> bool:
         """判断文本是否为"计划/推理文本"而非最终回答。
         
         识别模式：包含"让我执行"、"我将"、"计划"等关键词，且没有明确的结论性回答。
+        
+        方案 A 规则增强：
+        - 若本轮已调用过工具，则禁止用纯文本结束对话（必须调 finish），
+          因此 has_called_tool=True 时直接返回 True，让上层走 continue 分支
+          给 LLM 再一轮机会调用 finish。
         """
         if not text or not text.strip():
             return False
         
+        # 方案 A：本轮已调用过工具，禁止纯文本直接结束
+        if has_called_tool:
+            return True
+        
         text_lower = text.lower()
         
-        # 推理/计划关键词
+        # 推理/计划关键词（收紧：去掉"我先"/"让我先"这类过于宽义、易误伤闲聊的词）
         reasoning_keywords = [
             "让我执行",
             "让我调用",
@@ -1375,10 +1384,7 @@ class SkillAgent:
             "我需要执行",
             "让我来获取",
             "让我来查询",
-            "让我来获取",
-            "让我先",
             "首先让我",
-            "我先",
             "让我分析一下",
             "让我查看",
             "让我搜索",
@@ -1697,6 +1703,10 @@ class SkillAgent:
                 messages = self._perform_compaction(messages, log_callback)
 
             reasoning_turn_count = 0  # 推理文本轮次计数器
+            # 方案 A：记录本轮（主循环内）是否调用过任何工具，用于
+            # 在 LLM 试图用纯文本结束对话时强制其改走 finish 工具。
+            # 规则：一旦调用过工具，禁止用纯文本 return final_text 直接结束。
+            has_called_tool_in_run = False
 
             for step in range(self.max_steps):
                 logger.debug("===== Step %s/%s 开始 =====", step, self.max_steps)
@@ -1795,11 +1805,14 @@ class SkillAgent:
                         return err
 
                     # 判断是否为推理/计划文本（而非最终回答）
-                    is_reasoning = self._is_reasoning_text(final_text)
+                    # 方案 A：把 has_called_tool_in_run 传入，强制"调用过工具就走 continue，
+                    # 直到 LLM 调 finish 才允许结束"，避免出现"调过工具又用纯文本结束"的不一致状态。
+                    is_reasoning = self._is_reasoning_text(final_text, has_called_tool=has_called_tool_in_run)
                     
                     if is_reasoning or is_truncated:
                         # 推理文本或被截断的响应：将文本加入上下文，给 LLM 再一轮机会
-                        logger.debug("检测到推理文本或被截断的响应 (长度: %s, truncated: %s)", len(final_text), is_truncated)
+                        logger.debug("检测到推理文本或被截断的响应 (长度: %s, truncated: %s, has_called_tool=%s)",
+                                     len(final_text), is_truncated, has_called_tool_in_run)
                         if self.memory is not None:
                             metadata = {"token_usage": asdict(self._token_usage)}
                             self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
@@ -1807,8 +1820,18 @@ class SkillAgent:
                         reasoning_turn_count += 1
                         if reasoning_turn_count >= 2:
                             # 超过最大推理轮次，终止并提示
-                            logger.warning("LLM 连续 %d 次输出推理文本，终止对话", reasoning_turn_count)
-                            warning_msg = "LLM 未能执行计划，请重新描述您的需求。"
+                            logger.warning("LLM 连续 %d 次输出推理文本，终止对话 (has_called_tool=%s)",
+                                          reasoning_turn_count, has_called_tool_in_run)
+                            if has_called_tool_in_run:
+                                # 方案 A：本轮调过工具但 LLM 仍不肯调 finish，
+                                # 此时直接结束会违反"调过工具必须用 finish 结束"的规则，
+                                # 给出更明确的提示告知用户本次对话未走完正常收尾流程。
+                                warning_msg = (
+                                    "本次任务已执行工具调用，但助手未能按规则调用 finish 工具完成收尾，"
+                                    "对话已被强制结束。如需完整答复，请重新提问或继续追问。"
+                                )
+                            else:
+                                warning_msg = "LLM 未能执行计划，请重新描述您的需求。"
                             if log_callback:
                                 log_callback(warning_msg, "assistant")
                             if self.memory is not None:
@@ -2143,6 +2166,10 @@ class SkillAgent:
 
                 if not is_repeated:
                     result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
+
+                    # 方案 A：标记本轮已调用过工具（含 finish/ask_user/select_skill 等控制工具），
+                    # 用于下方判断是否允许 LLM 用纯文本直接结束。
+                    has_called_tool_in_run = True
 
                     if fname not in _control_tools:
                         self._record_tool_call(fname, args, str(result))

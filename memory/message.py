@@ -60,8 +60,14 @@ class Message:
         return d
 
     def to_record_dict(self) -> dict[str, Any]:
-        """含 `metadata`（来自 ext）的记录，供 UI 恢复历史；不含 system 时可与 LLM 字典同构并附加元数据。"""
+        """含 `metadata`（来自 ext）的记录，供 UI 恢复历史；不含 system 时可与 LLM 字典同构并附加元数据。
+
+        关键修复：把 `to_llm_dict()` 里为 None 的 `content` 归一为空字符串，
+        避免 UI 加载历史时通过 `str(None)` 渲染成字符串 "None"。
+        """
         d = dict(self.to_llm_dict())
+        if d.get("content") is None:
+            d["content"] = ""
         if self.ext:
             d["metadata"] = dict(self.ext)
         return d

@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Callable
 
 import flet as ft
+from click import style
 
 from logger import get_logger
 from ui_flet.state import SessionState, SessionInfo
@@ -230,6 +231,7 @@ class ConversationSidebar(ft.Column):
         colors = ThemeManager().get_color_scheme()
 
         # 顶部按钮区域（与旧版 PySide6 前端一致："新增会话" + "设置" 文本按钮）
+        # 高度 36 ≈ 默认 40 的 90%，缩小 10%
         new_conversation_button = ft.ElevatedButton(
             "新增会话",
             on_click=self._handle_new_conversation_click,
@@ -237,8 +239,9 @@ class ConversationSidebar(ft.Column):
                 color=colors.text_on_primary,
                 bgcolor=colors.primary,
                 shape=ft.RoundedRectangleBorder(radius=8),
-                padding=ft.Padding.symmetric(horizontal=10, vertical=5),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=4),
             ),
+            height=36,
             expand=True,
         )
 
@@ -246,19 +249,22 @@ class ConversationSidebar(ft.Column):
             "设置",
             on_click=self._handle_settings_click,
             style=ft.ButtonStyle(
-                color=colors.text,
-                bgcolor=colors.surface,
+                color=colors.text_on_primary,
+                bgcolor=colors.primary,
                 shape=ft.RoundedRectangleBorder(radius=8),
-                padding=ft.Padding.symmetric(horizontal=12, vertical=5),
+                padding=ft.Padding.symmetric(horizontal=12, vertical=4),
             ),
+            height=36,
+
         )
 
         top_button_row = ft.Row(
             controls=[
                 new_conversation_button,
                 settings_button,
+                ft.Container(width=6),  # 设置按钮右侧留 6px 间距，避免贴右边
             ],
-            spacing=12,
+            spacing=8,
         )
 
         # 会话列表容器
@@ -269,8 +275,9 @@ class ConversationSidebar(ft.Column):
             expand=True,
         )
 
-        # 主容器（与旧版 PySide6 一致：整体内边距 12，仅列表区域可滚动）
+        # 主容器（与旧版 PySide6 一致：整体内边距 14，仅列表区域可滚动）
         self.controls = [
+            ft.Container(height=12),  # 顶部间距，让按钮向下移动不贴顶
             top_button_row,
             ft.Container(height=12),  # 间隔
             self._list_container,
