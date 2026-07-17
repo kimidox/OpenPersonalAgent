@@ -180,6 +180,8 @@ class MainWindow:
     def _setup_window_events(self) -> None:
         """设置窗口事件处理"""
         self._page.window.on_event = self._on_window_event
+        # 全局键盘事件：处理快捷键
+        self._page.on_keyboard_event = self._on_keyboard_event
 
     def _on_window_event(self, e) -> None:
         """
@@ -195,6 +197,132 @@ class MainWindow:
             self._handle_minimize()
         elif event_type in (ft.WindowEventType.RESIZE, ft.WindowEventType.RESIZED):
             self._save_window_state()
+
+    # ==================== 快捷键处理 ====================
+
+    @staticmethod
+    def _build_hotkey_str(e) -> str:
+        """从键盘事件构建快捷键字符串（如 'ctrl+enter'）"""
+        # 忽略单独的修饰键
+        key = e.key.lower()
+        if key in ("ctrl", "shift", "alt", "meta", "control"):
+            return ""
+
+        modifiers = []
+        if e.ctrl:
+            modifiers.append("ctrl")
+        if e.shift:
+            modifiers.append("shift")
+        if e.alt:
+            modifiers.append("alt")
+        if e.meta:
+            modifiers.append("meta")
+
+        # 特殊键映射
+        key_map = {
+            "enter": "enter",
+            "escape": "esc",
+            "arrowup": "up",
+            "arrowdown": "down",
+            "arrowleft": "left",
+            "arrowright": "right",
+            "space": "space",
+            "minus": "-",
+            "equal": "=",
+            "bracketleft": "[",
+            "bracketright": "]",
+            "semicolon": ";",
+            "quote": "'",
+            "comma": ",",
+            "period": ".",
+            "slash": "/",
+            "backspace": "backspace",
+            "tab": "tab",
+        }
+        if key in key_map:
+            key = key_map[key]
+
+        return "+".join(modifiers + [key])
+
+    def _get_hotkey_value(self, hotkey_id: str) -> str:
+        """从配置读取快捷键值，不存在则返回默认值"""
+        from ui_flet.settings.hotkey_settings_page import DEFAULT_HOTKEYS
+        config = DEFAULT_HOTKEYS.get(hotkey_id)
+        if not config:
+            return ""
+        val = get_config(config["config_key"])
+        return (val or config["default"]).lower()
+
+    def _is_modal_open(self) -> bool:
+        """检查是否有模态对话框打开（设置页 / 关闭确认框）"""
+        if self._settings_dialog and self._settings_dialog.is_open():
+            return True
+        if hasattr(self, '_close_confirmation_dialog') and self._close_confirmation_dialog:
+            if getattr(self._close_confirmation_dialog, 'open', False):
+                return True
+        return False
+
+    def _on_keyboard_event(self, e) -> None:
+        """全局键盘事件处理：根据配置的快捷键执行对应操作"""
+        # 如果有模态对话框打开，不处理全局快捷键（避免干扰设置页面等）
+        if self._is_modal_open():
+            return
+
+        hotkey_str = self._build_hotkey_str(e)
+        if not hotkey_str:
+            return
+
+        # 读取各快捷键配置
+        send_key = self._get_hotkey_value("send_message")
+        newline_key = self._get_hotkey_value("newline")
+        record_key = self._get_hotkey_value("record")
+        new_conv_key = self._get_hotkey_value("new_conversation")
+        settings_key = self._get_hotkey_value("settings")
+
+        # 发送消息快捷键
+        if hotkey_str == send_key:
+            if self._input_area:
+                self._input_area.send_message()
+            return
+
+        # 换行快捷键：仅对非原生 Enter/Shift+Enter 手动插入换行
+        # （原生 Enter/Shift+Enter 由 multiline TextField 自动处理）
+        if hotkey_str == newline_key and newline_key not in ("enter", "shift+enter"):
+            if self._input_area:
+                self._input_area.insert_newline()
+            return
+
+        # 录音快捷键
+        if hotkey_str == record_key:
+            self._toggle_recording()
+            return
+
+        # 新建会话快捷键
+        if hotkey_str == new_conv_key:
+            self._handle_new_conversation()
+            return
+
+        # 打开设置快捷键
+        if hotkey_str == settings_key:
+            self._on_settings_click()
+            return
+
+    def _toggle_recording(self) -> None:
+        """切换录音状态"""
+        try:
+            from recorder import get_recorder, is_online_model_loaded
+
+            if not is_online_model_loaded():
+                self._logger.warning("流式 ASR 模型未加载，无法录音")
+                return
+
+            recorder = get_recorder()
+            if recorder.is_recording():
+                self.stop_recording()
+            else:
+                self.start_recording()
+        except Exception as e:
+            self._logger.exception(f"切换录音失败: {e}")
 
     def _handle_close_request(self) -> None:
         """处理关闭请求"""
@@ -1014,7 +1142,10 @@ class MainWindow:
                 # 添加消息到列表
                 # update_ui=False：批量加载时不逐条触发 page.update()，
                 # 由 _switch_to_conversation 在全部加载完后统一更新
-                self._message_list.add_message(msg_type, content, update_ui=False)
+                card = self._message_list.add_message(msg_type, content, update_ui=False)
+                # 历史消息直接 finalize，使悬停时能显示复制按钮
+                if card is not None:
+                    card.finalize_content()
 
             # 方案 A 配合修复：检测"半截会话"。
             # 正常结束的对话，最后一条 DB 消息必然是 assistant：

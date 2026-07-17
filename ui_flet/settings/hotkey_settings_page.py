@@ -49,6 +49,12 @@ DEFAULT_HOTKEYS = {
         "default": "ctrl+,",
         "config_key": "HOTKEY_SETTINGS",
     },
+    "newline": {
+        "name": "输入换行快捷键",
+        "description": "在输入框中插入换行符",
+        "default": "enter",
+        "config_key": "HOTKEY_NEWLINE",
+    },
 }
 
 
@@ -78,6 +84,9 @@ class HotkeySettingsPage:
 
         # 快捷键显示文本框引用
         self._hotkey_text_fields: dict[str, ft.TextField] = {}
+
+        # 保存原来的键盘事件处理器，编辑快捷键结束后恢复
+        self._saved_keyboard_handler = None
 
         # 主容器
         self._container: Optional[ft.Container] = None
@@ -288,6 +297,10 @@ class HotkeySettingsPage:
         Args:
             hotkey_id: 快捷键ID
         """
+        # 保存原来的键盘事件处理器（仅在首次进入编辑时保存）
+        if self._editing_hotkey_id is None:
+            self._saved_keyboard_handler = self._page.on_keyboard_event
+
         self._editing_hotkey_id = hotkey_id
 
         # 设置页面键盘事件监听
@@ -306,6 +319,10 @@ class HotkeySettingsPage:
         Args:
             hotkey_id: 快捷键ID
         """
+        # 保存原来的键盘事件处理器（仅在首次进入编辑时保存）
+        if self._editing_hotkey_id is None:
+            self._saved_keyboard_handler = self._page.on_keyboard_event
+
         self._editing_hotkey_id = hotkey_id
         self._page.on_keyboard_event = self._on_keyboard_event
 
@@ -318,7 +335,8 @@ class HotkeySettingsPage:
         """
         if self._editing_hotkey_id == hotkey_id:
             self._editing_hotkey_id = None
-            self._page.on_keyboard_event = None
+            # 恢复原来的键盘事件处理器，而非置 None（否则会丢失主窗口的全局快捷键）
+            self._page.on_keyboard_event = self._saved_keyboard_handler
 
     def _on_keyboard_event(self, e) -> None:
         """

@@ -431,7 +431,15 @@ class MessageCard(ft.Container):
         if is_hover and not self._is_finalized:
             return
         self._button_row.visible = is_hover
-        self._safe_update(self._button_row)
+        # 优先只更新按钮行本身，避免 page.update() 整页重渲染打断文本选择
+        try:
+            self._button_row.update()
+        except Exception:
+            try:
+                if self.page is not None:
+                    self.page.update()
+            except Exception:
+                pass
 
     def _get_mode_badge_color(self) -> str:
         """根据模式文本获取徽章颜色"""

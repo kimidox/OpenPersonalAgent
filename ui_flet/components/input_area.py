@@ -124,7 +124,6 @@ class InputArea:
             border_radius=DEFAULT_SPACING_CONFIG.radius_md,
             content_padding=DEFAULT_SPACING_CONFIG.sm,
             expand=True,
-            on_submit=self._on_input_submit,
             on_change=self._on_input_change,
         )
 
@@ -190,16 +189,6 @@ class InputArea:
         )
 
     # ==================== 事件处理 ====================
-
-    def _on_input_submit(self, e: ft.ControlEvent):
-        """
-        输入框提交事件（Enter 键）
-
-        注意：Flet 的 TextField on_submit 在按下 Enter 时触发
-        要实现 Shift+Enter 换行需要额外处理
-        """
-        # 直接发送消息
-        self._send_message()
 
     def _on_input_change(self, e: ft.ControlEvent):
         """输入内容变化"""
@@ -310,6 +299,21 @@ class InputArea:
             callback: 回调函数，接收 (text, files) 参数
         """
         self._on_send = callback
+
+    def send_message(self):
+        """公共方法：发送当前输入框中的消息（供快捷键调用）"""
+        self._send_message()
+
+    def insert_newline(self):
+        """在输入框当前光标位置插入换行符"""
+        if not self._input_field:
+            return
+        current = self._input_field.value or ""
+        self._input_field.value = current + "\n"
+        try:
+            self._input_field.update()
+        except Exception:
+            pass
 
     def clear(self):
         """清空输入框和文件"""

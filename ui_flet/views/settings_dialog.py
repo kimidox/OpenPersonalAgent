@@ -504,6 +504,10 @@ class SettingsDialog:
         """点击遮罩层关闭设置页面"""
         self.close()
 
+    def is_open(self) -> bool:
+        """检查设置对话框是否处于打开状态"""
+        return self._dialog is not None and self._dialog in self._page.overlay
+
     def open(self) -> None:
         """打开设置页面"""
         if self._dialog:
