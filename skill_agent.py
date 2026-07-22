@@ -539,7 +539,7 @@ class SkillAgent:
             return PlanMode.SIMPLE_TASK
         
         try:
-            model = get_chat_model()
+            model = get_chat_model(enable_thinking=self._enable_thinking)
             from prompt.template import INPUT_CLASSIFICATION_TEMPLATE
             
             prompt = INPUT_CLASSIFICATION_TEMPLATE.format(user_query=user_query.strip()[:2000])
@@ -681,7 +681,7 @@ class SkillAgent:
             return None
         
         try:
-            model = get_chat_model()
+            model = get_chat_model(enable_thinking=self._enable_thinking)
             from prompt.template import COMPLEX_TASK_PLANNING_TEMPLATE
             
             prompt = COMPLEX_TASK_PLANNING_TEMPLATE.format(
@@ -1406,8 +1406,8 @@ class SkillAgent:
             return
 
         logger.info("加载会话消息完成: count=%s, conversation_id=%s", len(messages), conversation_id)
-        
-        model = get_chat_model()
+
+        model = get_chat_model(enable_thinking=self._enable_thinking)
         logger.debug("获取 LLM 模型完成, conversation_id=%s", conversation_id)
 
         success_count = 0

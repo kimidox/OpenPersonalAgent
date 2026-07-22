@@ -66,9 +66,10 @@ def get_chat_model(
     # - chat_template_kwargs.enable_thinking: llama.cpp 通过 gguf chat template 控制思考模式
     # llama.cpp 不识别顶层 enable_thinking，会忽略；DashScope 通常忽略 chat_template_kwargs。
     # 这样无论后端是云端还是本地 llama.cpp，关闭思考的意图都能真正生效。
+    # 注意：这里用 et（用户每次对话时选择的思考模式状态），而不是 edt（配置文件中的深度思考能力）
     extra_body = {
-        "enable_thinking": edt,
-        "chat_template_kwargs": {"enable_thinking": edt},
+        "enable_thinking": et,
+        "chat_template_kwargs": {"enable_thinking": et},
     }
 
     if not model:

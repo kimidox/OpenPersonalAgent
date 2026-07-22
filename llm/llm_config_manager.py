@@ -27,7 +27,7 @@ class LLMConfig:
     temperature: float = 0.7
     top_p: float = 0.95
     frequency_penalty: float = 0.6
-    enable_thinking: bool = True
+    enable_thinking: bool = False
     enable_vision: bool = True
     enable_deep_thinking: bool = True
     enable_tool_call: bool = True
@@ -43,7 +43,7 @@ class LLMConfigItem:
     temperature: float = 0.7
     top_p: float = 0.95
     frequency_penalty: float = 0.6
-    enable_thinking: bool = True
+    enable_thinking: bool = False
     enable_vision: bool = True
     enable_deep_thinking: bool = True
     enable_tool_call: bool = True
@@ -106,7 +106,7 @@ class LLMConfigItem:
             temperature=float(data.get("temperature", 0.7)),
             top_p=float(data.get("top_p", 0.95)),
             frequency_penalty=float(data.get("frequency_penalty", 0.6)),
-            enable_thinking=bool(data.get("enable_thinking", True)),
+            enable_thinking=bool(data.get("enable_thinking", False)),
             enable_vision=bool(data.get("enable_vision", True)),
             enable_deep_thinking=bool(data.get("enable_deep_thinking", True)),
             enable_tool_call=bool(data.get("enable_tool_call", True)),
@@ -173,7 +173,7 @@ def _migrate_old_format(data: dict) -> MultiLLMConfig:
         temperature=float(data.get("temperature", 0.7)),
         top_p=float(data.get("top_p", 0.95)),
         frequency_penalty=float(data.get("frequency_penalty", 0.6)),
-        enable_thinking=bool(data.get("enable_thinking", True)),
+        enable_thinking=bool(data.get("enable_thinking", False)),
         enable_vision=bool(data.get("enable_vision", True)),
         enable_deep_thinking=bool(data.get("enable_deep_thinking", True)),
         enable_tool_call=bool(data.get("enable_tool_call", True)),
@@ -195,7 +195,7 @@ def _create_default_multi_config() -> MultiLLMConfig:
         temperature=0.7,
         top_p=0.95,
         frequency_penalty=0.6,
-        enable_thinking=True,
+        enable_thinking=False,
         enable_vision=True,
         enable_deep_thinking=True,
         enable_tool_call=True,
@@ -305,7 +305,7 @@ def get_current_config() -> LLMConfig:
                 temperature=0.7,
                 top_p=0.95,
                 frequency_penalty=0.6,
-                enable_thinking=True,
+                enable_thinking=False,
                 enable_vision=True,
                 enable_deep_thinking=True,
                 enable_tool_call=True,
