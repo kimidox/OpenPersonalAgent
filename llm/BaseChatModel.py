@@ -493,6 +493,9 @@ class BaseChatModel(ABC):
         top_p: float = 0.95,
         frequency_penalty: float = 0.6,
         extra_body: Optional[dict[str, Any]] = None,
+        enable_vision: bool = True,
+        enable_deep_thinking: bool = True,
+        enable_tool_call: bool = True,
     ) -> None:
         self.model_name = model_name or config.MODEL_NAME
         self.api_key = api_key or config.OPENAI_API_KEY
@@ -500,11 +503,14 @@ class BaseChatModel(ABC):
         self.temperature = temperature
         self.top_p = top_p
         self.frequency_penalty = frequency_penalty
+        self.enable_vision = enable_vision
+        self.enable_deep_thinking = enable_deep_thinking
+        self.enable_tool_call = enable_tool_call
         # 默认 extra_body 同时包含 DashScope 和 llama.cpp 两个后端的兼容字段，
         # 让 enable_thinking 的意图在云端和本地都能生效（见 llm/__init__.py 的 get_chat_model）。
         self.extra_body = extra_body if extra_body is not None else {
-            "enable_thinking": True,
-            "chat_template_kwargs": {"enable_thinking": True},
+            "enable_thinking": enable_deep_thinking,
+            "chat_template_kwargs": {"enable_thinking": enable_deep_thinking},
         }
         self._client: Optional[OpenAI] = None
 

@@ -83,6 +83,7 @@ class JSONParser(BaseParser):
             depth = self._calculate_list_depth(json_data)
 
         return {
+            "content_type": "text",
             "file_name": file_path.name,
             "file_size": stat.st_size,
             "created_time": stat.st_ctime,

@@ -344,6 +344,26 @@ class InputArea:
         """是否启用了思考模式"""
         return self._enable_thinking
 
+    def set_vision_enabled(self, enabled: bool) -> list[UploadedFileInfo]:
+        """设置视觉能力启用状态
+
+        Args:
+            enabled: 是否启用视觉能力
+
+        Returns:
+            如果禁用视觉能力且有已上传图片，返回被清除的图片文件列表；
+            否则返回空列表。
+        """
+        if self._file_upload_area:
+            return self._file_upload_area.set_vision_enabled(enabled)
+        return []
+
+    def is_vision_enabled(self) -> bool:
+        """获取视觉能力启用状态"""
+        if self._file_upload_area:
+            return self._file_upload_area.is_vision_enabled()
+        return True
+
     def set_inference_running(self, running: bool) -> None:
         """
         设置推理运行状态

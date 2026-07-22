@@ -40,6 +40,9 @@ def get_chat_model(
     top_p: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     enable_thinking: Optional[bool] = None,
+    enable_vision: Optional[bool] = None,
+    enable_deep_thinking: Optional[bool] = None,
+    enable_tool_call: Optional[bool] = None,
 ) -> BaseChatModel:
     """
     根据配置获取具体的模型实现。
@@ -54,6 +57,9 @@ def get_chat_model(
     tp = top_p if top_p is not None else current_config.top_p
     fp = frequency_penalty if frequency_penalty is not None else current_config.frequency_penalty
     et = enable_thinking if enable_thinking is not None else current_config.enable_thinking
+    ev = enable_vision if enable_vision is not None else current_config.enable_vision
+    edt = enable_deep_thinking if enable_deep_thinking is not None else current_config.enable_deep_thinking
+    etc = enable_tool_call if enable_tool_call is not None else current_config.enable_tool_call
 
     # 同时传两个兼容字段：
     # - enable_thinking (顶层): 阿里云 DashScope 私有字段
@@ -61,21 +67,76 @@ def get_chat_model(
     # llama.cpp 不识别顶层 enable_thinking，会忽略；DashScope 通常忽略 chat_template_kwargs。
     # 这样无论后端是云端还是本地 llama.cpp，关闭思考的意图都能真正生效。
     extra_body = {
-        "enable_thinking": et,
-        "chat_template_kwargs": {"enable_thinking": et},
+        "enable_thinking": edt,
+        "chat_template_kwargs": {"enable_thinking": edt},
     }
 
     if not model:
-        return QwenChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
+        return QwenChatModel(
+            model_name=model,
+            api_key=key,
+            base_url=url,
+            temperature=temp,
+            top_p=tp,
+            frequency_penalty=fp,
+            extra_body=extra_body,
+            enable_vision=ev,
+            enable_deep_thinking=edt,
+            enable_tool_call=etc,
+        )
 
     if model == "glm-5" or model.startswith("glm"):
-        return GLMChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
+        return GLMChatModel(
+            model_name=model,
+            api_key=key,
+            base_url=url,
+            temperature=temp,
+            top_p=tp,
+            frequency_penalty=fp,
+            extra_body=extra_body,
+            enable_vision=ev,
+            enable_deep_thinking=edt,
+            enable_tool_call=etc,
+        )
     if model.startswith("qwen3.5") or model.startswith("qwen") or model.startswith("Qwen"):
-        return QwenChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
+        return QwenChatModel(
+            model_name=model,
+            api_key=key,
+            base_url=url,
+            temperature=temp,
+            top_p=tp,
+            frequency_penalty=fp,
+            extra_body=extra_body,
+            enable_vision=ev,
+            enable_deep_thinking=edt,
+            enable_tool_call=etc,
+        )
     if model.startswith("gemma"):
-        return GemmaChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
+        return GemmaChatModel(
+            model_name=model,
+            api_key=key,
+            base_url=url,
+            temperature=temp,
+            top_p=tp,
+            frequency_penalty=fp,
+            extra_body=extra_body,
+            enable_vision=ev,
+            enable_deep_thinking=edt,
+            enable_tool_call=etc,
+        )
 
-    return QwenChatModel(model_name=model, api_key=key, base_url=url, temperature=temp, top_p=tp, frequency_penalty=fp, extra_body=extra_body)
+    return QwenChatModel(
+        model_name=model,
+        api_key=key,
+        base_url=url,
+        temperature=temp,
+        top_p=tp,
+        frequency_penalty=fp,
+        extra_body=extra_body,
+        enable_vision=ev,
+        enable_deep_thinking=edt,
+        enable_tool_call=etc,
+    )
 
 
 @dataclass
@@ -130,6 +191,9 @@ class ChatModelWithFallback:
             top_p=next_config.top_p,
             frequency_penalty=next_config.frequency_penalty,
             enable_thinking=next_config.enable_thinking,
+            enable_vision=next_config.enable_vision,
+            enable_deep_thinking=next_config.enable_deep_thinking,
+            enable_tool_call=next_config.enable_tool_call,
         )
 
         return ChatModelWithFallback(
@@ -213,6 +277,9 @@ def get_chat_model_with_fallback(
         top_p=config_item.top_p,
         frequency_penalty=config_item.frequency_penalty,
         enable_thinking=config_item.enable_thinking,
+        enable_vision=config_item.enable_vision,
+        enable_deep_thinking=config_item.enable_deep_thinking,
+        enable_tool_call=config_item.enable_tool_call,
     )
 
     return ChatModelWithFallback(
@@ -270,6 +337,9 @@ def try_next_config_on_failure(
         top_p=next_config.top_p,
         frequency_penalty=next_config.frequency_penalty,
         enable_thinking=next_config.enable_thinking,
+        enable_vision=next_config.enable_vision,
+        enable_deep_thinking=next_config.enable_deep_thinking,
+        enable_tool_call=next_config.enable_tool_call,
     )
 
     return ChatModelWithFallback(
@@ -316,6 +386,9 @@ def execute_with_fallback(
             top_p=config_item.top_p,
             frequency_penalty=config_item.frequency_penalty,
             enable_thinking=config_item.enable_thinking,
+            enable_vision=config_item.enable_vision,
+            enable_deep_thinking=config_item.enable_deep_thinking,
+            enable_tool_call=config_item.enable_tool_call,
         )
 
         try:

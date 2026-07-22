@@ -90,6 +90,34 @@ def _preload_tts_check():
         logger.exception(f"TTS 模型自动加载检查异常: {e}")
 
 
+def _cleanup_old_images():
+    """后台清理过期的图片文件"""
+    try:
+        from document_parser.file_storage import cleanup_old_images
+
+        logger = get_logger()
+        logger.info("开始执行图片清理任务...")
+
+        result = cleanup_old_images()
+
+        deleted_count = result.get("deleted_count", 0)
+        total_size = result.get("total_size", 0)
+
+        if deleted_count > 0:
+            # 格式化文件大小（字节 -> MB）
+            size_mb = total_size / (1024 * 1024)
+            logger.info(
+                f"图片清理完成: 删除 {deleted_count} 个文件，"
+                f"释放 {size_mb:.2f} MB 空间 ({total_size} 字节)"
+            )
+        else:
+            logger.info("图片清理完成: 无需清理的过期文件")
+
+    except Exception as e:
+        logger = get_logger()
+        logger.exception(f"图片清理任务异常: {e}")
+
+
 def _start_floating_ball_process() -> tuple[Process, Queue, Queue]:
     """启动桌面悬浮球子进程"""
     logger = get_logger()
@@ -352,6 +380,14 @@ def run_app(background: bool = False) -> None:
         daemon=True
     )
     tts_preload_thread.start()
+
+    # 启动图片清理线程（应用启动时执行一次）
+    cleanup_thread = threading.Thread(
+        target=_cleanup_old_images,
+        name="image-cleanup",
+        daemon=True
+    )
+    cleanup_thread.start()
 
     logger.info("ui_flet.main: 启动 Flet 应用")
 

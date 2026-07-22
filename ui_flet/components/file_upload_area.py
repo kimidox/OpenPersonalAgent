@@ -313,3 +313,31 @@ class FileUploadArea(ft.Container):
     def inject_summary_to_message(self, text: str) -> str:
         """将文件摘要注入消息文本"""
         return self._controller.inject_summary_to_message(text)
+
+    def set_vision_enabled(self, enabled: bool) -> list[UploadedFileInfo]:
+        """设置视觉能力启用状态
+
+        Args:
+            enabled: 是否启用视觉能力
+
+        Returns:
+            如果禁用视觉能力且有已上传图片，返回被清除的图片文件列表；
+            否则返回空列表。
+        """
+        removed_files = self._controller.set_vision_enabled(enabled)
+
+        # 更新文件预览列表（清除被移除的图片）
+        if removed_files and self._file_preview_list:
+            for file_info in removed_files:
+                self._file_preview_list.remove_file(file_info.file_id)
+            self._logger.info(
+                f"FileUploadArea: 视觉能力禁用，已清除 {len(removed_files)} 个图片文件"
+            )
+
+        self._update_progress_display()
+        self._notify_files_changed()
+        return removed_files
+
+    def is_vision_enabled(self) -> bool:
+        """获取视觉能力启用状态"""
+        return self._controller.is_vision_enabled()

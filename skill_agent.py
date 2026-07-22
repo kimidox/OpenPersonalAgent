@@ -150,7 +150,8 @@ class SkillAgent:
         self._stop_event = threading.Event()
         self._recent_tool_calls: list[dict] = []
         self._consecutive_repeat_count: int = 0
-        self._uploaded_files_content: str = ""
+        # 存储上传文件的结构化数据：{"text_content": str, "images": list}
+        self._uploaded_files_content: dict = {"text_content": "", "images": []}
         self._enable_thinking: bool = False
         self._step_plan: list[dict] = []
         self._current_step: int = 0
@@ -164,22 +165,120 @@ class SkillAgent:
     def set_file_upload_controller(self, controller: Any) -> None:
         self._tool_ctx.file_upload_controller = controller
 
-    def set_uploaded_files_content(self, content: str) -> None:
-        self._uploaded_files_content = content or ""
+    def set_uploaded_files_content(self, content: str | dict) -> None:
+        """设置上传文件的结构化内容。
 
-    def _consume_uploaded_files_content(self, user_content: str) -> str:
+        Args:
+            content: 文件内容，支持两种格式：
+                - dict: 结构化数据，格式为 {"text_content": str, "images": list}
+                  images 列表项格式：{"file_name": str, "base64_data": str, "mime_type": str}
+                - str: 纯文本内容（向后兼容），会被转换为 {"text_content": content, "images": []}
+        """
+        if isinstance(content, dict):
+            # 确保数据结构完整
+            self._uploaded_files_content = {
+                "text_content": content.get("text_content", ""),
+                "images": content.get("images", []),
+            }
+        elif isinstance(content, str):
+            # 向后兼容：将字符串转换为结构化数据
+            logger.debug(f"向后兼容：将字符串内容转换为结构化数据，长度={len(content)}")
+            self._uploaded_files_content = {
+                "text_content": content,
+                "images": [],
+            }
+        else:
+            logger.warning(f"不支持的 content 类型: {type(content)}，使用空结构")
+            self._uploaded_files_content = {"text_content": "", "images": []}
+
+    def _consume_uploaded_files_content(
+        self,
+        user_content: str,
+        enable_vision: bool = True,
+    ) -> str | list:
         """将上传文件内容追加到用户消息内容中，并清空缓存（一次性消费）。
 
         文件内容嵌入用户消息而非系统提示词，原因：
         - 文件内容是用户数据，不属于系统指令
         - 仅在当前轮次出现一次，不会在 agent 多步循环中重复注入系统提示词
         - 覆盖所有路径（direct_reply / plan_confirm / agent loop）
+
+        Args:
+            user_content: 用户输入的文本内容
+            enable_vision: 是否启用视觉能力（图片处理）
+
+        Returns:
+            str | list: OpenAI 消息内容格式
+                - str: 纯文本消息（无图片或 enable_vision=False）
+                - list: 多模态消息格式，包含文本和图片
         """
-        if self._uploaded_files_content:
-            result = user_content + "\n\n" + self._uploaded_files_content
-            self._uploaded_files_content = ""
-            return result
-        return user_content
+        if not self._uploaded_files_content:
+            # 无上传文件，直接返回用户内容
+            return user_content
+
+        text_content = self._uploaded_files_content.get("text_content", "")
+        images = self._uploaded_files_content.get("images", [])
+
+        # 清空缓存（一次性消费）
+        self._uploaded_files_content = {"text_content": "", "images": []}
+
+        # 构建最终消息内容
+        message_parts: list[dict] = []
+
+        # 1. 处理用户文本内容
+        if user_content and user_content.strip():
+            message_parts.append({
+                "type": "text",
+                "text": user_content.strip(),
+            })
+
+        # 2. 处理文件文本内容（如果有）
+        if text_content and text_content.strip():
+            # 如果已有用户文本，追加到同一文本块中
+            if message_parts and message_parts[0]["type"] == "text":
+                existing_text = message_parts[0]["text"]
+                message_parts[0]["text"] = existing_text + "\n\n" + text_content.strip()
+            else:
+                message_parts.append({
+                    "type": "text",
+                    "text": text_content.strip(),
+                })
+
+        # 3. 处理图片内容（仅在 enable_vision=True 时）
+        if enable_vision and images:
+            logger.debug(f"处理 {len(images)} 张图片，enable_vision={enable_vision}")
+            for img in images:
+                file_name = img.get("file_name", "unknown")
+                base64_data = img.get("base64_data", "")
+                mime_type = img.get("mime_type", "image/png")
+
+                if not base64_data:
+                    logger.warning(f"图片 {file_name} 缺少 base64_data，跳过")
+                    continue
+
+                # 构建 data URL 格式：data:{mime_type};base64,{base64_data}
+                image_url = f"data:{mime_type};base64,{base64_data}"
+                message_parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image_url,
+                    },
+                })
+                logger.debug(f"添加图片到消息: {file_name}, MIME={mime_type}")
+        elif images and not enable_vision:
+            # enable_vision=False 时跳过图片处理，记录日志
+            logger.info(f"enable_vision=False，跳过 {len(images)} 张图片的处理")
+
+        # 4. 根据消息内容数量决定返回格式
+        if not message_parts:
+            # 无任何内容，返回空字符串
+            return ""
+        elif len(message_parts) == 1 and message_parts[0]["type"] == "text":
+            # 只有文本内容，返回字符串格式（符合 OpenAI 规范）
+            return message_parts[0]["text"]
+        else:
+            # 多模态内容，返回列表格式
+            return message_parts
 
     @property
     def _get_compactor(self) -> ContextCompactor | None:
@@ -524,8 +623,11 @@ class SkillAgent:
         try:
             model = get_chat_model(enable_thinking=self._enable_thinking)
 
-            # 将上传文件内容追加到用户消息
-            user_content = self._consume_uploaded_files_content(user_query.strip())
+            # 将上传文件内容追加到用户消息（传递 enable_vision）
+            user_content = self._consume_uploaded_files_content(
+                user_query.strip(),
+                enable_vision=model.enable_vision,
+            )
 
             messages = [
                 {"role": "system", "content": f"你是一个友好的助手。请直接用简洁的语言回答用户问题。\n\n{self.get_base_info()}"},
@@ -675,6 +777,7 @@ class SkillAgent:
         user_query: str,
         plan_data: dict,
         log_callback: Optional[Callable[[str, str], Any]] = None,
+        enable_vision: bool = True,
     ) -> str:
         """生成计划后，请求用户确认。返回 SKILL_AGENT_AWAITING_USER_REPLY 以暂停等待用户。"""
         plan_display = self._format_plan_display(plan_data)
@@ -697,7 +800,10 @@ class SkillAgent:
                 metadata["files"] = self._last_uploaded_files
                 self._last_uploaded_files = None
             # 将上传文件内容追加到用户消息（一次性消费）
-            user_content = self._consume_uploaded_files_content(user_query.strip())
+            user_content = self._consume_uploaded_files_content(
+                user_query.strip(),
+                enable_vision=enable_vision,
+            )
             self.memory.append_message(cid, "user", user_content, metadata=metadata)
             # 持久化计划展示
             self.memory.append_message(cid, "assistant", plan_display, metadata={"type": "plan"})
@@ -1072,6 +1178,7 @@ class SkillAgent:
         *,
         system_prompt: str,
         user_query: str,
+        enable_vision: bool = True,
     ) -> None:
         assert self.memory is not None
         cid = self._conversation_id
@@ -1086,7 +1193,10 @@ class SkillAgent:
             # Clear after using
             self._last_uploaded_files = None
         # 将上传文件内容追加到用户消息（一次性消费，计划确认流程已在 _request_plan_confirmation 中消费）
-        user_content = self._consume_uploaded_files_content(user_query.strip())
+        user_content = self._consume_uploaded_files_content(
+            user_query.strip(),
+            enable_vision=enable_vision,
+        )
         self.memory.append_message(cid, "user", user_content, metadata=metadata)
         messages.append({"role": "user", "content": user_content})
 
@@ -1531,7 +1641,12 @@ class SkillAgent:
                     if plan_data is not None:
                         # 启用确认环节：请求用户确认后再执行
                         if config.PLAN_CONFIRMATION_ENABLED:
-                            return self._request_plan_confirmation(user_query, plan_data, log_callback)
+                            return self._request_plan_confirmation(
+                                user_query,
+                                plan_data,
+                                log_callback,
+                                enable_vision=model.enable_vision,
+                            )
                         # 未启用确认环节：展示计划后直接执行（保持原有行为）
                         plan_display = self._format_plan_display(plan_data)
                         if log_callback:
@@ -1595,7 +1710,12 @@ class SkillAgent:
                             logger.debug("加载默认技能: %s", active_skill_ids)
 
             if self.memory is not None:
-                self._append_model_messages(messages, system_prompt=system_prompt, user_query=user_query)
+                self._append_model_messages(
+                    messages,
+                    system_prompt=system_prompt,
+                    user_query=user_query,
+                    enable_vision=model.enable_vision,
+                )
                 prior_messages = self.memory.get_message_records(self._conversation_id)
                 logger.debug("加载历史消息: %s 条", len(prior_messages))
                 if prior_messages and len(prior_messages) >= 2:
@@ -2412,7 +2532,7 @@ class SkillAgent:
             logger.debug("异常退出，返回 err_msg")
             return err_msg
         finally:
-            self._uploaded_files_content = ""
+            self._uploaded_files_content = {"text_content": "", "images": []}
             # 重置计划确认标志（pending_plan 不清空，供续跑使用；下次首次规划会覆盖）
             self._plan_confirmed = False
             logger.debug("===== run() 结束执行 =====")

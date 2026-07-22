@@ -73,6 +73,11 @@ class ModelConfigPage:
         self._top_p_field: Optional[ft.TextField] = None
         self._frequency_penalty_field: Optional[ft.TextField] = None
 
+        # 能力开关控件
+        self._enable_vision_switch: Optional[ft.Switch] = None
+        self._enable_deep_thinking_switch: Optional[ft.Switch] = None
+        self._enable_tool_call_switch: Optional[ft.Switch] = None
+
         # 文件选择器
         self._file_picker: Optional[ft.FilePicker] = None
 
@@ -332,6 +337,22 @@ class ModelConfigPage:
             helper_style=ft.TextStyle(color=colors.text_muted, size=10),
         )
 
+        # 能力开关控件
+        self._enable_vision_switch = ft.Switch(
+            label="视觉能力",
+            value=True,
+        )
+
+        self._enable_deep_thinking_switch = ft.Switch(
+            label="深度思考能力",
+            value=True,
+        )
+
+        self._enable_tool_call_switch = ft.Switch(
+            label="工具调用能力",
+            value=True,
+        )
+
         # 保存按钮
         save_button = ft.ElevatedButton(
             "保存配置",
@@ -373,6 +394,12 @@ class ModelConfigPage:
                 self._top_p_field,
                 ft.Container(height=10),
                 self._frequency_penalty_field,
+                ft.Container(height=10),
+                self._enable_vision_switch,
+                ft.Container(height=10),
+                self._enable_deep_thinking_switch,
+                ft.Container(height=10),
+                self._enable_tool_call_switch,
                 ft.Container(height=14),
                 ft.Container(
                     content=ft.Row([save_button, delete_button], spacing=12),
@@ -564,6 +591,11 @@ class ModelConfigPage:
         self._top_p_field.value = str(config.top_p)
         self._frequency_penalty_field.value = str(config.frequency_penalty)
 
+        # 设置能力开关状态
+        self._enable_vision_switch.value = config.enable_vision
+        self._enable_deep_thinking_switch.value = config.enable_deep_thinking
+        self._enable_tool_call_switch.value = config.enable_tool_call
+
         # 显示表单
         self._config_form.visible = True
 
@@ -580,6 +612,11 @@ class ModelConfigPage:
         self._temperature_field.value = "0.7"
         self._top_p_field.value = "0.95"
         self._frequency_penalty_field.value = "0.6"
+
+        # 重置能力开关为 True
+        self._enable_vision_switch.value = True
+        self._enable_deep_thinking_switch.value = True
+        self._enable_tool_call_switch.value = True
 
     def _on_add_config_click(self, e) -> None:
         """添加新配置按钮点击事件"""
@@ -650,7 +687,9 @@ class ModelConfigPage:
             temperature=temperature,
             top_p=top_p,
             frequency_penalty=frequency_penalty,
-            enable_thinking=True,
+            enable_vision=self._enable_vision_switch.value,
+            enable_deep_thinking=self._enable_deep_thinking_switch.value,
+            enable_tool_call=self._enable_tool_call_switch.value,
         )
 
         # 保存配置

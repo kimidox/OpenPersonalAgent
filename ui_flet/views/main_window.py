@@ -24,6 +24,7 @@ from ui_flet.theme import ThemeManager, get_color
 from ui_flet.components.message_list import MessageList
 from ui_flet.components.input_area import InputArea
 from ui_flet.utils.file_upload_manager import UploadedFileInfo
+from ui_flet.utils.message_utils import try_parse_json_content
 from ui_flet.components.await_user_card import AwaitUserCard
 from ui_flet.components.conversation_sidebar import ConversationSidebar
 from ui_flet.views.floating_chat_window import FloatingChatWindow
@@ -41,21 +42,8 @@ class MainWindow:
     - 左侧会话侧边栏
     - 右侧主内容区（消息列表 + 输入区域）
     - 悬浮聊天窗口
-    - 窗口状态保存/恢复
     - 窗口控制（最小化/关闭）
     """
-
-    # 窗口状态配置键
-    CONFIG_KEY_WIDTH = "UI_FLET_WINDOW_WIDTH"
-    CONFIG_KEY_HEIGHT = "UI_FLET_WINDOW_HEIGHT"
-    CONFIG_KEY_POS_X = "UI_FLET_WINDOW_POS_X"
-    CONFIG_KEY_POS_Y = "UI_FLET_WINDOW_POS_Y"
-
-    # 默认窗口尺寸
-    DEFAULT_WIDTH = 1200
-    DEFAULT_HEIGHT = 800
-    MIN_WIDTH = 800
-    MIN_HEIGHT = 600
 
     # 侧边栏宽度（与旧版 PySide6 前端一致：固定 182px）
     SIDEBAR_WIDTH = 182
@@ -76,6 +64,7 @@ class MainWindow:
         # 状态管理
         self._app_state = AppState()
         self._setup_stream_callbacks()
+        self._setup_ui_state_callbacks()
 
         # 主题管理
         self._theme_manager = ThemeManager()
@@ -133,12 +122,12 @@ class MainWindow:
         """设置窗口基础配置"""
         self._page.title = "PersonalWindowGLM"
 
-        # 加载窗口状态
-        self._load_window_state()
+        # 设置初始窗口大小（从 env 文件读取，允许用户调整但不保存）
+        self._page.window.width = config.WINDOW_WIDTH
+        self._page.window.height = config.WINDOW_HEIGHT
 
-        # 设置最小尺寸
-        self._page.window.min_width = self.MIN_WIDTH
-        self._page.window.min_height = self.MIN_HEIGHT
+        # 窗口初始位置在屏幕正中间
+        self._center_window()
 
         # 防止直接关闭
         self._page.window.prevent_close = True
@@ -195,8 +184,6 @@ class MainWindow:
             self._handle_close_request()
         elif event_type == ft.WindowEventType.MINIMIZE:
             self._handle_minimize()
-        elif event_type in (ft.WindowEventType.RESIZE, ft.WindowEventType.RESIZED):
-            self._save_window_state()
 
     # ==================== 快捷键处理 ====================
 
@@ -332,7 +319,6 @@ class MainWindow:
     def _handle_minimize(self) -> None:
         """处理最小化"""
         self._logger.info("窗口最小化")
-        self._save_window_state()
 
     def _show_close_confirmation(self) -> None:
         """显示关闭确认对话框"""
@@ -345,8 +331,6 @@ class MainWindow:
         async def on_floating_ball(e):
             """进入悬浮球模式"""
             self._dismiss_close_dialog()
-            # 保存窗口状态
-            self._save_window_state()
             # 隐藏主窗口
             self._page.window.minimized = True
             self._page.window.visible = False
@@ -359,7 +343,6 @@ class MainWindow:
 
         async def on_close(e):
             """直接关闭"""
-            self._save_window_state()
             self._dismiss_close_dialog()
             self._page.window.prevent_close = False
             # 必须先 update 同步 prevent_close=False 到客户端，
@@ -390,200 +373,37 @@ class MainWindow:
             self._close_confirmation_dialog.open = False
             self._page.update()
 
-    def _load_window_state(self) -> None:
-        """从配置加载窗口状态"""
-        try:
-            width = get_config(self.CONFIG_KEY_WIDTH)
-            height = get_config(self.CONFIG_KEY_HEIGHT)
-            pos_x = get_config(self.CONFIG_KEY_POS_X)
-            pos_y = get_config(self.CONFIG_KEY_POS_Y)
-
-            # 设置尺寸
-            if width and height:
-                self._page.window.width = int(width)
-                self._page.window.height = int(height)
-            else:
-                self._page.window.width = self.DEFAULT_WIDTH
-                self._page.window.height = self.DEFAULT_HEIGHT
-
-            # 设置位置（带有效性验证）
-            if pos_x and pos_y:
-                window_x = int(pos_x)
-                window_y = int(pos_y)
-                window_w = int(self._page.window.width)
-                window_h = int(self._page.window.height)
-
-                # 验证窗口位置是否有效
-                if self._is_window_position_valid(window_x, window_y, window_w, window_h):
-                    self._page.window.left = window_x
-                    self._page.window.top = window_y
-                    self._logger.info(f"窗口位置已恢复: ({window_x}, {window_y})")
-                else:
-                    # 位置无效，居中显示
-                    self._center_window()
-                    self._logger.warning(
-                        f"窗口位置无效 ({window_x}, {window_y})，已居中显示"
-                    )
-            else:
-                # 没有保存的位置，居中显示
-                self._center_window()
-                self._logger.info("未找到保存的窗口位置，居中显示")
-
-        except Exception as e:
-            self._logger.warning(f"加载窗口状态失败: {e}")
-            self._page.window.width = self.DEFAULT_WIDTH
-            self._page.window.height = self.DEFAULT_HEIGHT
-            self._center_window()
-
-    def _is_window_position_valid(
-        self, x: int, y: int, width: int, height: int
-    ) -> bool:
-        """
-        验证窗口位置是否在屏幕范围内
-
-        Args:
-            x: 窗口左上角 X 坐标
-            y: 窗口左上角 Y 坐标
-            width: 窗口宽度
-            height: 窗口高度
-
-        Returns:
-            True 如果位置有效（至少部分可见），False 如果完全在屏幕外
-        """
-        try:
-            # 尝试使用 screeninfo 获取多显示器信息
-            try:
-                from screeninfo import get_monitors
-
-                monitors = get_monitors()
-                if monitors:
-                    for monitor in monitors:
-                        # 检查窗口是否与任一显示器的工作区域有交集
-                        # 允许窗口部分超出屏幕，但至少要有一定比例可见
-                        min_visible_width = min(width, 200)  # 至少 200px 宽度可见
-                        min_visible_height = min(height, 100)  # 至少 100px 高度可见
-
-                        # 窗口右边界和下边界
-                        window_right = x + width
-                        window_bottom = y + height
-
-                        # 显示器边界（使用工作区域，排除任务栏）
-                        monitor_right = monitor.x + monitor.width
-                        monitor_bottom = monitor.y + monitor.height
-
-                        # 检查水平方向是否有足够的可见区域
-                        horizontal_visible = max(
-                            0,
-                            min(window_right, monitor_right)
-                            - max(x, monitor.x),
-                        )
-                        # 检查垂直方向是否有足够的可见区域
-                        vertical_visible = max(
-                            0,
-                            min(window_bottom, monitor_bottom)
-                            - max(y, monitor.y),
-                        )
-
-                        # 如果在任一显示器上有足够的可见区域，则位置有效
-                        if (
-                            horizontal_visible >= min_visible_width
-                            and vertical_visible >= min_visible_height
-                        ):
-                            self._logger.info(
-                                f"窗口位置在显示器 {monitor.name} 范围内有效"
-                            )
-                            return True
-
-                    self._logger.info(
-                        f"窗口位置 ({x}, {y}) 不在任何显示器范围内"
-                    )
-                    return False
-
-            except ImportError:
-                # screeninfo 未安装，使用 tkinter 获取主显示器尺寸
-                self._logger.debug("screeninfo 未安装，使用 tkinter 获取屏幕尺寸")
-                import tkinter as tk
-
-                root = tk.Tk()
-                screen_width = root.winfo_screenwidth()
-                screen_height = root.winfo_screenheight()
-                root.destroy()
-
-                # 简单检查：窗口是否在主显示器上有足够的可见区域
-                min_visible_width = min(width, 200)
-                min_visible_height = min(height, 100)
-
-                # 检查水平方向
-                horizontal_visible = max(
-                    0, min(x + width, screen_width) - max(x, 0)
-                )
-                # 检查垂直方向
-                vertical_visible = max(
-                    0, min(y + height, screen_height) - max(y, 0)
-                )
-
-                is_valid = (
-                    horizontal_visible >= min_visible_width
-                    and vertical_visible >= min_visible_height
-                )
-
-                if is_valid:
-                    self._logger.info(
-                        f"窗口位置在主显示器范围内有效 (屏幕: {screen_width}x{screen_height})"
-                    )
-                else:
-                    self._logger.info(
-                        f"窗口位置 ({x}, {y}) 不在主显示器范围内 (屏幕: {screen_width}x{screen_height})"
-                    )
-
-                return is_valid
-
-        except Exception as e:
-            self._logger.warning(f"验证窗口位置时出错: {e}，默认视为有效")
-            return True  # 出错时保守处理，不改变位置
-
     def _center_window(self) -> None:
         """将窗口居中显示在主显示器上"""
-        try:
-            import tkinter as tk
-
-            root = tk.Tk()
-            screen_width = root.winfo_screenwidth()
-            screen_height = root.winfo_screenheight()
-            root.destroy()
-
-            window_width = int(self._page.window.width)
-            window_height = int(self._page.window.height)
-
-            # 计算居中位置
-            x = (screen_width - window_width) // 2
-            y = (screen_height - window_height) // 2
-
-            self._page.window.left = x
-            self._page.window.top = y
-
-            self._logger.info(
-                f"窗口已居中: ({x}, {y}), 屏幕: {screen_width}x{screen_height}"
-            )
-
-        except Exception as e:
-            self._logger.warning(f"居中窗口失败: {e}")
-            # 使用默认位置（Flet 会自动处理）
-            pass
-
-    def _save_window_state(self) -> None:
-        """保存窗口状态到配置"""
-        try:
-            set_config(self.CONFIG_KEY_WIDTH, str(int(self._page.window.width)))
-            set_config(self.CONFIG_KEY_HEIGHT, str(int(self._page.window.height)))
-            set_config(self.CONFIG_KEY_POS_X, str(int(self._page.window.left)))
-            set_config(self.CONFIG_KEY_POS_Y, str(int(self._page.window.top)))
-        except Exception as e:
-            self._logger.warning(f"保存窗口状态失败: {e}")
-
-    def _has_saved_position(self) -> bool:
-        """检查是否有保存的窗口位置"""
-        return bool(get_config(self.CONFIG_KEY_POS_X) and get_config(self.CONFIG_KEY_POS_Y))
+        self._page.window.center()
+        # try:
+        #     window_width = int(self._page.window.width)
+        #     window_height = int(self._page.window.height)
+        #     import ctypes
+        #     # 获取屏幕工作区（排除任务栏）
+        #     user32 = ctypes.windll.user32
+        #     work_area = ctypes.wintypes.RECT()
+        #     user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(work_area), 0)  # SPI_GETWORKAREA
+        #
+        #     work_left = work_area.left
+        #     work_top = work_area.top
+        #     work_right = work_area.right
+        #     work_bottom = work_area.bottom
+        #
+        #     work_width = work_right - work_left
+        #     work_height = work_bottom - work_top
+        #
+        #     x = work_left + (work_width - window_width) // 2
+        #     y = work_top + (work_height - window_height) // 2
+        #
+        #     self._logger.info(
+        #         f"窗口已居中: ({x}, {y}), 屏幕: {work_width}x{work_height}"
+        #     )
+        #
+        # except Exception as e:
+        #     self._logger.warning(f"居中窗口失败: {e}")
+        #     # 使用默认位置（Flet 会自动处理）
+        #     pass
 
     def _apply_theme(self) -> None:
         """应用主题样式"""
@@ -773,6 +593,22 @@ class MainWindow:
         if self.skill_agent:
             from ui_flet.utils.file_upload_controller import FileUploadController
             files_content = FileUploadController.generate_full_content_from_list(files)
+
+            # 记录文件内容传递的日志
+            if files_content:
+                text_content = files_content.get("text_content", "")
+                images = files_content.get("images", [])
+                self._logger.info(
+                    f"文件内容已传递给 SkillAgent: "
+                    f"文本内容长度={len(text_content)}, 图片数量={len(images)}"
+                )
+                if images:
+                    self._logger.info(
+                        f"图片文件: {[img.get('file_name') for img in images]}"
+                    )
+            else:
+                self._logger.info("无文件内容传递给 SkillAgent")
+
             self.skill_agent.set_uploaded_files_content(files_content)
 
         # 添加用户消息到消息列表
@@ -1006,10 +842,33 @@ class MainWindow:
         """设置按钮点击回调"""
         # 创建设置对话框（如果尚未创建）
         if not self._settings_dialog:
-            self._settings_dialog = SettingsDialog(self._page)
+            self._settings_dialog = SettingsDialog(
+                self._page,
+                on_close=self._on_settings_dialog_close,
+            )
 
         # 打开设置对话框
         self._settings_dialog.open()
+
+    def _on_settings_dialog_close(self) -> None:
+        """设置对话框关闭回调"""
+        self._logger.info("SettingsDialog 已关闭，同步配置状态")
+        # 同步激活配置的 enable_vision 状态
+        self._sync_enable_vision_from_active_config()
+
+    def _sync_enable_vision_from_active_config(self) -> None:
+        """从激活配置同步 enable_vision 状态到 UIState"""
+        try:
+            from llm.llm_config_manager import get_active_config_item
+
+            active_config = get_active_config_item()
+            if active_config:
+                enable_vision = getattr(active_config, "enable_vision", True)
+                self._logger.info(f"激活配置 enable_vision={enable_vision}")
+                # 通过 UIState 设置，会触发回调
+                self._app_state.ui.set_enable_vision(enable_vision)
+        except Exception as e:
+            self._logger.exception(f"同步 enable_vision 状态失败: {e}")
 
     # ==================== 会话管理方法 ====================
 
@@ -1106,7 +965,30 @@ class MainWindow:
                 # 防御性处理：to_record_dict 已将 None content 归一化为 ""，
                 # 此处仍用 or 兜底，避免任何历史脏数据导致 str(None) = "None" 渲染问题
                 raw_content = record.get("content")
-                content = "" if raw_content is None else str(raw_content)
+
+                # 处理内容：支持多模态消息格式
+                if raw_content is None:
+                    content = ""
+                    self._logger.debug(f"历史消息 {role} content 为 None，使用空字符串")
+                elif isinstance(raw_content, list):
+                    # 已经是列表格式（多模态），直接使用
+                    content = raw_content
+                    image_count = sum(1 for item in raw_content if isinstance(item, dict) and item.get("type") == "image_url")
+                    self._logger.info(f"检测到多模态历史消息 {role}，图片数量: {image_count}")
+                elif isinstance(raw_content, str):
+                    # 尝试解析为 JSON（可能是多模态格式）
+                    parsed_content = try_parse_json_content(raw_content)
+                    if isinstance(parsed_content, list):
+                        content = parsed_content
+                        image_count = sum(1 for item in parsed_content if isinstance(item, dict) and item.get("type") == "image_url")
+                        self._logger.info(f"解析多模态历史消息 {role} 成功，图片数量: {image_count}")
+                    else:
+                        content = raw_content
+                        self._logger.debug(f"历史消息 {role} 为纯文本，长度: {len(raw_content)}")
+                else:
+                    # 其他类型（如 dict），转换为字符串
+                    content = str(raw_content)
+                    self._logger.warning(f"历史消息 {role} content 类型异常: {type(raw_content)}，转换为字符串")
                 metadata = record.get("metadata", {}) or {}
 
                 if role == "user":
@@ -1267,6 +1149,33 @@ class MainWindow:
             on_stream_tick=self._on_stream_tick,
             on_stream_completed=self._on_stream_completed,
         )
+
+    def _setup_ui_state_callbacks(self) -> None:
+        """设置 UI 状态回调"""
+        self._app_state.ui.set_callbacks(
+            on_enable_vision_changed=self._on_enable_vision_changed,
+        )
+
+    def _on_enable_vision_changed(self, enabled: bool) -> None:
+        """视觉能力状态变化回调
+
+        Args:
+            enabled: 是否启用视觉能力
+        """
+        self._logger.info(f"UIState: enable_vision 变更为 {enabled}")
+
+        if self._input_area:
+            # 调用 InputArea.set_vision_enabled()，会返回被清除的图片文件列表
+            removed_files = self._input_area.set_vision_enabled(enabled)
+
+            # 如果禁用视觉能力且有已上传图片，提示用户
+            if not enabled and removed_files:
+                self._show_snackbar(
+                    f"视觉能力已禁用，已清除 {len(removed_files)} 个图片文件"
+                )
+                self._logger.info(
+                    f"因禁用视觉能力，已清除 {len(removed_files)} 个图片文件"
+                )
 
     def _on_stream_started(self, session_id: str) -> None:
         """流开始回调"""
@@ -1780,7 +1689,6 @@ class MainWindow:
         """退出应用（供桌面悬浮球调用）"""
         self._logger.info("悬浮球请求：退出应用")
         try:
-            self._save_window_state()
             self._page.window.prevent_close = False
             # 先 update 同步 prevent_close=False 到客户端，避免 close 被旧值阻止
             self._page.update()

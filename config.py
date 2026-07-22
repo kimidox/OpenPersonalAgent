@@ -331,6 +331,29 @@ except (TypeError, ValueError):
 if FILE_UPLOAD_MAX_SIZE_MB < 1:
     FILE_UPLOAD_MAX_SIZE_MB = 200
 
+# ===== 图片存储配置 =====
+
+# 图片文件临时存储目录
+# 用于存储用户上传的图片文件，包括 base64 编码后的图片数据
+# 默认路径：PersonalData/images/ （相对于 WORKER_DIR）
+_image_storage_dir = get_config("IMAGE_STORAGE_DIR")
+if _image_storage_dir not in (None, ""):
+    IMAGE_STORAGE_DIR = str(_image_storage_dir)
+else:
+    # 默认路径：PersonalData/images/
+    IMAGE_STORAGE_DIR = str(paths.personal_data_dir / "images")
+
+# 图片文件清理周期（天）
+# 超过此天数的图片文件将被自动清理
+# 默认：7 天
+_image_cleanup_days = get_config("IMAGE_CLEANUP_DAYS")
+try:
+    IMAGE_CLEANUP_DAYS = int(_image_cleanup_days) if _image_cleanup_days not in (None, "") else 7
+except (TypeError, ValueError):
+    IMAGE_CLEANUP_DAYS = 7
+if IMAGE_CLEANUP_DAYS < 1:
+    IMAGE_CLEANUP_DAYS = 7
+
 # ===== TTS 文本转语音模型配置 =====
 
 # TTS 模型类型（zh=中文，zh_en=中英文）

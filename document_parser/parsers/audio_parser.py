@@ -182,6 +182,7 @@ class AudioParser(BaseParser):
         stat = file_path.stat()
 
         metadata: dict[str, Any] = {
+            "content_type": "text",
             "file_name": file_path.name,
             "file_size": stat.st_size,
             "created_time": stat.st_ctime,

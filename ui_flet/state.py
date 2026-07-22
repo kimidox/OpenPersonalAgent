@@ -414,6 +414,7 @@ class UIState:
         self._input_state: InputState = InputState.ENABLED
         self._input_placeholder: str = self.PLACEHOLDER_DEFAULT
         self._enable_thinking: bool = False
+        self._enable_vision: bool = True  # 默认启用视觉能力
         self._loading: bool = False
         self._error_message: str | None = None
         self._window_visible: bool = True
@@ -427,6 +428,7 @@ class UIState:
         self._on_input_placeholder_changed: Callable[[str], None] | None = None
         self._on_ui_reset: Callable[[], None] | None = None
         self._on_enable_thinking_changed: Callable[[bool], None] | None = None
+        self._on_enable_vision_changed: Callable[[bool], None] | None = None
         self._on_loading_changed: Callable[[bool], None] | None = None
         self._on_error_changed: Callable[[str | None], None] | None = None
         self._on_window_visibility_changed: Callable[[bool], None] | None = None
@@ -441,6 +443,7 @@ class UIState:
         on_input_placeholder_changed: Callable[[str], None] | None = None,
         on_ui_reset: Callable[[], None] | None = None,
         on_enable_thinking_changed: Callable[[bool], None] | None = None,
+        on_enable_vision_changed: Callable[[bool], None] | None = None,
         on_loading_changed: Callable[[bool], None] | None = None,
         on_error_changed: Callable[[str | None], None] | None = None,
         on_window_visibility_changed: Callable[[bool], None] | None = None,
@@ -454,6 +457,7 @@ class UIState:
         self._on_input_placeholder_changed = on_input_placeholder_changed
         self._on_ui_reset = on_ui_reset
         self._on_enable_thinking_changed = on_enable_thinking_changed
+        self._on_enable_vision_changed = on_enable_vision_changed
         self._on_loading_changed = on_loading_changed
         self._on_error_changed = on_error_changed
         self._on_window_visibility_changed = on_window_visibility_changed
@@ -590,6 +594,18 @@ class UIState:
         if self._on_enable_thinking_changed:
             self._on_enable_thinking_changed(self._enable_thinking)
         return self._enable_thinking
+
+    def get_enable_vision(self) -> bool:
+        """获取视觉能力启用状态"""
+        return self._enable_vision
+
+    def set_enable_vision(self, enabled: bool) -> None:
+        """设置视觉能力启用状态"""
+        if self._enable_vision == enabled:
+            return
+        self._enable_vision = enabled
+        if self._on_enable_vision_changed:
+            self._on_enable_vision_changed(enabled)
 
     def get_loading(self) -> bool:
         """获取加载状态"""

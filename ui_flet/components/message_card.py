@@ -14,6 +14,7 @@ import flet as ft
 from logger import get_logger
 from ui_flet.theme import ThemeManager, get_color
 from ui_flet.utils.markdown_utils import create_markdown_content
+from ui_flet.utils.message_utils import extract_display_content, is_multimodal_content
 
 if TYPE_CHECKING:
     from ui_flet.utils.file_upload_manager import UploadedFileInfo
@@ -224,16 +225,22 @@ class MessageCard(ft.Container):
     def _create_bubble(self) -> ft.Container:
         """创建消息气泡（宽度、padding、圆角、阴影均与旧版 PySide6 一致）"""
         # 内容区域
-        # 注意：必须用 ft.Text 而非 ft.Markdown。ft.Markdown 渲染为 HTML
-        # webview，没有固有宽度（永远撑满父容器），导致 tight=True 的
-        # Column 无法按内容计算宽度，气泡永远填满可用宽度。
-        # ft.Text 有基于文本长度的固有宽度：短文本→窄气泡，长文本→自动换行。
-        self._content_markdown = ft.Text(
+        # 注意：使用 ft.Column 作为容器，可以容纳文本和图片
+        # 对于纯文本消息，内部使用 ft.Text 组件（有固有宽度）
+        # 对于多模态消息，会同时显示文本和图片组件
+        self._text_content = ft.Text(
             value="",
             selectable=True,
             size=13,
             color=self._colors.text,
             expand=False,  # 不撑满父容器，按内容自适应
+        )
+
+        # 多模态内容容器（包含文本和图片）
+        self._content_markdown = ft.Column(
+            [self._text_content],
+            spacing=8,
+            tight=True,  # 按内容自适应宽度
         )
 
         # Token 用量标签（旧版仅显示总计，字号 9pt）
@@ -484,17 +491,114 @@ class MessageCard(ft.Container):
         except RuntimeError:
             pass
 
-    def update_content(self, content: str) -> None:
+    def update_content(self, content: str | list[Any]) -> None:
         """
         更新消息内容
 
         Args:
-            content: 新的消息内容
+            content: 新的消息内容，可以是：
+                - 字符串：纯文本消息
+                - 列表：多模态消息（包含文本和图片）
         """
         self._raw_content = content
-        self._content_markdown.value = content
+
+        # 提取显示内容（处理字符串和列表两种格式）
+        display_data = extract_display_content(content)
+        text = display_data["text"]
+        images = display_data["images"]
+        has_images = display_data["has_images"]
+
+        self._logger.debug(
+            f"MessageCard: 更新内容 - 文本长度: {len(text)}, "
+            f"图片数量: {len(images)}, 多模态: {has_images}"
+        )
+
+        # 清空现有的内容控件（保留第一个文本控件）
+        while len(self._content_markdown.controls) > 1:
+            self._content_markdown.controls.pop()
+
+        # 更新文本内容
+        self._text_content.value = text
+
+        # 如果包含图片，添加图片组件
+        if has_images:
+            self._logger.debug(f"MessageCard: 添加 {len(images)} 张图片")
+            for idx, img_data in enumerate(images):
+                try:
+                    img_url = img_data.get("url", "")
+                    if not img_url:
+                        self._logger.warning(f"图片 {idx} 的 URL 为空，跳过")
+                        continue
+
+                    # 创建图片组件
+                    img_component = self._create_image_component(img_url, idx)
+                    self._content_markdown.controls.append(img_component)
+                    self._logger.debug(f"MessageCard: 添加图片 {idx + 1}")
+
+                except Exception as e:
+                    self._logger.error(f"创建图片组件 {idx} 时发生错误: {e}", exc_info=True)
+                    # 添加降级提示
+                    fallback_text = ft.Text(
+                        "[图片加载失败]",
+                        size=12,
+                        color=self._colors.text_muted,
+                        italic=True,
+                    )
+                    self._content_markdown.controls.append(fallback_text)
+
+        # 更新显示
         self._safe_update(self._content_markdown)
-        self._logger.debug(f"MessageCard: 更新内容 ({len(content)} 字符)")
+
+    def _create_image_component(self, url: str, index: int) -> ft.Container:
+        """
+        创建图片显示组件
+
+        Args:
+            url: 图片 URL（可以是 base64 data URL 或普通 URL）
+            index: 图片索引（用于错误处理）
+
+        Returns:
+            ft.Container: 包含图片的容器组件
+        """
+        # 创建图片控件
+        # 注意：ft.Image 的 src 支持 data URL（data:image/png;base64,...）
+        image = ft.Image(
+            src=url,
+            width=200,  # 限制宽度为 200px
+            height=None,  # 高度自适应
+            fit=ft.ImageFit.CONTAIN,
+            border_radius=ft.BorderRadius(top=8, bottom=8, left=8, right=8),
+            error_content=ft.Text(
+                "[图片加载失败]",
+                size=12,
+                color=self._colors.text_muted,
+                italic=True,
+            ),
+        )
+
+        # 包裹在容器中，添加样式
+        container = ft.Container(
+            content=image,
+            margin=ft.Margin(top=4, left=0, right=0, bottom=0),
+            # 添加边框和阴影效果
+            border=ft.Border(
+                left=ft.BorderSide(0.5, self._colors.border),
+                top=ft.BorderSide(0.5, self._colors.border),
+                right=ft.BorderSide(0.5, self._colors.border),
+                bottom=ft.BorderSide(0.5, self._colors.border),
+            ),
+            border_radius=8,
+            padding=4,
+            # 添加轻微阴影
+            shadow=ft.BoxShadow(
+                spread_radius=0,
+                blur_radius=2,
+                color="#00000014",
+                offset=ft.Offset(0, 1),
+            ),
+        )
+
+        return container
 
     def append_content(self, text: str) -> None:
         """
@@ -503,6 +607,16 @@ class MessageCard(ft.Container):
         Args:
             text: 要追加的文本
         """
+        # 流式更新只支持字符串内容的追加
+        # 如果当前内容是列表（多模态），转换为字符串后再追加
+        if isinstance(self._raw_content, list):
+            self._logger.warning(
+                "append_content 不支持多模态消息，将转换为纯文本"
+            )
+            # 提取当前文本内容
+            display_data = extract_display_content(self._raw_content)
+            self._raw_content = display_data["text"]
+
         self._raw_content += text
         self.update_content(self._raw_content)
 

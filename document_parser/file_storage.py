@@ -331,3 +331,258 @@ class FileStorage:
                 self._storage_dir.rmdir()
             except Exception:
                 pass
+
+
+def ensure_image_storage_dir() -> Path:
+    """
+    确保图片存储目录存在，不存在时自动创建。
+
+    使用 config.IMAGE_STORAGE_DIR 作为存储路径。
+
+    返回：
+        图片存储目录的 Path 对象
+    """
+    from config import IMAGE_STORAGE_DIR
+    from logger import get_module_logger
+
+    logger = get_module_logger("file_storage")
+
+    image_dir = Path(IMAGE_STORAGE_DIR)
+
+    if not image_dir.exists():
+        try:
+            image_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"创建图片存储目录: {image_dir}")
+        except Exception as e:
+            logger.error(f"创建图片存储目录失败: {e}")
+            raise
+
+    return image_dir
+
+
+def save_image_from_base64(data_url: str, original_name: str = None) -> dict:
+    """
+    将 base64 编码的图片数据 URL 保存为文件。
+
+    接受 data:image/png;base64,... 格式的数据 URL，
+    提取 MIME 类型和 base64 数据，解码并保存为文件。
+
+    参数：
+        data_url: 数据 URL，格式为 data:image/png;base64,... 或 data:image/jpeg;base64,...
+        original_name: 原始文件名（可选），用于提取文件扩展名
+
+    返回：
+        字典包含：
+        - file_path: 文件的绝对路径（str）
+        - file_name: 生成的唯一文件名（str）
+        - mime_type: 图片的 MIME 类型（str）
+
+    异常：
+        ValueError: 数据 URL 格式无效
+        RuntimeError: 保存文件失败
+    """
+    import base64
+    import re
+    from logger import get_module_logger
+
+    logger = get_module_logger("file_storage")
+
+    # 验证数据 URL 格式
+    if not data_url or not data_url.startswith("data:"):
+        raise ValueError("无效的数据 URL 格式，必须以 'data:' 开头")
+
+    # 解析数据 URL
+    # 格式: data:image/png;base64,iVBORw0KGgo...
+    pattern = r"^data:([^;]+);base64,(.+)$"
+    match = re.match(pattern, data_url)
+
+    if not match:
+        raise ValueError("无法解析数据 URL，期望格式: data:image/png;base64,...")
+
+    mime_type = match.group(1)
+    base64_data = match.group(2)
+
+    # 验证 MIME 类型是否为图片
+    if not mime_type.startswith("image/"):
+        raise ValueError(f"不支持的 MIME 类型: {mime_type}，期望图片类型")
+
+    # 提取图片格式扩展名
+    image_format = mime_type.split("/")[-1]  # 如 png, jpeg, gif 等
+
+    # 扩展名映射（处理特殊格式）
+    format_to_ext = {
+        "png": ".png",
+        "jpeg": ".jpg",
+        "jpg": ".jpg",
+        "gif": ".gif",
+        "webp": ".webp",
+        "bmp": ".bmp",
+    }
+    ext = format_to_ext.get(image_format, f".{image_format}")
+
+    # 如果提供了原始文件名，尝试使用原始扩展名
+    if original_name:
+        original_ext = Path(original_name).suffix.lower()
+        if original_ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]:
+            ext = original_ext
+
+    # 生成唯一文件名（使用 UUID）
+    unique_id = uuid.uuid4().hex
+    file_name = f"{unique_id}{ext}"
+
+    # 确保存储目录存在
+    image_dir = ensure_image_storage_dir()
+    file_path = image_dir / file_name
+
+    try:
+        # 解码 base64 数据
+        image_data = base64.b64decode(base64_data)
+
+        # 保存文件
+        with open(file_path, "wb") as f:
+            f.write(image_data)
+
+        logger.info(f"图片已保存: {file_name} (MIME: {mime_type}, 大小: {len(image_data)} 字节)")
+
+        return {
+            "file_path": str(file_path),
+            "file_name": file_name,
+            "mime_type": mime_type,
+        }
+
+    except Exception as e:
+        logger.error(f"保存图片文件失败: {e}")
+        raise RuntimeError(f"保存图片文件失败: {e}")
+
+
+def load_image_as_base64(file_path: str) -> str:
+    """
+    读取图片文件并编码为 base64 数据 URL。
+
+    参数：
+        file_path: 图片文件的路径（绝对路径或相对路径）
+
+    返回：
+        data:image/png;base64,... 格式的数据 URL
+
+    异常：
+        FileNotFoundError: 文件不存在
+        RuntimeError: 读取文件失败
+    """
+    import base64
+    from logger import get_module_logger
+
+    logger = get_module_logger("file_storage")
+
+    # 转换为 Path 对象
+    path = Path(file_path)
+
+    # 检查文件是否存在
+    if not path.exists():
+        raise FileNotFoundError(f"图片文件不存在: {file_path}")
+
+    try:
+        # 读取文件内容
+        with open(path, "rb") as f:
+            image_data = f.read()
+
+        # 编码为 base64
+        base64_data = base64.b64encode(image_data).decode("utf-8")
+
+        # 根据 MIME 类型映射
+        ext_to_mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+        }
+
+        # 获取 MIME 类型
+        ext = path.suffix.lower()
+        mime_type = ext_to_mime.get(ext, "application/octet-stream")
+
+        # 构建数据 URL
+        data_url = f"data:{mime_type};base64,{base64_data}"
+
+        logger.debug(f"图片已编码: {path.name} -> {mime_type} ({len(image_data)} 字节)")
+
+        return data_url
+
+    except Exception as e:
+        logger.error(f"读取图片文件失败: {file_path}, 错误: {e}")
+        raise RuntimeError(f"读取图片文件失败: {e}")
+
+
+def cleanup_old_images(days: int = None) -> dict:
+    """
+    清理过期的图片文件。
+
+    扫描图片存储目录，删除超过指定天数的图片文件。
+    使用 config.IMAGE_CLEANUP_DAYS 作为默认清理周期。
+
+    参数：
+        days: 文件保留天数，默认使用 config.IMAGE_CLEANUP_DAYS
+
+    返回：
+        字典包含：
+        - deleted_count: 删除的文件数量（int）
+        - total_size: 删除的文件总大小（字节）（int）
+    """
+    import os
+    from datetime import datetime, timedelta
+    from logger import get_module_logger
+
+    logger = get_module_logger("file_storage")
+
+    # 使用默认清理周期
+    if days is None:
+        from config import IMAGE_CLEANUP_DAYS
+        days = IMAGE_CLEANUP_DAYS
+
+    # 确保图片存储目录存在
+    image_dir = ensure_image_storage_dir()
+
+    # 计算截止时间
+    cutoff_time = datetime.now() - timedelta(days=days)
+
+    deleted_count = 0
+    total_size = 0
+
+    try:
+        # 扫描目录中的所有文件
+        for file_path in image_dir.iterdir():
+            # 跳过子目录
+            if not file_path.is_file():
+                continue
+
+            # 检查文件修改时间
+            file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+
+            # 如果文件超过指定天数，删除它
+            if file_mtime < cutoff_time:
+                try:
+                    file_size = file_path.stat().st_size
+                    file_path.unlink()
+                    deleted_count += 1
+                    total_size += file_size
+                    logger.debug(f"删除过期图片: {file_path.name} (大小: {file_size} 字节)")
+                except Exception as e:
+                    logger.warning(f"删除文件失败: {file_path}, 错误: {e}")
+
+        logger.info(
+            f"图片清理完成: 删除 {deleted_count} 个文件，释放 {total_size} 字节 (保留周期: {days} 天)"
+        )
+
+        return {
+            "deleted_count": deleted_count,
+            "total_size": total_size,
+        }
+
+    except Exception as e:
+        logger.error(f"清理图片文件时发生错误: {e}")
+        return {
+            "deleted_count": deleted_count,
+            "total_size": total_size,
+        }

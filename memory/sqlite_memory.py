@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -113,11 +115,140 @@ class SqliteMemory(Memory):
         self,
         conversation_id: str,
         role: str,
-        content: str,
+        content: str | list[dict[str, Any]],
         *,
         metadata: dict[str, Any] | None = None,
         conversation_type: str = 'agent_conversation',
     ) -> None:
+        """
+        追加消息到会话历史。
+
+        参数：
+            conversation_id: 会话 ID
+            role: 消息角色（user/assistant/system/tool）
+            content: 消息内容，可以是字符串或多模态内容列表
+                     字符串格式：纯文本消息
+                     列表格式：多模态消息，包含 text 和 image_url 元素
+            metadata: 额外的元数据
+            conversation_type: 会话类型
+
+        处理逻辑：
+            - 如果 content 是字符串：直接存储（向后兼容）
+            - 如果 content 是列表：遍历处理多模态内容
+                - 对于 image_url 元素：提取 base64 数据，保存为图片文件
+                - 替换为 image_ref 格式（包含文件路径信息）
+            - 将处理后的 content 序列化为字符串存入数据库
+        """
+        # 获取 logger
+        logger = logging.getLogger(__name__)
+
+        # 处理后的 content（最终存入数据库的内容）
+        processed_content: str
+
+        # 检测 content 类型
+        if isinstance(content, str):
+            # 向后兼容：字符串类型直接存储
+            processed_content = content
+            logger.debug(f"[append_message] 字符串内容，直接存储（长度: {len(content)}）")
+
+        elif isinstance(content, list):
+            # 多模态消息处理
+            logger.info(f"[append_message] 检测到多模态消息（元素数量: {len(content)}）")
+
+            # 处理后的内容列表
+            processed_list = []
+            image_count = 0
+
+            # 遍历列表中的每个元素
+            for idx, element in enumerate(content):
+                if not isinstance(element, dict):
+                    # 非 dict 元素，保持原样（可能不太符合规范，但保留容错）
+                    processed_list.append(element)
+                    logger.warning(f"[append_message] 元素 {idx} 不是 dict 类型: {type(element)}")
+                    continue
+
+                element_type = element.get("type")
+
+                if element_type == "text":
+                    # 文本元素，直接保留
+                    processed_list.append(element)
+                    logger.debug(f"[append_message] 元素 {idx}: 文本内容")
+
+                elif element_type == "image_url":
+                    # 图片元素，需要处理
+                    image_url_data = element.get("image_url", {})
+                    image_url = image_url_data.get("url", "")
+
+                    if not image_url or not image_url.startswith("data:image/"):
+                        # 无效的 image_url，保留原样
+                        processed_list.append(element)
+                        logger.warning(f"[append_message] 元素 {idx}: 无效的 image_url 格式")
+                        continue
+
+                    try:
+                        # 导入图片存储服务
+                        from document_parser.file_storage import save_image_from_base64
+
+                        # 保存图片文件
+                        # 从 image_url 提取原始文件名（如果有）
+                        original_name = element.get("file_name") or None
+
+                        # 调用图片存储服务
+                        save_result = save_image_from_base64(
+                            data_url=image_url,
+                            original_name=original_name
+                        )
+
+                        # 构造 image_ref 元素
+                        image_ref_element = {
+                            "type": "image_ref",
+                            "file_name": save_result["file_name"],
+                            "file_path": save_result["file_path"],
+                            "mime_type": save_result["mime_type"],
+                        }
+
+                        processed_list.append(image_ref_element)
+                        image_count += 1
+
+                        logger.info(
+                            f"[append_message] 元素 {idx}: 图片已保存 "
+                            f"(文件名: {save_result['file_name']}, "
+                            f"MIME: {save_result['mime_type']})"
+                        )
+
+                    except Exception as e:
+                        # 保存失败，保留原始 image_url（可能不太理想，但避免数据丢失）
+                        processed_list.append(element)
+                        logger.error(
+                            f"[append_message] 元素 {idx}: 图片保存失败 - {e}",
+                            exc_info=True
+                        )
+
+                elif element_type == "image_ref":
+                    # 已经是 image_ref 格式，直接保留
+                    processed_list.append(element)
+                    logger.debug(f"[append_message] 元素 {idx}: 已是 image_ref 格式")
+
+                else:
+                    # 其他类型元素（如 tool_use 等），保持原样
+                    processed_list.append(element)
+                    logger.debug(f"[append_message] 元素 {idx}: 其他类型 {element_type}")
+
+            # 记录处理的图片总数
+            if image_count > 0:
+                logger.info(f"[append_message] 共处理 {image_count} 张图片")
+
+            # 将处理后的列表序列化为 JSON 字符串
+            processed_content = json.dumps(processed_list, ensure_ascii=False)
+
+        else:
+            # 其他类型（不应该出现），转换为字符串
+            processed_content = str(content)
+            logger.warning(
+                f"[append_message] content 类型异常: {type(content)}，已转换为字符串"
+            )
+
+        # 存入数据库
         with get_session() as db:
             self._ensure_conversation_row(db, conversation_id, conversation_type)
             mid = str(uuid.uuid4())
@@ -127,7 +258,7 @@ class SqliteMemory(Memory):
                     message_id=mid,
                     conversation_id=conversation_id,
                     role=role,
-                    content=content,
+                    content=processed_content,
                     ext=ext,
                 )
             )

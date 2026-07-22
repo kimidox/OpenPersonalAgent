@@ -28,6 +28,9 @@ class LLMConfig:
     top_p: float = 0.95
     frequency_penalty: float = 0.6
     enable_thinking: bool = True
+    enable_vision: bool = True
+    enable_deep_thinking: bool = True
+    enable_tool_call: bool = True
 
 
 @dataclass
@@ -41,6 +44,9 @@ class LLMConfigItem:
     top_p: float = 0.95
     frequency_penalty: float = 0.6
     enable_thinking: bool = True
+    enable_vision: bool = True
+    enable_deep_thinking: bool = True
+    enable_tool_call: bool = True
 
     @classmethod
     def from_llm_config(cls, llm_config: LLMConfig, name: str = "默认配置") -> LLMConfigItem:
@@ -54,6 +60,9 @@ class LLMConfigItem:
             top_p=llm_config.top_p,
             frequency_penalty=llm_config.frequency_penalty,
             enable_thinking=llm_config.enable_thinking,
+            enable_vision=llm_config.enable_vision,
+            enable_deep_thinking=llm_config.enable_deep_thinking,
+            enable_tool_call=llm_config.enable_tool_call,
         )
 
     def to_llm_config(self) -> LLMConfig:
@@ -65,6 +74,9 @@ class LLMConfigItem:
             top_p=self.top_p,
             frequency_penalty=self.frequency_penalty,
             enable_thinking=self.enable_thinking,
+            enable_vision=self.enable_vision,
+            enable_deep_thinking=self.enable_deep_thinking,
+            enable_tool_call=self.enable_tool_call,
         )
 
     def to_dict(self) -> dict:
@@ -78,6 +90,9 @@ class LLMConfigItem:
             "top_p": self.top_p,
             "frequency_penalty": self.frequency_penalty,
             "enable_thinking": self.enable_thinking,
+            "enable_vision": self.enable_vision,
+            "enable_deep_thinking": self.enable_deep_thinking,
+            "enable_tool_call": self.enable_tool_call,
         }
 
     @classmethod
@@ -92,6 +107,9 @@ class LLMConfigItem:
             top_p=float(data.get("top_p", 0.95)),
             frequency_penalty=float(data.get("frequency_penalty", 0.6)),
             enable_thinking=bool(data.get("enable_thinking", True)),
+            enable_vision=bool(data.get("enable_vision", True)),
+            enable_deep_thinking=bool(data.get("enable_deep_thinking", True)),
+            enable_tool_call=bool(data.get("enable_tool_call", True)),
         )
 
 
@@ -156,6 +174,9 @@ def _migrate_old_format(data: dict) -> MultiLLMConfig:
         top_p=float(data.get("top_p", 0.95)),
         frequency_penalty=float(data.get("frequency_penalty", 0.6)),
         enable_thinking=bool(data.get("enable_thinking", True)),
+        enable_vision=bool(data.get("enable_vision", True)),
+        enable_deep_thinking=bool(data.get("enable_deep_thinking", True)),
+        enable_tool_call=bool(data.get("enable_tool_call", True)),
     )
     return MultiLLMConfig(
         configs=[config_item],
@@ -175,6 +196,9 @@ def _create_default_multi_config() -> MultiLLMConfig:
         top_p=0.95,
         frequency_penalty=0.6,
         enable_thinking=True,
+        enable_vision=True,
+        enable_deep_thinking=True,
+        enable_tool_call=True,
     )
     return MultiLLMConfig(
         configs=[default_config],
@@ -282,6 +306,9 @@ def get_current_config() -> LLMConfig:
                 top_p=0.95,
                 frequency_penalty=0.6,
                 enable_thinking=True,
+                enable_vision=True,
+                enable_deep_thinking=True,
+                enable_tool_call=True,
             )
     return _llm_config
 
@@ -298,6 +325,9 @@ def set_config(new_config: LLMConfig) -> None:
         active_config.top_p = new_config.top_p
         active_config.frequency_penalty = new_config.frequency_penalty
         active_config.enable_thinking = new_config.enable_thinking
+        active_config.enable_vision = new_config.enable_vision
+        active_config.enable_deep_thinking = new_config.enable_deep_thinking
+        active_config.enable_tool_call = new_config.enable_tool_call
     else:
         new_item = LLMConfigItem.from_llm_config(new_config, "默认配置")
         multi_config.configs.append(new_item)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -15,6 +17,106 @@ class Message:
     content: str
     ext: dict[str, Any] | None = None
     created_at: datetime | None = None
+
+    def _process_image_refs(self, content: str | list) -> str | list:
+        """处理 content 中的图片引用，转换为 image_url 格式。
+
+        参数：
+            content: 消息内容，可能是字符串或列表
+
+        返回：
+            处理后的内容，可能是字符串或列表
+        """
+        # 获取 logger
+        logger = logging.getLogger(__name__)
+
+        # 如果 content 是字符串，尝试解析为 JSON list
+        if isinstance(content, str):
+            # 尝试解析为 JSON
+            try:
+                parsed_content = json.loads(content)
+                if not isinstance(parsed_content, list):
+                    # 不是列表，说明是纯文本字符串
+                    return content
+                content_list = parsed_content
+            except (json.JSONDecodeError, TypeError):
+                # JSON 解析失败，说明是纯文本字符串
+                return content
+        else:
+            # content 已经是列表
+            content_list = content
+
+        # 检查是否包含 image_ref
+        has_image_ref = any(
+            isinstance(item, dict) and item.get("type") == "image_ref"
+            for item in content_list
+        )
+
+        if not has_image_ref:
+            # 没有 image_ref，返回解析后的列表（如果是 JSON 字符串转换的）
+            # 这样可以确保内容格式统一
+            return content_list
+
+        # 导入图片加载服务
+        try:
+            from document_parser.file_storage import load_image_as_base64
+        except ImportError as e:
+            logger.error(f"导入图片加载服务失败: {e}")
+            # 降级处理：替换所有 image_ref 为占位符
+            processed_content = []
+            for item in content_list:
+                if isinstance(item, dict) and item.get("type") == "image_ref":
+                    file_name = item.get("file_name", "未知文件")
+                    processed_content.append({
+                        "type": "text",
+                        "text": f"[图片文件加载失败: {file_name}]"
+                    })
+                else:
+                    processed_content.append(item)
+            return processed_content
+
+        # 处理图片引用
+        processed_content = []
+        for item in content_list:
+            if isinstance(item, dict) and item.get("type") == "image_ref":
+                # 提取图片引用信息
+                file_path = item.get("file_path")
+                file_name = item.get("file_name", "未知文件")
+
+                if not file_path:
+                    logger.warning(f"图片引用缺少 file_path: {item}")
+                    processed_content.append({
+                        "type": "text",
+                        "text": f"[图片文件路径缺失: {file_name}]"
+                    })
+                    continue
+
+                # 尝试加载图片
+                try:
+                    data_url = load_image_as_base64(file_path)
+                    # 转换为 image_url 格式
+                    processed_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_url}
+                    })
+                    logger.debug(f"成功加载图片: {file_name} from {file_path}")
+                except FileNotFoundError:
+                    logger.warning(f"图片文件不存在: {file_path}")
+                    processed_content.append({
+                        "type": "text",
+                        "text": f"[图片文件已丢失: {file_name}]"
+                    })
+                except Exception as e:
+                    logger.error(f"加载图片失败: {file_path}, 错误: {e}")
+                    processed_content.append({
+                        "type": "text",
+                        "text": f"[图片文件加载失败: {file_name}]"
+                    })
+            else:
+                # 非 image_ref 元素，直接添加
+                processed_content.append(item)
+
+        return processed_content
 
     def to_llm_dict(self) -> dict[str, Any]:
         """拼装为 `BaseChatModel.complete_with_tools` 所需的 message 字典。
@@ -49,7 +151,11 @@ class Message:
             }
 
         # 普通消息
-        d: dict[str, Any] = {"role": self.role, "content": self.content}
+        d: dict[str, Any] = {"role": self.role}
+
+        # 处理图片引用，转换 content
+        processed_content = self._process_image_refs(self.content)
+        d["content"] = processed_content
 
         # tool 消息：附带 name 和 tool_call_id
         if self.role == "tool" and ext.get("name"):

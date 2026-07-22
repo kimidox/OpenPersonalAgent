@@ -58,15 +58,17 @@ class SettingsDialog:
         {"id": "other", "name": "其他设置", "icon": ft.Icons.MORE_HORIZ},
     ]
 
-    def __init__(self, page: ft.Page) -> None:
+    def __init__(self, page: ft.Page, on_close: Callable[[], None] | None = None) -> None:
         """
         初始化设置对话框
 
         Args:
             page: Flet Page 对象
+            on_close: 关闭对话框时的回调函数
         """
         self._page = page
         self._logger = get_logger()
+        self._on_close_callback = on_close
 
         # 主题管理
         self._theme_manager = ThemeManager()
@@ -641,3 +643,10 @@ class SettingsDialog:
             self._logger.info("SettingsDialog: 关闭设置对话框")
             self._page.overlay.remove(self._dialog)
             self._page.update()
+
+            # 调用关闭回调
+            if self._on_close_callback:
+                try:
+                    self._on_close_callback()
+                except Exception as e:
+                    self._logger.exception(f"SettingsDialog: 关闭回调执行失败: {e}")

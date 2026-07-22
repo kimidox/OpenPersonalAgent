@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from logger import get_logger
-from ui_flet.utils.file_upload_manager import UploadedFileInfo, SUPPORTED_EXTENSIONS
+from ui_flet.utils.file_upload_manager import (
+    UploadedFileInfo,
+    SUPPORTED_EXTENSIONS,
+    DOCUMENT_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+)
 
 logger = get_logger()
 
@@ -23,6 +28,7 @@ class FileUploadController:
     def __init__(self, max_files: int = 5) -> None:
         self._files: dict[str, UploadedFileInfo] = {}
         self._max_files = max_files
+        self._vision_enabled: bool = True  # 默认启用视觉能力
         self._callbacks: dict[str, list[Callable[[], None]]] = {
             "file_added": [],
             "file_removed": [],
@@ -60,7 +66,51 @@ class FileUploadController:
                 logger.exception(f"FileUploadController: {event} 回调异常")
 
     def get_supported_extensions(self) -> list[str]:
-        return SUPPORTED_EXTENSIONS
+        """获取当前支持的文件扩展名
+
+        如果视觉能力启用，返回所有支持的扩展名（包含图片）；
+        如果禁用，只返回文档类型扩展名（不包含图片）。
+        """
+        if self._vision_enabled:
+            return SUPPORTED_EXTENSIONS
+        else:
+            return DOCUMENT_EXTENSIONS
+
+    def set_vision_enabled(self, enabled: bool) -> list[UploadedFileInfo]:
+        """设置视觉能力启用状态
+
+        Args:
+            enabled: 是否启用视觉能力
+
+        Returns:
+            如果禁用视觉能力且有已上传图片，返回被清除的图片文件列表；
+            否则返回空列表。
+        """
+        self._vision_enabled = enabled
+        logger.info(f"FileUploadController: 视觉能力 {'启用' if enabled else '禁用'}")
+
+        # 如果禁用视觉能力，清除已上传的图片文件
+        removed_files: list[UploadedFileInfo] = []
+        if not enabled:
+            image_file_ids = [
+                fid for fid, finfo in self._files.items()
+                if finfo.extension.lower() in IMAGE_EXTENSIONS
+            ]
+            for file_id in image_file_ids:
+                file_info = self._files[file_id]
+                removed_files.append(file_info)
+                del self._files[file_id]
+                self._emit("file_removed", file_info)
+                self._emit("files_changed", file_info)
+
+            if removed_files:
+                logger.info(f"FileUploadController: 已清除 {len(removed_files)} 个图片文件")
+
+        return removed_files
+
+    def is_vision_enabled(self) -> bool:
+        """获取视觉能力启用状态"""
+        return self._vision_enabled
 
     def get_file_filter(self) -> str:
         extensions = self.get_supported_extensions()
@@ -300,9 +350,20 @@ class FileUploadController:
         return f"<user_upload_files>\n{files_content}\n</user_upload_files>"
 
     @staticmethod
-    def generate_full_content_from_list(files: list[UploadedFileInfo]) -> str:
-        """从文件列表生成完整内容（用于系统提示词），不依赖控制器内部状态"""
-        contents = []
+    def generate_full_content_from_list(files: list[UploadedFileInfo]) -> dict:
+        """从文件列表生成完整内容（用于系统提示词），不依赖控制器内部状态
+
+        Returns:
+            dict: 包含以下字段的结构化数据：
+                - text_content: str, XML 格式的文本内容（<user_upload_files>）
+                - images: list, 图片数据列表，每项包含：
+                    - file_name: str, 文件名
+                    - base64_data: str, base64 编码的图片数据
+                    - mime_type: str, MIME 类型（如 "image/png"）
+        """
+        text_contents = []
+        images = []
+
         for file_info in files:
             if not file_info.is_success:
                 continue
@@ -312,13 +373,33 @@ class FileUploadController:
             content = result.content or ""
             if not content:
                 continue
-            contents.append(
-                f"<filename>{file_info.original_name}</filename>\n"
-                f"<file_content>\n{content}\n</file_content>"
-            )
-        if not contents:
-            return ""
-        return f"<user_upload_files>\n" + "\n\n".join(contents) + "\n</user_upload_files>"
+
+            # 检查是否为图片（通过 metadata.content_type 判断）
+            content_type = result.metadata.get("content_type", "text")
+            if content_type == "base64_image":
+                # 提取图片数据
+                images.append({
+                    "file_name": file_info.original_name,
+                    "base64_data": content,
+                    "mime_type": result.metadata.get("mime_type", "application/octet-stream"),
+                })
+            else:
+                # 文本内容，保持原有 XML 格式
+                text_contents.append(
+                    f"<filename>{file_info.original_name}</filename>\n"
+                    f"<file_content>\n{content}\n</file_content>"
+                )
+
+        # 生成 text_content
+        if text_contents:
+            text_content = f"<user_upload_files>\n" + "\n\n".join(text_contents) + "\n</user_upload_files>"
+        else:
+            text_content = ""
+
+        return {
+            "text_content": text_content,
+            "images": images,
+        }
 
     def inject_summary_to_message(self, user_message: str) -> str:
         combined_summary = self.generate_combined_summary()

@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Any, ClassVar, Optional
 
 
-SUPPORTED_EXTENSIONS = ["docx", "pdf", "md", "txt", "json", "xlsx", "xls"]
+# 文档文件扩展名
+DOCUMENT_EXTENSIONS = ["docx", "pdf", "md", "txt", "json", "xlsx", "xls"]
+
+# 图片文件扩展名（用于视觉能力控制）
+IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "bmp"]
+
+# 所有支持的文件扩展名
+SUPPORTED_EXTENSIONS = DOCUMENT_EXTENSIONS + IMAGE_EXTENSIONS
 
 
 @dataclass
@@ -41,6 +48,13 @@ class UploadedFileInfo:
         "json": "application/json",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "xls": "application/vnd.ms-excel",
+        # 图片 MIME 类型
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "gif": "image/gif",
+        "webp": "image/webp",
+        "bmp": "image/bmp",
     }
 
     @property
