@@ -78,7 +78,6 @@ TOOL_CATALOG = {
     "get_element_state": "获取UI元素的状态信息。",
     "start_application": "启动应用程序。支持通过程序名、路径或URL启动应用。",
     "list_installed_apps": "查询系统已安装的应用程序列表。返回程序名称、安装路径、可执行文件等信息。",
-    "manage_skill": "Skill 管理工具。查询信息、检索经验、编辑文档。",
 }
 
 CONTROL_TOOL_DEFINITIONS: list[dict] = [
@@ -734,56 +733,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             },
             "required": ["keys"]
         },
-    },
-    {
-        "name": "manage_skill",
-        "description": (
-            "Skill 管理工具。用于查询 Skill 信息、编辑 Skill 文档。\n"
-            "【重要】本工具仅在 skill_evolution Skill 中使用，用于优化用户自定义 Skill。\n"
-            "\n"
-            "**支持的操作：**\n"
-            "\n"
-            "1. **get_info** - 获取 Skill 元信息\n"
-            "   返回：skill_type（builtin/user）、name、description、文件路径等\n"
-            "   用途：判断目标 Skill 是否可被优化（仅 user 类型可优化）\n"
-            "\n"
-            "2. **edit** - 编辑 Skill 文档\n"
-            "   参数：content（新文档内容，必须包含完整的 YAML front matter）\n"
-            "   用途：将优化后的内容写入 SKILL.md 文件\n"
-            "\n"
-            "3. **list** - 列出所有用户自定义 Skill\n"
-            "   返回：skill_id、name、description 列表\n"
-            "   用途：帮助用户选择要优化的 Skill\n"
-            "\n"
-            "**参数：**\n"
-            "- action（必需）：操作类型，值为 get_info/edit/list\n"
-            "- skill_id（必需，edit/get_info）：目标 Skill 的 ID\n"
-            "- content（必需，仅 edit）：新的 Skill 文档内容\n"
-            "\n"
-            "**注意事项：**\n"
-            "- 内置 Skill（skill_type=builtin）不可修改，调用 edit 会返回错误\n"
-            "- edit 操作会覆盖整个 SKILL.md 文件，请确保内容完整"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["get_info", "edit", "list"],
-                    "description": "操作类型"
-                },
-                "skill_id": {
-                    "type": "string",
-                    "description": "目标 Skill 的 ID（get_info/edit 必需）"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "新的 Skill 文档内容（仅 edit 必需，必须包含 YAML front matter）"
-                }
-            },
-            "required": ["action"]
-        },
-    },
+    }
 ]
 
 
