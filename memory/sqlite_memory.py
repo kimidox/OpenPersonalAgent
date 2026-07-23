@@ -12,10 +12,8 @@ from config import WORKER_DIR
 from database import get_session
 from database.models import Conversations, Messages, User
 from memory.conversation import Conversation
-from memory.long_term_memory import LongTermMemory
 from memory.memory import Memory
 from memory.message import Message
-from memory.searcher import MemorySearcher, MemorySegmentData
 
 
 
@@ -36,12 +34,6 @@ class SqliteMemory(Memory):
 
     def __init__(self, *, username) -> None:
         self._username = username
-        memory_file_path = f"{WORKER_DIR}/MEMORY.md"
-        self._long_term_memory = LongTermMemory(
-            memory_file_path=memory_file_path,
-            user_id=username,
-        )
-        self._searcher = MemorySearcher()
 
     @property
     def username(self) -> str:
@@ -358,128 +350,6 @@ class SqliteMemory(Memory):
             if not row:
                 return None
             return Conversation.from_orm(row)
-
-    def get_long_term_memory(self) -> str:
-        return self._long_term_memory.read()
-
-    def search_long_term_memory(self, query: str, limit: int = 5) -> list[MemorySegmentData]:
-        return self._long_term_memory.search(query, limit)
-
-    def append_long_term_memory(self, content: str) -> None:
-        self._long_term_memory.append(content)
-
-    def update_long_term_memory(self, content: str) -> None:
-        self._long_term_memory.update(content)
-
-    def search_skill_memory(self, skill_id: str, query: str, limit: int = 5) -> list[MemorySegmentData]:
-        return self._searcher.search(
-            query=query,
-            memory_type=MemorySearcher.SKILL,
-            related_id=skill_id,
-            limit=limit,
-        )
-
-    def append_skill_memory(self, skill_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
-        self._searcher.add_segment(
-            memory_type=MemorySearcher.SKILL,
-            content=content,
-            related_id=skill_id,
-            metadata=metadata,
-        )
-
-    def get_messages_for_compaction(
-        self,
-        conversation_id: str,
-        keep_recent: int,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        with get_session() as db:
-            rows = (
-                db.query(Messages)
-                .filter(Messages.conversation_id == conversation_id)
-                .order_by(Messages.id.asc())
-                .all()
-            )
-        eligible_messages = []
-        for row in rows:
-            if row.role == "system":
-                continue
-            if row.ext and row.ext.get("type") == "compaction_summary":
-                continue
-            eligible_messages.append(Message.from_orm(row).to_record_dict())
-        if len(eligible_messages) <= keep_recent:
-            return [], eligible_messages
-        to_compact = eligible_messages[:-keep_recent]
-        to_keep = eligible_messages[-keep_recent:]
-        return to_compact, to_keep
-
-    def save_compaction_summary(
-        self,
-        conversation_id: str,
-        summary: str,
-        compacted_message_ids: list[str],
-        conversation_type: str = 'agent_conversation',
-    ) -> None:
-        with get_session() as db:
-            self._ensure_conversation_row(db, conversation_id, conversation_type)
-            mid = str(uuid.uuid4())
-            metadata = {
-                "type": "compaction_summary",
-                "compacted_count": len(compacted_message_ids),
-            }
-            db.add(
-                Messages(
-                    message_id=mid,
-                    conversation_id=conversation_id,
-                    role="system",
-                    content=summary,
-                    ext=metadata,
-                )
-            )
-            for msg_id in compacted_message_ids:
-                msg = (
-                    db.query(Messages)
-                    .filter(Messages.message_id == msg_id)
-                    .first()
-                )
-                if msg:
-                    if msg.ext is None:
-                        msg.ext = {}
-                    msg.ext["compacted"] = True
-            db.commit()
-
-    def get_compaction_summary(self, conversation_id: str) -> str | None:
-        with get_session() as db:
-            msg = (
-                db.query(Messages)
-                .filter(Messages.conversation_id == conversation_id)
-                .filter(Messages.role == "system")
-                .filter(Messages.ext["type"].as_string() == "compaction_summary")
-                .order_by(Messages.id.desc())
-                .first()
-            )
-            if not msg:
-                return None
-            return msg.content
-
-    def get_recent_conversations_summary(self, limit: int = 5) -> str:
-        conversations = self.list_user_conversations()[:limit]
-        if not conversations:
-            return ""
-        summaries = []
-        for conv in conversations:
-            summary = self.get_compaction_summary(conv.conversation_id)
-            if summary:
-                title = conv.title or conv.conversation_id[:8]
-                summaries.append(f"### {title}\n{summary}")
-        return "\n\n---\n\n".join(summaries) if summaries else ""
-
-    def migrate_from_files(self) -> dict[str, int]:
-        result = {
-            "long_term_memory": 0,
-            "skill_memory": 0,
-        }
-        result["long_term_memory"] = self._long_term_memory.migrate_from_file()
-        return result
 
     def get_conversations_with_messages(self) -> set[str]:
         """

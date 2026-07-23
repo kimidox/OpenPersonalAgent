@@ -210,6 +210,7 @@ class Live2DSettingsPage:
                     ft.Row(
                         [self._model_dropdown, refresh_btn, load_btn],
                         spacing=10,
+                        wrap=True,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     ft.Container(height=10),

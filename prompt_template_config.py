@@ -190,8 +190,6 @@ def get_placeholder_description(placeholder_name: str) -> str:
         "TOOL_CATALOG": "可用的工具目录",
         "ACTIVE_SKILLS": "当前已加载的 Skill",
         "UPLOADED_FILES": "用户上传的文件内容",
-        "USER_MEMORY": "用户长期记忆",
-        "RECENT_MEMORY_SUMMARY": "近期记忆摘要",
         "CONVERSATION_CONSTRAINTS": "本次对话约束",
     }
     return descriptions.get(placeholder_name, f"未知占位符: {placeholder_name}")

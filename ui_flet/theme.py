@@ -152,8 +152,8 @@ class FontConfig:
 
 # 默认字体配置
 DEFAULT_FONT_CONFIG = FontConfig(
-    # 字体族
-    family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+    # 字体族（优先使用微软雅黑，保证 Windows 平台显示一致）
+    family="'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
     family_mono="'Consolas', 'Monaco', 'Courier New', monospace",
 
     # 字体大小

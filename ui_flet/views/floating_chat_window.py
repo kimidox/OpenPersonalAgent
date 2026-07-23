@@ -98,9 +98,9 @@ class FloatingChatWindow:
     def _init_controls(self):
         """初始化所有控件"""
         self._logger.info("FloatingChatWindow: 初始化控件")
-        # 创建消息列表（简化版，不提供复制和朗读回调）
+        # 创建消息列表（提供复制回调，不提供朗读回调）
         self._message_list = MessageList(
-            on_copy=None,
+            on_copy=self._on_message_copy,
             on_speak=None,
             auto_scroll=True,
         )
@@ -443,7 +443,17 @@ class FloatingChatWindow:
             self._window_top = window_height - self._height - 10
 
         # 更新位置
-        self._update_position()
+        self._page.update()
+
+    def _on_message_copy(self, text: str) -> None:
+        """
+        消息复制回调
+
+        Args:
+            text: 要复制的文本
+        """
+        self._page.set_clipboard(text)
+        self._logger.info("悬浮窗口消息已复制到剪贴板")
 
     # ==================== 公共方法 ====================
 

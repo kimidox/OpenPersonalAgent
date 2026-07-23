@@ -221,10 +221,6 @@ def format_skill_for_prompt(s: SkillDefinition) -> str:
     if inlined:
         res += inlined
 
-    # 追加执行记忆（如果存在且非空）
-    if s.memory_content and s.memory_content.strip():
-        res += "\n\n---\n## 执行记忆\n" + s.memory_content.strip()
-
     return res
 
 

@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from .conversation import Conversation
-from .searcher import MemorySegmentData
 
 
 class Memory(ABC):
@@ -65,80 +64,3 @@ class Memory(ABC):
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """按时间顺序返回消息记录，每条含 `role`、`content`、可选 `name`（tool）及可选 `metadata`（来自持久化的 ext）。"""
-
-    @abstractmethod
-    def get_long_term_memory(self) -> str:
-        """读取长期记忆内容。"""
-
-    @abstractmethod
-    def append_long_term_memory(self, content: str) -> None:
-        """追加内容到长期记忆。"""
-
-    @abstractmethod
-    def update_long_term_memory(self, content: str) -> None:
-        """更新（覆盖）长期记忆内容。"""
-
-    @abstractmethod
-    def search_long_term_memory(self, query: str, limit: int = 5) -> list[MemorySegmentData]:
-        """检索与查询相关的长期记忆片段。"""
-
-    @abstractmethod
-    def get_messages_for_compaction(
-        self,
-        conversation_id: str,
-        keep_recent: int,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """获取用于压缩的消息，返回 (待压缩消息, 保留消息) 元组。
-
-        Args:
-            conversation_id: 会话 ID。
-            keep_recent: 保留最近 N 条消息不参与压缩。
-
-        Returns:
-            元组：(待压缩消息列表, 保留消息列表)。
-        """
-
-    @abstractmethod
-    def save_compaction_summary(
-        self,
-        conversation_id: str,
-        summary: str,
-        compacted_message_ids: list[str],
-    ) -> None:
-        """保存压缩摘要，并标记已压缩的消息。
-
-        Args:
-            conversation_id: 会话 ID。
-            summary: 压缩后的摘要内容。
-            compacted_message_ids: 已被压缩的消息 ID 列表。
-        """
-
-    @abstractmethod
-    def get_compaction_summary(self, conversation_id: str) -> str | None:
-        """获取指定会话的压缩摘要。
-
-        Args:
-            conversation_id: 会话 ID。
-
-        Returns:
-            压缩摘要内容，若无则返回 None。
-        """
-
-    @abstractmethod
-    def get_recent_conversations_summary(self, limit: int = 5) -> str:
-        """获取近期会话摘要，用于填充 {RECENT_MEMORY_SUMMARY} 占位符。
-
-        Args:
-            limit: 最多获取的会话数量。
-
-        Returns:
-            近期会话摘要文本。
-        """
-
-    @abstractmethod
-    def search_skill_memory(self, skill_id: str, query: str, limit: int = 5) -> list[MemorySegmentData]:
-        """检索与查询相关的 Skill 执行记忆片段。"""
-
-    @abstractmethod
-    def append_skill_memory(self, skill_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
-        """追加 Skill 执行记忆。"""

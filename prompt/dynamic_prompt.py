@@ -115,8 +115,6 @@ class DynamicSystemPrompt:
                 PlaceholderName.TOOL_CATALOG.value: "## 可用工具目录\n- Tool 1: 示例工具",
                 PlaceholderName.ACTIVE_SKILLS.value: "## 当前已加载的 Skill\n已加载 Skill 1",
                 PlaceholderName.UPLOADED_FILES.value: "## 用户上传的文件\n示例文件内容",
-                PlaceholderName.USER_MEMORY.value: "## 用户长期记忆\n示例记忆内容",
-                PlaceholderName.RECENT_MEMORY_SUMMARY.value: "## 近期记忆摘要\n示例摘要",
                 PlaceholderName.CONVERSATION_CONSTRAINTS.value: "## 本次对话约束\n示例约束",
             }
 
@@ -135,14 +133,8 @@ class DynamicSystemPrompt:
     def update_active_skills(self, skills: str) -> None:
         self.update_placeholder(PlaceholderName.ACTIVE_SKILLS.value, skills)
 
-    def update_user_memory(self, memory: str) -> None:
-        self.update_placeholder(PlaceholderName.USER_MEMORY.value, memory)
-
     def update_conversation_constraints(self, constraints: str) -> None:
         self.update_placeholder(PlaceholderName.CONVERSATION_CONSTRAINTS.value, constraints)
-
-    def update_recent_memory_summary(self, summary: str) -> None:
-        self.update_placeholder(PlaceholderName.RECENT_MEMORY_SUMMARY.value, summary)
 
     def update_tool_catalog(self, catalog: str) -> None:
         self.update_placeholder(PlaceholderName.TOOL_CATALOG.value, catalog)
@@ -160,14 +152,8 @@ class DynamicSystemPrompt:
     def clear_active_skills(self) -> None:
         self.clear_placeholder(PlaceholderName.ACTIVE_SKILLS.value)
 
-    def clear_user_memory(self) -> None:
-        self.clear_placeholder(PlaceholderName.USER_MEMORY.value)
-
     def clear_conversation_constraints(self) -> None:
         self.clear_placeholder(PlaceholderName.CONVERSATION_CONSTRAINTS.value)
-
-    def clear_recent_memory_summary(self) -> None:
-        self.clear_placeholder(PlaceholderName.RECENT_MEMORY_SUMMARY.value)
 
     def build(self) -> str:
         with self._lock:

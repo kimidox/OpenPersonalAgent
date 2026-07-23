@@ -20,7 +20,7 @@ from executor import Executor
 from memory import SqliteMemory
 from skill_agent import SkillAgent, SKILL_AGENT_AWAITING_USER_REPLY
 from ui_flet.state import AppState, StreamType
-from ui_flet.theme import ThemeManager, get_color
+from ui_flet.theme import ThemeManager, get_color, DEFAULT_FONT_CONFIG
 from ui_flet.components.message_list import MessageList
 from ui_flet.components.input_area import InputArea
 from ui_flet.utils.file_upload_manager import UploadedFileInfo
@@ -412,6 +412,18 @@ class MainWindow:
         # 设置页面背景色
         self._page.bgcolor = colors.bg_page
         self._logger.info(f"设置页面背景色: {colors.bg_page}")
+
+        # 设置全局主题字体，并统一按钮文字字重为 W_500
+        self._page.theme = ft.Theme(
+            font_family=DEFAULT_FONT_CONFIG.family,
+            text_theme=ft.TextTheme(
+                label_large=ft.TextStyle(
+                    font_family=DEFAULT_FONT_CONFIG.family,
+                    weight=ft.FontWeight.W_500,
+                ),
+            ),
+        )
+        self._logger.info(f"设置全局字体: {DEFAULT_FONT_CONFIG.family}")
 
         # 根据主题设置 Flet 主题
         if self._theme_manager.current_theme.value == "dark":

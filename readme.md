@@ -74,10 +74,9 @@ The project supports multiple LLM backends:
 
 ### 5. Dynamic System Prompt
 
-- ✅ **Placeholder Mechanism**: `{SKILL_CATALOG}`, `{ACTIVE_SKILLS}`, `{USER_MEMORY}`, etc.
+- ✅ **Placeholder Mechanism**: `{SKILL_CATALOG}`, `{ACTIVE_SKILLS}`, `{CONVERSATION_CONSTRAINTS}`, etc.
 - ✅ **Dynamic Construction**: System prompt rebuilt before each LLM call
 - ✅ **Skill Switching**: Efficiently replace Skill content without appending messages
-- ✅ **Memory Integration**: User memory and recent conversation summary auto-injected
 
 ### 6. Modular Frontend Architecture
 

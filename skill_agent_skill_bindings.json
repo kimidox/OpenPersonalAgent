@@ -24,6 +24,9 @@
     ],
     "8": [
       "agent_conversation"
+    ],
+    "skill_evolution": [
+      "agent_conversation"
     ]
   }
 }

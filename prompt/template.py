@@ -7,9 +7,7 @@ from typing import Final
 class PlaceholderName(str, Enum):
     SKILL_CATALOG = "SKILL_CATALOG"
     ACTIVE_SKILLS = "ACTIVE_SKILLS"
-    USER_MEMORY = "USER_MEMORY"
     CONVERSATION_CONSTRAINTS = "CONVERSATION_CONSTRAINTS"
-    RECENT_MEMORY_SUMMARY = "RECENT_MEMORY_SUMMARY"
     TOOL_CATALOG = "TOOL_CATALOG"
     BASE_INFO = "BASE_INFO"
     UPLOADED_FILES = "UPLOADED_FILES"
@@ -37,10 +35,6 @@ AGENT_CONVERSATION_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户的
 {ACTIVE_SKILLS}
 
 {UPLOADED_FILES}
-
-{USER_MEMORY}
-
-{RECENT_MEMORY_SUMMARY}
 
 {CONVERSATION_CONSTRAINTS}
 
@@ -115,7 +109,7 @@ AGENT_CONVERSATION_TEMPLATE: Final[str] = """你是 SkillAgent：根据用户的
 2. **参考重试引导**：查看返回结果中的【重试引导】段落和针对性建议（如命令不存在、权限不足、路径错误等提示）
 3. **判断错误类型**：
    - 简单错误（命令拼写错误、路径笔误、缺少参数等）：直接修正命令参数后重试
-   - 复杂错误（依赖缺失、配置问题、权限限制等）或连续失败 ≥ 1 次：先调用 load_skill_memory 获取相关经验，再尝试修正
+   - 复杂错误（依赖缺失、配置问题、权限限制等）或连续失败 ≥ 1 次：先分析错误原因，搜索相关文档或日志，再尝试修正
 4. **重试限制**：同一命令最多重试 2 次，超过后应放弃该方案并重新规划任务
 5. **避免重复**：重试时必须确保修改了命令参数，禁止使用相同参数重复调用
 """
@@ -125,10 +119,6 @@ CHAT_CONVERSATION_TEMPLATE: Final[str] = """你是一个友好的对话助手，
 {BASE_INFO}
 
 {UPLOADED_FILES}
-
-{USER_MEMORY}
-
-{RECENT_MEMORY_SUMMARY}
 
 {CONVERSATION_CONSTRAINTS}
 
@@ -164,10 +154,6 @@ RECORD_CONVERSATION_TEMPLATE: Final[str] = """你是一个专业的语音内容�
 {ACTIVE_SKILLS}
 
 {UPLOADED_FILES}
-
-{USER_MEMORY}
-
-{RECENT_MEMORY_SUMMARY}
 
 {CONVERSATION_CONSTRAINTS}
 
@@ -213,16 +199,6 @@ SKILL_CATALOG_SECTION_TEMPLATE: Final[str] = """## 可用 Skill 目录
 
 ACTIVE_SKILLS_SECTION_TEMPLATE: Final[str] = """## 当前已加载的 Skill
 {skills}"""
-
-USER_MEMORY_SECTION_TEMPLATE: Final[str] = """## 用户长期记忆
-<user_memory>
-{memory}
-</user_memory>"""
-
-RECENT_MEMORY_SUMMARY_SECTION_TEMPLATE: Final[str] = """## 近期记忆摘要
-<recent_memory_summary>
-{summary}
-</recent_memory_summary>"""
 
 CONVERSATION_CONSTRAINTS_SECTION_TEMPLATE: Final[str] = """## 本次对话约束
 {constraints}"""
@@ -294,8 +270,6 @@ INPUT_CLASSIFICATION_TEMPLATE: Final[str] = """你是一个输入分类器。请
 EMPTY_PLACEHOLDER_VALUES: Final[dict[str, str]] = {
     PlaceholderName.SKILL_CATALOG.value: "（暂无可用 Skill）",
     PlaceholderName.ACTIVE_SKILLS.value: "",
-    PlaceholderName.USER_MEMORY.value: "（暂无用户长期记忆）",
-    PlaceholderName.RECENT_MEMORY_SUMMARY.value: "",
     PlaceholderName.CONVERSATION_CONSTRAINTS.value: "",
     PlaceholderName.TOOL_CATALOG.value: "",
     PlaceholderName.BASE_INFO.value: "",

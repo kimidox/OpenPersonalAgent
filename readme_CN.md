@@ -74,10 +74,9 @@ OpenPersonalAgent 是一个**基于大语言模型工具调用的智能代理系
 
 ### 5. 动态系统提示词
 
-- ✅ **占位符机制**：`{SKILL_CATALOG}`、`{ACTIVE_SKILLS}`、`{USER_MEMORY}` 等
+- ✅ **占位符机制**：`{SKILL_CATALOG}`、`{ACTIVE_SKILLS}`、`{CONVERSATION_CONSTRAINTS}` 等
 - ✅ **动态构建**：每次LLM调用前重新构建系统提示词
 - ✅ **Skill切换**：高效替换Skill内容，无需追加消息
-- ✅ **记忆集成**：用户记忆和近期会话摘要自动注入
 
 ### 6. 模块化前端架构
 

@@ -66,8 +66,6 @@ TOOL_CATALOG = {
     "run_command": "执行 Python 命令或 PowerShell 命令。",
     "file_operation": "文件操作工具。支持四种操作：",
     "edit": "精确编辑文件。在文件中搜索指定内容并替换。",
-    "read_memory": "读取长期记忆。从数据库中读取已保存的信息。",
-    "write_memory": "写入长期记忆。将内容保存到数据库中。",
     "create_scheduled_task": "创建定时任务提醒。",
     "list_scheduled_tasks": "列出定时任务。",
     "delete_scheduled_task": "删除定时任务。",
@@ -80,6 +78,7 @@ TOOL_CATALOG = {
     "get_element_state": "获取UI元素的状态信息。",
     "start_application": "启动应用程序。支持通过程序名、路径或URL启动应用。",
     "list_installed_apps": "查询系统已安装的应用程序列表。返回程序名称、安装路径、可执行文件等信息。",
+    "manage_skill": "Skill 管理工具。查询信息、检索经验、编辑文档。",
 }
 
 CONTROL_TOOL_DEFINITIONS: list[dict] = [
@@ -155,23 +154,6 @@ CONTROL_TOOL_DEFINITIONS: list[dict] = [
             "required": ["message"]
         },
     },
-    {
-        "name": "load_skill_memory",
-        "description": (
-            "加载指定 Skill 的执行经验（skill_memory.md）。"
-            "经验内容包含之前执行该 Skill 时遇到的问题及解决方案。"
-            "可通过 query 参数进行语义检索，精准获取与当前问题相关的经验。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "skill_id": {"type": "string", "description": "Skill 唯一标识"},
-                "query": {"type": "string", "description": "检索关键词，用于语义搜索相关经验。不提供则返回最近的记录。"},
-                "limit": {"type": "integer", "description": "返回经验记录的最大数量，默认 5。"},
-            },
-            "required": ["skill_id"],
-        },
-    },
 ]
 
 ATOMIC_TOOL_DEFINITIONS: list[dict] = [
@@ -191,7 +173,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "- 禁止使用裸重定向 > 或不带编码参数的 Set-Content、Out-File\n\n"
             "【错误处理规范】\n"
             "- 简单错误（拼写错误、路径笔误）：修正后重试\n"
-            "- 复杂错误或连续失败：先 load_skill_memory 获取经验再修正\n"
+            "- 复杂错误或连续失败：先分析错误原因，搜索相关文档或日志再修正\n"
             "- 同一命令重试超 2 次仍失败：放弃并重新规划任务\n"
             "- 超时命令会返回部分输出，可增加 timeout_sec 或检查是否需要交互输入\n"
             "- 失败时返回结果会包含【重试引导】，请参考其中建议修正命令\n\n"
@@ -299,59 +281,6 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 }
             },
             "required": ["path", "old_str", "new_str"]
-        },
-    },
-    {
-        "name": "read_memory",
-        "description": (
-            "读取长期记忆。从数据库中读取已保存的信息。\n"
-            "使用场景：\n"
-            "- 用户提及之前的偏好、设置或重要信息时\n"
-            "- 询问'你还记得...'或'上次我们...'相关问题\n"
-            "- 需要延续之前会话中的上下文或决策时\n"
-            "提供关键词时会进行语义检索，返回最相关的记忆片段。\n"
-            "不提供关键词时返回所有记忆（向后兼容）。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "检索关键词，用于匹配相关的记忆内容，为空时返回所有记忆",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "最大返回记忆数量，默认 10",
-                },
-            },
-            "required": ['query','limit'],
-        },
-    },
-    {
-        "name": "write_memory",
-        "description": (
-            "写入长期记忆。将内容保存到数据库中。\n"
-            "使用场景：\n"
-            "- 用户明确要求记住某件事（如'记住这个...'、'以后都这样...'）\n"
-            "- 保存用户的长期偏好或习惯\n"
-            "- 记录重要的项目配置、决策或约定\n"
-            "- 保存需要跨会话使用的上下文信息\n"
-            "参数：content(必需，要保存的内容)、mode(可选，append追加/overwrite覆盖，默认append)。\n"
-            "追加时会自动添加时间戳标记。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "要保存到长期记忆的内容，应清晰、完整、自包含",
-                },
-                "mode": {
-                    "type": "string",
-                    "description": "写入模式：append（追加）或 overwrite（覆盖），默认为 append",
-                },
-            },
-            "required": ["content"],
         },
     },
     {
@@ -804,6 +733,55 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 }
             },
             "required": ["keys"]
+        },
+    },
+    {
+        "name": "manage_skill",
+        "description": (
+            "Skill 管理工具。用于查询 Skill 信息、编辑 Skill 文档。\n"
+            "【重要】本工具仅在 skill_evolution Skill 中使用，用于优化用户自定义 Skill。\n"
+            "\n"
+            "**支持的操作：**\n"
+            "\n"
+            "1. **get_info** - 获取 Skill 元信息\n"
+            "   返回：skill_type（builtin/user）、name、description、文件路径等\n"
+            "   用途：判断目标 Skill 是否可被优化（仅 user 类型可优化）\n"
+            "\n"
+            "2. **edit** - 编辑 Skill 文档\n"
+            "   参数：content（新文档内容，必须包含完整的 YAML front matter）\n"
+            "   用途：将优化后的内容写入 SKILL.md 文件\n"
+            "\n"
+            "3. **list** - 列出所有用户自定义 Skill\n"
+            "   返回：skill_id、name、description 列表\n"
+            "   用途：帮助用户选择要优化的 Skill\n"
+            "\n"
+            "**参数：**\n"
+            "- action（必需）：操作类型，值为 get_info/edit/list\n"
+            "- skill_id（必需，edit/get_info）：目标 Skill 的 ID\n"
+            "- content（必需，仅 edit）：新的 Skill 文档内容\n"
+            "\n"
+            "**注意事项：**\n"
+            "- 内置 Skill（skill_type=builtin）不可修改，调用 edit 会返回错误\n"
+            "- edit 操作会覆盖整个 SKILL.md 文件，请确保内容完整"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["get_info", "edit", "list"],
+                    "description": "操作类型"
+                },
+                "skill_id": {
+                    "type": "string",
+                    "description": "目标 Skill 的 ID（get_info/edit 必需）"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "新的 Skill 文档内容（仅 edit 必需，必须包含 YAML front matter）"
+                }
+            },
+            "required": ["action"]
         },
     },
 ]

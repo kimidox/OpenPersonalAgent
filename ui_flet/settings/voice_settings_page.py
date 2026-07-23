@@ -199,7 +199,7 @@ class VoiceSettingsPage:
             on_click=self._on_download_asr_model,
             style=ft.ButtonStyle(
                 color=colors.text,
-                bgcolor=colors.primary,
+                bgcolor=colors.surface,
             ),
         )
 
@@ -208,7 +208,7 @@ class VoiceSettingsPage:
             on_click=self._on_load_asr_model,
             style=ft.ButtonStyle(
                 color=colors.text,
-                bgcolor=colors.primary,
+                bgcolor=colors.surface,
             ),
         )
 
@@ -253,7 +253,7 @@ class VoiceSettingsPage:
             on_click=self._on_toggle_asr_test,
             style=ft.ButtonStyle(
                 color=colors.text,
-                bgcolor=colors.primary,
+                bgcolor=colors.surface,
             ),
         )
 
@@ -485,7 +485,7 @@ class VoiceSettingsPage:
             on_click=self._on_load_tts_model,
             style=ft.ButtonStyle(
                 color=colors.text,
-                bgcolor=colors.primary,
+                bgcolor=colors.surface,
             ),
         )
 
@@ -499,7 +499,7 @@ class VoiceSettingsPage:
             on_click=self._on_save_tts_params,
             style=ft.ButtonStyle(
                 color=colors.text,
-                bgcolor=colors.primary,
+                bgcolor=colors.surface,
             ),
         )
 
@@ -516,7 +516,7 @@ class VoiceSettingsPage:
             on_click=self._on_test_tts,
             style=ft.ButtonStyle(
                 color=colors.text,
-                bgcolor=colors.primary,
+                bgcolor=colors.surface,
             ),
         )
 
@@ -683,7 +683,7 @@ class VoiceSettingsPage:
             on_click=self._on_test_audio_device,
             style=ft.ButtonStyle(
                 color=colors.text,
-                bgcolor=colors.primary,
+                bgcolor=colors.surface,
             ),
         )
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+
 import os
 import re
 import subprocess
@@ -19,7 +19,7 @@ import config
 import scheduled_tasks as st_module
 from resource_path import paths
 from skill import SkillRegistry
-from skill.loader import load_skill_memory_lazy
+
 from logger import get_module_logger
 from .context import ToolContext
 from .decorators import atomic_tool
@@ -630,6 +630,7 @@ def _truncate_run_output(text: str, limit: int = _RUN_COMMAND_MAX_TOTAL_OUT) -> 
 
 
 def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> str:
+    import  json
     if name == "file_operation":
         action = args.get("action", "")
         raw_path = args.get("path", "")
@@ -806,22 +807,41 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         # 使用虚拟环境执行命令
         venv_python = _get_venv_python()
 
+        # 检测并提取 python -c "..." 命令，直接调用 Python 避免 cmd.exe 引号截断问题
+        def _extract_python_c_code(cmd_str: str) -> tuple[str | None, str | None]:
+            """提取 python -c "..." 命令中的代码部分，返回 (python路径, code) 或 (None, None)"""
+            import re
+            # 匹配 python -c "..." 或 python -c '...'
+            match = re.match(
+                r'^python(?:\.exe)?\s+-c\s*(["\'])(.*)\1\s*$',
+                cmd_str,
+                re.IGNORECASE | re.DOTALL
+            )
+            if match:
+                quote, code = match.groups()
+                # 将换行符替换为分号（Python 语句分隔符）
+                code = code.replace('\n', '; ')
+                python_exe = venv_python or sys.executable
+                return python_exe, code
+            return None, None
+
+        python_c_exe, python_c_code = _extract_python_c_code(command)
+
         # 构建使用虚拟环境的命令
         if sys.platform == "win32":
-            # Windows: 对于Python脚本，直接使用虚拟环境的Python解释器
-            cmd_lower = command.lower().strip()
-            if (cmd_lower.startswith("python") or cmd_lower.endswith(".py")) and venv_python:
+            # 对于 python -c "..." 命令，直接调用 Python 解释器，避免 cmd.exe 引号截断
+            if python_c_exe and python_c_code:
+                cmd = [python_c_exe, "-c", python_c_code]
+            elif (command.lower().strip().startswith("python") or command.lower().strip().endswith(".py")) and venv_python:
                 # 替换命令中的python为虚拟环境的python
-                if cmd_lower.startswith("python"):
-                    parts = command.split(None, 1)
-                    if len(parts) == 2:
-                        command = f'{venv_python} {parts[1]}'
-                    else:
-                        command = venv_python
-                elif cmd_lower.endswith(".py"):
-                    command = f'{venv_python} {command}'
-                # 使用虚拟环境的Python直接执行，无需激活
-                cmd = ["cmd.exe", "/c", command]
+                cmd_lower = command.lower().strip()
+                parts = command.split(None, 1)
+                if len(parts) == 2:
+                    remaining = parts[1]
+                else:
+                    remaining = ""
+                # 非 -c 的 python 命令仍通过 cmd.exe 执行
+                cmd = ["cmd.exe", "/c", f'{venv_python} {remaining}']
             else:
                 # 非Python命令：智能路由选择执行器
                 if command.lower().startswith("powershell") or _should_use_powershell(command):
@@ -972,79 +992,13 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
                     f"{error_suggestions}"
                     f"{skills_path_hint}"
                     f"{timeout_note}\n\n"
-                    f"【重试引导】请分析上述错误信息，检查参数（路径、命令拼写、权限等）是否正确，修正后重新调用 run_command 重试。连续失败时请调用 load_skill_memory 获取相关经验。"
+                    f"【重试引导】请分析上述错误信息，检查参数（路径、命令拼写、权限等）是否正确，修正后重新调用 run_command 重试。连续失败时请分析错误原因并调整方案。"
                 )
 
             return _truncate_run_output(result)
 
         except Exception as e:
             return f"错误: 命令执行异常: {e}"
-
-    if name == "read_memory":
-        if ctx.memory is None:
-            return "错误: memory 对象不可用"
-        
-        query = args.get("query", "")
-        limit = args.get("limit", 10)
-        
-        if query and query.strip():
-            # 使用关键词检索
-            segments = ctx.memory.search_long_term_memory(query, limit=limit)
-            if not segments:
-                return f"未找到与关键词「{query}」相关的记忆"
-            
-            memory_parts = []
-            for seg in segments:
-                if seg.created_at and hasattr(seg.created_at, 'strftime'):
-                    timestamp = seg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                elif seg.created_at:
-                    timestamp = str(seg.created_at)
-                else:
-                    timestamp = ""
-                score_info = f" (相关度: {seg.score:.2f})" if seg.score else ""
-                memory_parts.append(f"## [{timestamp}]{score_info}\n{seg.content}")
-            memory_content = "\n".join(memory_parts)
-            return memory_content
-        else:
-            # 不提供查询时返回所有记忆（向后兼容）
-            return ctx.memory.get_long_term_memory()
-
-    if name == "write_memory":
-        content = args.get("content", "")
-        mode = args.get("mode", "append")
-
-        if ctx.memory is None:
-            return "错误: memory 对象不可用"
-
-        if mode == "append":
-            ctx.memory.append_long_term_memory(content)
-            return "已追加到长期记忆\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
-        elif mode == "overwrite":
-            ctx.memory.update_long_term_memory(content)
-            return "已更新长期记忆\n\n✓ 操作成功。如果任务已完成，请调用 finish 结束。"
-        else:
-            return f"错误: 未知的 mode 参数: {mode}，支持 'append' 或 'overwrite'"
-
-    if name == "load_skill_memory":
-        skill_id = args.get("skill_id", "")
-        query = args.get("query", None)
-        limit = args.get("limit", 5)
-
-        if not skill_id:
-            return "错误: 缺少 skill_id 参数"
-
-        if registry is None:
-            return "错误: SkillRegistry 不可用"
-
-        skill = registry.get(str(skill_id))
-        if skill is None:
-            return f"错误: 未找到 Skill: {skill_id}"
-
-        load_skill_memory_lazy(skill, registry, query=query, limit=limit)
-
-        if skill.memory_content and skill.memory_content.strip():
-            return f"### Skill「{skill_id}」执行经验\n\n{skill.memory_content.strip()}\n\n请参考以上经验，避免重复之前的错误。"
-        return f"Skill「{skill_id}」暂无执行经验记录。"
 
     if name == "create_scheduled_task":
         title = args.get("title", "")
@@ -2372,6 +2326,81 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
 
         except Exception as e:
             return f"错误: 发送热键失败: {e}"
+
+    # ========== Skill 管理工具 ==========
+    if name == "manage_skill":
+        action = args.get("action", "")
+        if not action:
+            return "错误: 缺少 action 参数"
+
+        if action == "list":
+            # 列出所有用户自定义 Skill
+            if not registry:
+                return "错误: SkillRegistry 不可用"
+            user_skills = []
+            for skill in registry.list_user_skills():
+                user_skills.append({
+                    "id": skill.skill_id,
+                    "name": skill.name,
+                    "description": skill.description[:100] + "..." if len(skill.description) > 100 else skill.description
+                })
+            if not user_skills:
+                return "未找到用户自定义 Skill"
+            result_lines = ["用户自定义 Skill 列表：", ""]
+            for s in user_skills:
+                result_lines.append(f"- **{s['id']}**: {s['name']}")
+                result_lines.append(f"  描述：{s['description']}")
+            return "\n".join(result_lines)
+
+        if action == "get_info":
+            skill_id = args.get("skill_id", "")
+            if not skill_id:
+                return "错误: 缺少 skill_id 参数"
+            if not registry:
+                return "错误: SkillRegistry 不可用"
+            skill = registry.get(str(skill_id))
+            if not skill:
+                return f"错误: 未找到 Skill '{skill_id}'"
+            import json
+            info = {
+                "id": skill.skill_id,
+                "name": skill.name,
+                "description": skill.description,
+                "skill_type": skill.skill_type,
+                "file_path": str(skill.relative_path) if skill.relative_path else "unknown"
+            }
+            return json.dumps(info, ensure_ascii=False, indent=2)
+
+
+
+        if action == "edit":
+            skill_id = args.get("skill_id", "")
+            content = args.get("content", "")
+            if not skill_id:
+                return "错误: 缺少 skill_id 参数"
+            if not content:
+                return "错误: 缺少 content 参数"
+            if not registry:
+                return "错误: SkillRegistry 不可用"
+            # 检查是否为内置 Skill
+            skill = registry.get(str(skill_id))
+            if not skill:
+                return f"错误: 未找到 Skill '{skill_id}'"
+            if skill.skill_type == "builtin":
+                return f"错误: 内置 Skill '{skill_id}' 不可修改，仅支持优化用户自定义 Skill"
+            # 使用 SkillManager 编辑 Skill
+            try:
+                from skill.skill_manager import get_manager
+                mgr = get_manager()
+                success = mgr.edit_skill(str(skill_id), content)
+                if success:
+                    return f"✓ Skill '{skill_id}' 文档已更新"
+                else:
+                    return f"错误: Skill '{skill_id}' 更新失败"
+            except Exception as e:
+                return f"错误: 编辑 Skill 失败: {e}"
+
+        return f"错误: 未知的 action 参数: {action}"
 
     return f"未知原子工具: {name}"
 

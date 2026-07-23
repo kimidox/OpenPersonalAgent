@@ -574,7 +574,7 @@ class BaseChatModel(ABC):
         工作原理：
         1. 只提供两类工具：
            - request_tool_details：用于按需获取原子工具的完整定义
-           - CONTROL_TOOL_DEFINITIONS：控制类工具（select_skill, finish, ask_user, load_skill_memory）
+           - CONTROL_TOOL_DEFINITIONS：控制类工具（select_skill, finish, ask_user）
         2. 原子工具（run_command, file_operation 等）不直接提供，需通过 request_tool_details 获取
         
         流程说明：

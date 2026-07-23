@@ -23,14 +23,12 @@ from llm import get_chat_model
 from llm.BaseChatModel import StreamResult
 from llm.token_usage import TokenUsage
 from memory import Memory
-from memory.compactor import ContextCompactor, estimate_messages_tokens
+
 from memory.conversation import Conversation
 from prompt import DynamicSystemPrompt
 from prompt.template import (
     SKILL_CATALOG_SECTION_TEMPLATE,
     ACTIVE_SKILLS_SECTION_TEMPLATE,
-    USER_MEMORY_SECTION_TEMPLATE,
-    RECENT_MEMORY_SUMMARY_SECTION_TEMPLATE,
 )
 from skill import (
     SkillRegistry,
@@ -39,7 +37,7 @@ from skill import (
     skills_auto_matched_for_query,
     format_skill_for_prompt,
 )
-from skill.memory_summarizer import summarize_skill_execution, save_skill_memory
+
 from logger import get_module_logger
 
 logger = get_module_logger("SkillAgent")
@@ -142,7 +140,6 @@ class SkillAgent:
             file_upload_controller=file_upload_controller,
         )
         self._recent_commands: list[tuple[str, str]] = []
-        self._compactor: ContextCompactor | None = None
         self._token_usage = TokenUsage.empty()
         self._dynamic_prompt = DynamicSystemPrompt()
         self._conversation_constraints: str = ""
@@ -280,30 +277,7 @@ class SkillAgent:
             # 多模态内容，返回列表格式
             return message_parts
 
-    @property
-    def _get_compactor(self) -> ContextCompactor | None:
-        if self._compactor is None and self.memory is not None:
-            model = get_chat_model(enable_thinking=self._enable_thinking)
-            self._compactor = ContextCompactor(self.memory, model)
-        return self._compactor
 
-    def _should_compact(self, messages: list[dict[str, Any]]) -> bool:
-        if self.memory is None:
-            return False
-        compactor = self._get_compactor
-        if compactor is None:
-            return False
-        return compactor.should_compact(messages)
-
-    def _perform_compaction(
-        self,
-        messages: list[dict[str, Any]],
-        log_callback: Callable[[str, str], Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        compactor = self._get_compactor
-        if compactor is None:
-            return messages
-        return compactor.compact(self._conversation_id, messages, log_callback)
 
     def _disabled_skill_ids_frozen(self) -> frozenset[str]:
         return frozenset(load_disabled_skill_ids())
@@ -388,37 +362,12 @@ class SkillAgent:
         return ACTIVE_SKILLS_SECTION_TEMPLATE.format(skills=merged)
 
     def _fill_user_memory(self, query: str | None = None, limit: int = 5) -> str:
-        if self.memory is None:
-            return ""
-        try:
-            if query:
-                segments = self.memory.search_long_term_memory(query, limit)
-                if not segments:
-                    return ""
-                memory_parts = []
-                for seg in segments:
-                    timestamp = seg.created_at.strftime("%Y-%m-%d %H:%M:%S") if seg.created_at else ""
-                    memory_parts.append(f"## [{timestamp}]\n{seg.content}")
-                memory_content = "\n".join(memory_parts)
-            else:
-                memory_content = self.memory.get_long_term_memory()
-            
-            if not memory_content or not memory_content.strip():
-                return ""
-            return USER_MEMORY_SECTION_TEMPLATE.format(memory=memory_content.strip())
-        except Exception:
-            return ""
+        """用户长期记忆功能已移除，返回空字符串。"""
+        return ""
 
     def _fill_recent_memory_summary(self) -> str:
-        if self.memory is None:
-            return ""
-        try:
-            recent_summary = self.memory.get_recent_conversations_summary(limit=5)
-            if not recent_summary or not recent_summary.strip():
-                return ""
-            return RECENT_MEMORY_SUMMARY_SECTION_TEMPLATE.format(summary=recent_summary.strip())
-        except Exception:
-            return ""
+        """近期记忆摘要功能已移除，返回空字符串。"""
+        return ""
 
     def _build_tool_catalog_text(self, tool_catalog: list[dict]) -> str:
         if not tool_catalog:
@@ -1161,7 +1110,7 @@ class SkillAgent:
         active_skill_text: list[str],
         active_skill_ids: list[str],
     ) -> tuple[str, bool, Optional[str]]:
-        if name in ("select_skill", "finish", "ask_user", "load_skill_memory"):
+        if name in ("select_skill", "finish", "ask_user"):
             return execute_skill_control_tool(
                 name,
                 args,
@@ -1381,89 +1330,7 @@ class SkillAgent:
         )
         return tool_call_id
 
-    def _summarize_session_skills(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
-        import threading
-        current_thread = threading.current_thread()
-        logger.info("_summarize_session_skills 开始: thread=%s, conversation_id=%s", current_thread.name, conversation_id)
-        
-        if not self.memory:
-            logger.warning("跳过总结: memory 为空 (conversation_id=%s)", conversation_id)
-            return
 
-        if active_skill_ids is None:
-            logger.debug("获取活跃 skill_ids (conversation_id=%s)", conversation_id)
-            active_skill_ids = self.memory.get_active_skills(conversation_id)
-
-        logger.info("开始总结: conversation_id=%s, active_skill_ids=%s", conversation_id, active_skill_ids)
-
-        if not active_skill_ids:
-            logger.warning("跳过总结: 无活跃 skill (conversation_id=%s)", conversation_id)
-            return
-
-        messages = self.memory.get_message_records(conversation_id)
-        if not messages:
-            logger.warning("跳过总结: 无会话消息 (conversation_id=%s)", conversation_id)
-            return
-
-        logger.info("加载会话消息完成: count=%s, conversation_id=%s", len(messages), conversation_id)
-
-        model = get_chat_model(enable_thinking=self._enable_thinking)
-        logger.debug("获取 LLM 模型完成, conversation_id=%s", conversation_id)
-
-        success_count = 0
-        for idx, skill_id in enumerate(active_skill_ids):
-            try:
-                logger.debug("正在总结 skill: %s (%s/%s)", skill_id, idx+1, len(active_skill_ids))
-                memory = summarize_skill_execution(skill_id, messages, model)
-                if memory:
-                    saved_path = save_skill_memory(skill_id, memory, self.registry)
-                    logger.debug("skill %s 总结完成, 保存至: %s", skill_id, saved_path)
-                    success_count += 1
-                else:
-                    logger.debug("skill %s 总结结果为空, 未保存", skill_id)
-            except Exception as e:
-                import traceback
-                logger.error("总结 skill %s 执行经验失败: %s", skill_id, e)
-                logger.error("异常堆栈:\n%s", traceback.format_exc())
-        
-        logger.info("总结会话完成: conversation_id=%s, total=%s, success=%s", conversation_id, len(active_skill_ids), success_count)
-        logger.debug("后台线程退出: thread=%s", current_thread.name)
-
-    def _start_summary_in_background(self, conversation_id: str, active_skill_ids: list[str] | None = None) -> None:
-        import threading
-        import config
-        
-        # 检查是否启用自动总结
-        if not config.SKILL_SUMMARY_ENABLED:
-            logger.debug("自动总结已禁用，跳过总结 (conversation_id=%s)", conversation_id)
-            return
-        
-        logger.info("准备启动后台总结线程: conversation_id=%s, active_skill_ids=%s", conversation_id, active_skill_ids)
-        
-        if not self.memory:
-            logger.warning("跳过总结: memory 为空 (conversation_id=%s)", conversation_id)
-            return
-        
-        if active_skill_ids is None:
-            logger.debug("获取活跃 skill_ids (conversation_id=%s)", conversation_id)
-            active_skill_ids = self.memory.get_active_skills(conversation_id)
-        
-        if not active_skill_ids:
-            logger.warning("跳过总结: 无活跃 skill (conversation_id=%s)", conversation_id)
-            return
-        
-        logger.debug("构建总结线程: conversation_id=%s, active_skill_ids=%s", conversation_id, active_skill_ids)
-        
-        t = threading.Thread(
-            target=self._summarize_session_skills,
-            args=(conversation_id, active_skill_ids),
-            name=f"skill-summary-{conversation_id[:8]}",
-            daemon=True,
-        )
-        t.start()
-        
-        logger.info("后台线程已启动: name=%s, ident=%s, active_skill_ids=%s", t.name, t.ident, active_skill_ids)
-        logger.debug("主线程继续执行 (总结线程独立运行)")
 
     def _is_reasoning_text(self, text: str, has_called_tool: bool = False) -> bool:
         """判断文本是否为"计划/推理文本"而非最终回答。
@@ -1817,11 +1684,6 @@ class SkillAgent:
                                 logger.debug("返回 (操作已取消)")
                                 return cancel_msg
 
-            if self._should_compact(messages):
-                if log_callback:
-                    log_callback("检测到上下文过长，正在自动压缩...", "info")
-                messages = self._perform_compaction(messages, log_callback)
-
             reasoning_turn_count = 0  # 推理文本轮次计数器
             # 方案 A：记录本轮（主循环内）是否调用过任何工具，用于
             # 在 LLM 试图用纯文本结束对话时强制其改走 finish 工具。
@@ -1839,7 +1701,6 @@ class SkillAgent:
                     if self.memory is not None:
                         metadata = {"token_usage": asdict(self._token_usage)}
                         self.memory.append_message(self._conversation_id, "assistant", stop_msg, metadata=metadata)
-                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     _emit_token_usage()
                     logger.debug("用户停止推理，退出循环")
                     return stop_msg
@@ -1926,7 +1787,6 @@ class SkillAgent:
                         if self.memory is not None:
                             metadata = {"token_usage": asdict(self._token_usage)}
                             self.memory.append_message(self._conversation_id, "assistant", err, metadata=metadata)
-                        self._start_summary_in_background(self._conversation_id, active_skill_ids)
                         _emit_token_usage()
                         return err
 
@@ -1963,7 +1823,6 @@ class SkillAgent:
                             if self.memory is not None:
                                 metadata = {"token_usage": asdict(self._token_usage)}
                                 self.memory.append_message(self._conversation_id, "assistant", warning_msg, metadata=metadata)
-                            self._start_summary_in_background(self._conversation_id, active_skill_ids)
                             _emit_token_usage()
                             return warning_msg
                         continue
@@ -1972,7 +1831,6 @@ class SkillAgent:
                         if self.memory is not None:
                             metadata = {"token_usage": asdict(self._token_usage)}
                             self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
-                        self._start_summary_in_background(self._conversation_id, active_skill_ids)
                         _emit_token_usage()
                         logger.debug("返回文本内容 (长度: %s)", len(final_text))
                         return final_text
@@ -1985,7 +1843,6 @@ class SkillAgent:
                     if self.memory is not None:
                         metadata = {"token_usage": asdict(self._token_usage)}
                         self.memory.append_message(self._conversation_id, "assistant", err, metadata=metadata)
-                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     _emit_token_usage()
                     logger.debug("返回错误 (长度: %s)", len(err))
                     return err
@@ -2250,7 +2107,7 @@ class SkillAgent:
                     logger.debug("  命令: %s...", cmd)
 
                 # 检测重复工具调用（可通过配置禁用）
-                _control_tools = ("select_skill", "finish", "ask_user", "load_skill_memory")
+                _control_tools = ("select_skill", "finish", "ask_user")
                 is_repeated = False
                 repeat_warning = None
                 last_result = None
@@ -2278,7 +2135,6 @@ class SkillAgent:
                             if self.memory is not None:
                                 metadata = {"token_usage": asdict(self._token_usage)}
                                 self.memory.append_message(self._conversation_id, "assistant", auto_finish_msg, metadata=metadata)
-                            self._start_summary_in_background(self._conversation_id, active_skill_ids)
                             _emit_token_usage()
                             return auto_finish_msg
                 else:
@@ -2301,7 +2157,7 @@ class SkillAgent:
                         self._record_tool_call(fname, args, str(result))
 
                 # 标准化工具返回结果格式（排除控制类工具和已经是标准格式的结果）
-                if fname not in ("select_skill", "finish", "ask_user", "load_skill_memory"):
+                if fname not in ("select_skill", "finish", "ask_user"):
                     result_str = str(result)
                     # 保护结构化返回格式（如 run_command 的【执行结果】... 格式）
                     if result_str.startswith("【执行结果】"):
@@ -2379,7 +2235,6 @@ class SkillAgent:
                             log_callback(auto_end_msg, "assistant")
                             metadata = {"token_usage": asdict(self._token_usage)}
                             self.memory.append_message(self._conversation_id, "assistant", auto_end_msg, metadata=metadata)
-                            self._start_summary_in_background(self._conversation_id, active_skill_ids)
                             _emit_token_usage()
                             return auto_end_msg
                     log_callback(r, "base_tool")
@@ -2418,7 +2273,6 @@ class SkillAgent:
                             "tool_call_id": _call_id,
                             "content": str(result),
                         })
-                    self._start_summary_in_background(self._conversation_id, active_skill_ids)
                     if log_callback:
                         log_callback(str(final), "assistant")
                     _emit_token_usage()
@@ -2506,7 +2360,6 @@ class SkillAgent:
             if self.memory is not None:
                 metadata = {"token_usage": asdict(self._token_usage)}
                 self.memory.append_message(self._conversation_id, "assistant", tail, metadata=metadata)
-            self._start_summary_in_background(self._conversation_id, active_skill_ids)
             _emit_token_usage()
             logger.debug("正常退出循环，返回 tail 消息")
             return tail
@@ -2522,11 +2375,6 @@ class SkillAgent:
             if self.memory is not None:
                 metadata = {"token_usage": asdict(self._token_usage)}
                 self.memory.append_message(self._conversation_id, "assistant", err_msg, metadata=metadata)
-            
-            try:
-                self._start_summary_in_background(self._conversation_id, active_skill_ids)
-            except Exception as summary_err:
-                logger.warning(f"尝试启动总结线程时出错: {summary_err}")
             
             _emit_token_usage()
             logger.debug("异常退出，返回 err_msg")

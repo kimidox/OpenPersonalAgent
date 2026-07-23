@@ -5,7 +5,7 @@ from pathlib import Path
 from .types import SkillDefinition
 import config
 from resource_path import paths
-from memory.searcher import MemorySearcher
+
 
 
 def _parse_simple_frontmatter(raw: str) -> tuple[dict[str, str], str]:
@@ -59,95 +59,6 @@ def resolve_skill_markdown_in_package(package_dir: Path) -> Path | None:
     return md_files[0] if md_files else None
 
 
-def resolve_skill_memory_path(skill_md_path: Path) -> Path | None:
-    """
-    获取 PersonalData/Skills 下对应 skill 包目录中的 skill_memory.md 路径。
-
-    参数：
-        skill_md_path: skill 主文档路径
-
-    返回：
-        如果存在 skill_memory.md 则返回其路径，否则返回 None
-    """
-    skills_base_dir = paths.get_skills_dir()
-    skill_package_name = skill_md_path.parent.name
-    memory_path = skills_base_dir / skill_package_name / "skill_memory.md"
-    if memory_path.is_file():
-        return memory_path
-    return None
-
-
-def load_skill_memory(skill_md_path: Path) -> str | None:
-    """
-    读取 skill_memory.md 文件内容（向后兼容）。
-
-    参数：
-        skill_md_path: skill 主文档路径
-
-    返回：
-        文件内容字符串，如果文件不存在则返回 None
-    """
-    memory_path = resolve_skill_memory_path(skill_md_path)
-    if memory_path is None:
-        return None
-    try:
-        return memory_path.read_text(encoding="utf-8", errors="replace").strip()
-    except Exception:
-        return None
-
-
-def load_skill_memory_lazy(
-    skill: SkillDefinition,
-    registry: "SkillRegistry",
-    searcher: MemorySearcher | None = None,
-    query: str | None = None,
-    limit: int = 5,
-) -> SkillDefinition:
-    """
-    延迟加载 skill 的经验内容。从数据库检索相关记忆。
-
-    参数：
-        skill: SkillDefinition 对象
-        registry: SkillRegistry 实例，用于获取 skill 的主文档路径
-        searcher: MemorySearcher 实例（可选）
-        query: 检索查询（可选，如果不提供则返回最近的记忆）
-        limit: 返回数量限制
-
-    返回：
-        更新后的 SkillDefinition 对象（原地修改并返回）
-    """
-    if skill.memory_loaded:
-        return skill
-
-    skill.memory_loaded = True
-
-    _searcher = searcher or MemorySearcher()
-
-    if query:
-        segments = _searcher.search(
-            query=query,
-            memory_type=MemorySearcher.SKILL,
-            related_id=skill.skill_id,
-            limit=limit,
-        )
-    else:
-        segments = _searcher.get_all(
-            memory_type=MemorySearcher.SKILL,
-            related_id=skill.skill_id,
-            limit=limit,
-        )
-
-    if segments:
-        memory_parts = []
-        for seg in segments:
-            memory_parts.append(seg.content)
-        skill.memory_content = "\n\n---\n\n".join(memory_parts)
-    else:
-        skill.memory_content = None
-
-    return skill
-
-
 def load_skill_from_path(path: Path) -> SkillDefinition:
     raw = path.read_text(encoding="utf-8", errors="replace")
     meta, body = _parse_simple_frontmatter(raw)
@@ -172,8 +83,6 @@ def load_skill_from_path(path: Path) -> SkillDefinition:
         body=body.strip(),
         relative_path=relative_path,
         extra_meta=extra,
-        memory_content=None,
-        memory_loaded=False,
     )
 
 
