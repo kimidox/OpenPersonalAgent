@@ -2201,8 +2201,11 @@ class SkillAgent:
 
                 if log_callback and fname not in ("finish", "select_skill", "ask_user"):
                     r = str(result)
-                    if len(r) > 12000:
-                        r = r[:12000] + "\n\n…（内容已截断）"
+                    if len(r) > config.TOOL_OUTPUT_MAX_LENGTH:
+                        if config.TOOL_TRUNCATE_SHOW_DETAILS:
+                            r = r[:config.TOOL_OUTPUT_MAX_LENGTH] + f"\n\n…（内容已截断：原始长度 {len(r)} 字符，显示 {config.TOOL_OUTPUT_MAX_LENGTH} 字符）"
+                        else:
+                            r = r[:config.TOOL_OUTPUT_MAX_LENGTH] + "\n\n…（内容已截断）"
                     if fname == "run_command":
                         command = str(args.get("command", "") or "").strip()
                         log_callback(f"执行命令: {command}", "base_tool")

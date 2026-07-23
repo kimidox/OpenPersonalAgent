@@ -178,7 +178,8 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "- 失败时返回结果会包含【重试引导】，请参考其中建议修正命令\n\n"
             "【注意事项】\n"
             "- 避免使用需要交互输入的命令（如 ping 不带 -n、pause）\n"
-            "- 输出超过 12000 字符时会被截断\n"
+            "- 输出超过配置的阈值时会被截断（默认 12000 字符，可通过 .env 文件中的 TOOL_OUTPUT_MAX_LENGTH 配置）\n"
+            "- 截断时会显示详细信息：原始长度和截断后长度（可通过 .env 文件中的 TOOL_TRUNCATE_SHOW_DETAILS=false 关闭）\n"
             "- **读取 skill 包内文件请用 file_operation(action=\"read\", skill_id=...)**，不要用 run_command + type/Get-Content\n"
             "- 执行 skill 包内脚本时**必须**传 skill_id 参数，命令中的相对路径（如 scripts/xxx.py）会自动相对于 skill 包目录解析"
         ),

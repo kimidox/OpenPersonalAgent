@@ -356,6 +356,23 @@ TTS_AUTO_LOAD = _tts_auto_load.lower() in ("true", "1", "yes") if _tts_auto_load
 _tts_auto_download = get_config("TTS_AUTO_DOWNLOAD")
 TTS_AUTO_DOWNLOAD = _env_bool(_tts_auto_download, True)
 
+# ===== 工具输出截断配置 =====
+
+# 工具输出最大长度（字符数），超过此长度将被截断
+# 默认值：12000（与原有硬编码值保持一致）
+# 注意：设置为 0 或负数将使用默认值 12000
+_tool_output_max_length = get_config("TOOL_OUTPUT_MAX_LENGTH")
+try:
+    TOOL_OUTPUT_MAX_LENGTH = int(_tool_output_max_length) if _tool_output_max_length not in (None, "") else 12000
+except (TypeError, ValueError):
+    TOOL_OUTPUT_MAX_LENGTH = 12000
+if TOOL_OUTPUT_MAX_LENGTH <= 0:
+    TOOL_OUTPUT_MAX_LENGTH = 12000
+
+# 是否在截断时显示详细信息（原始长度、截断后长度）
+_tool_truncate_show_details = get_config("TOOL_TRUNCATE_SHOW_DETAILS")
+TOOL_TRUNCATE_SHOW_DETAILS = _env_bool(_tool_truncate_show_details, True)
+
 # ===== UI Automation 配置 =====
 
 # 是否启用 UI Automation 功能

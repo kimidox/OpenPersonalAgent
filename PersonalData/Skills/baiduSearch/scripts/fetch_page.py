@@ -545,18 +545,59 @@ def fetch_by_url(url: str) -> dict:
     }
 
 
+def _parse_fetch_args(argv: list) -> tuple:
+    """
+    智能解析 fetch 命令参数，兼容带空格的 URL。
+    策略：action 之后，倒数第二个参数作为 session_id，
+    最后一个纯数字参数作为 result_index。
+    """
+    if len(argv) <= 2:
+        return "", 0
+    
+    rest = argv[2:]
+    
+    if len(rest) >= 2 and rest[-1].lstrip('-').isdigit():
+        try:
+            result_index = int(rest[-1])
+            session_id = " ".join(rest[:-1])
+            return session_id, result_index
+        except ValueError:
+            pass
+    
+    # fallback
+    if len(rest) >= 2:
+        try:
+            result_index = int(rest[-1])
+            session_id = rest[-2]
+            return session_id, result_index
+        except ValueError:
+            pass
+    
+    session_id = rest[0] if rest else ""
+    return session_id, 0
+
+
+def _parse_url_args(argv: list) -> str:
+    """
+    智能解析 url 命令参数，兼容带空格的 URL。
+    策略：action 之后的所有参数拼接为 URL。
+    """
+    if len(argv) <= 2:
+        return ""
+    return " ".join(argv[2:])
+
+
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else ""
 
     if action == "fetch":
-        session_id = sys.argv[2] if len(sys.argv) > 2 else ""
-        result_index = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+        session_id, result_index = _parse_fetch_args(sys.argv)
         result = fetch_by_session(session_id, result_index)
     elif action == "next":
         session_id = sys.argv[2] if len(sys.argv) > 2 else ""
         result = fetch_next(session_id)
     elif action == "url":
-        url = sys.argv[2] if len(sys.argv) > 2 else ""
+        url = _parse_url_args(sys.argv)
         result = fetch_by_url(url)
     else:
         result = {"error": "请指定操作: fetch(按索引获取)、next(自动获取下一个)、url(直接获取指定URL)\n示例: python scripts/fetch_page.py fetch session_id 0"}

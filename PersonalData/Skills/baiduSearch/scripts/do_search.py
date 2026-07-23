@@ -136,12 +136,41 @@ def search_list() -> dict:
     return {"sessions": result}
 
 
+def _parse_search_args(argv: list) -> tuple:
+    """
+    智能解析命令行参数，兼容带空格的关键词。
+    支持两种调用方式：
+    1. python do_search.py search "关键词 带空格" 8
+    2. python do_search.py search 关键词 带空格 8  （当引号被 shell 吞掉时）
+    
+    策略：action 之后，最后一个纯数字参数作为 max_results，
+    其余全部拼接为 query。
+    """
+    if len(argv) <= 2:
+        return "", 5
+    
+    # 去掉 action（argv[1]），剩余参数
+    rest = argv[2:]
+    
+    # 尝试将最后一个参数解析为数字（max_results）
+    max_results = 5
+    if rest and rest[-1].isdigit():
+        try:
+            max_results = int(rest[-1])
+            rest = rest[:-1]
+        except ValueError:
+            pass
+    
+    # 剩余部分拼接为 query
+    query = " ".join(rest) if rest else ""
+    return query, max_results
+
+
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else ""
 
     if action == "search":
-        query = sys.argv[2] if len(sys.argv) > 2 else ""
-        max_results = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+        query, max_results = _parse_search_args(sys.argv)
         result = search_save(query, max_results)
     elif action == "list":
         result = search_list()

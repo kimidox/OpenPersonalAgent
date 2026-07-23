@@ -622,11 +622,39 @@ def _should_use_powershell(command: str) -> bool:
     return False
 
 
-def _truncate_run_output(text: str, limit: int = _RUN_COMMAND_MAX_TOTAL_OUT) -> str:
+def _truncate_run_output(text: str, limit: int = None) -> str:
+    """
+    截断工具输出内容
+
+    Args:
+        text: 原始文本
+        limit: 截断长度限制，如果为 None 则从配置文件读取
+
+    Returns:
+        截断后的文本，如果发生截断会添加提示信息
+    """
+    import config
+
     t = text or ""
+
+    # 从配置读取截断阈值
+    if limit is None:
+        limit = config.TOOL_OUTPUT_MAX_LENGTH
+
     if len(t) <= limit:
         return t
-    return t[:limit] + "\n\n…（输出已截断）"
+
+    # 截断并添加提示信息
+    truncated = t[:limit]
+
+    if config.TOOL_TRUNCATE_SHOW_DETAILS:
+        # 显示详细信息
+        truncated += f"\n\n…（输出已截断：原始长度 {len(t)} 字符，显示 {limit} 字符）"
+    else:
+        # 简洁提示
+        truncated += "\n\n…（输出已截断）"
+
+    return truncated
 
 
 def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> str:
