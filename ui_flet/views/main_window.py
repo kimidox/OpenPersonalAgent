@@ -485,6 +485,7 @@ class MainWindow:
             on_copy=self._on_message_copy,
             on_speak=self._on_message_speak,
             auto_scroll=True,
+            on_load_more=self._load_more_messages,
         )
 
         # 创建等待用户回复卡片
@@ -956,7 +957,7 @@ class MainWindow:
         self._logger.info(f"切换到会话: {conversation_id}")
 
     def _load_conversation_messages(self, conversation_id: str) -> None:
-        """加载会话的历史消息"""
+        """加载会话的历史消息（分页加载，默认加载最近10条）"""
         if not self.skill_agent or not self._message_list:
             return
 
@@ -968,8 +969,27 @@ class MainWindow:
             # 标记为已加载
             self._app_state.session.set_pending_db_history(conversation_id, False)
 
-            # 从 SkillAgent 获取消息记录
-            records = self.skill_agent.message_records_for_conversation(conversation_id)
+            # 分页加载配置
+            PAGE_SIZE = 10
+
+            # 获取总消息数（用于判断是否有更多消息）
+            all_records = self.skill_agent.message_records_for_conversation(conversation_id)
+            total_count = len(all_records)
+
+            # 只加载最近 PAGE_SIZE 条消息
+            if total_count > PAGE_SIZE:
+                records = all_records[-PAGE_SIZE:]
+                has_more = True
+                # 记录已加载的偏移量（从后往前数，已加载了 PAGE_SIZE 条）
+                self._loaded_message_offset = PAGE_SIZE
+                self._logger.info(
+                    f"会话 {conversation_id} 共 {total_count} 条消息，"
+                    f"分页加载最近 {PAGE_SIZE} 条"
+                )
+            else:
+                records = all_records
+                has_more = False
+                self._loaded_message_offset = total_count
 
             # 重放消息
             for record in records:
@@ -1077,8 +1097,112 @@ class MainWindow:
                         f"检测到半截会话 {conversation_id}：last_role={last_role}, last_type={last_type}"
                     )
 
+            # 显示"加载更多"按钮（如果有更多历史消息）
+            if has_more and self._message_list:
+                self._message_list.show_load_more_button(True)
+
         except Exception as e:
             self._logger.exception(f"加载会话消息失败: {e}")
+
+    def _load_more_messages(self) -> None:
+        """加载更多历史消息（分页加载）"""
+        if not self.skill_agent or not self._message_list:
+            return
+
+        conversation_id = self._app_state.session.get_current_conversation()
+        if not conversation_id:
+            return
+
+        try:
+            PAGE_SIZE = 10
+            current_offset = getattr(self, '_loaded_message_offset', 0)
+
+            # 获取所有消息记录
+            all_records = self.skill_agent.message_records_for_conversation(conversation_id)
+            total_count = len(all_records)
+
+            # 计算要加载的消息范围
+            # 从后往前数，已加载了 current_offset 条，再加载 PAGE_SIZE 条
+            end_index = total_count - current_offset
+            start_index = max(0, end_index - PAGE_SIZE)
+
+            if start_index >= end_index:
+                # 没有更多消息了
+                self._message_list.hide_load_more_button()
+                return
+
+            # 获取要加载的消息
+            records_to_load = all_records[start_index:end_index]
+
+            # 处理消息
+            messages_to_insert = []
+            for record in records_to_load:
+                role = str(record.get("role", ""))
+                raw_content = record.get("content")
+
+                # 处理内容
+                if raw_content is None:
+                    content = ""
+                elif isinstance(raw_content, list):
+                    content = raw_content
+                elif isinstance(raw_content, str):
+                    parsed_content = try_parse_json_content(raw_content)
+                    if isinstance(parsed_content, list):
+                        content = parsed_content
+                    else:
+                        content = raw_content
+                else:
+                    content = str(raw_content)
+
+                metadata = record.get("metadata", {}) or {}
+
+                if role == "user":
+                    msg_type = "user"
+                elif role == "assistant":
+                    msg_type = metadata.get("type", "assistant")
+                    if msg_type not in ["assistant", "think", "tool_call"]:
+                        msg_type = "assistant"
+                elif role == "tool":
+                    msg_type = "tool"
+                else:
+                    continue
+
+                # 处理 tool_call 消息
+                if msg_type == "tool_call":
+                    tool_name = str(metadata.get("name", "") or "")
+                    args_value = metadata.get("args", "")
+                    if isinstance(args_value, (dict, list)):
+                        args_str = json.dumps(args_value, ensure_ascii=False)
+                    else:
+                        args_str = str(args_value or "")
+                    if tool_name:
+                        content = f"调用工具 `{tool_name}` · {args_str}" if args_str else f"调用工具 `{tool_name}`"
+                    else:
+                        content = "调用工具"
+
+                messages_to_insert.append((msg_type, content))
+
+            # 在顶部插入消息
+            if messages_to_insert:
+                self._message_list.insert_messages_at_top(messages_to_insert)
+                # 更新偏移量
+                self._loaded_message_offset = current_offset + len(messages_to_insert)
+
+                # 检查是否还有更多消息
+                if self._loaded_message_offset >= total_count:
+                    self._message_list.hide_load_more_button()
+                    self._logger.info(f"已加载所有 {total_count} 条消息")
+                else:
+                    self._message_list.show_load_more_button(True)
+                    self._logger.info(
+                        f"已加载 {self._loaded_message_offset}/{total_count} 条消息"
+                    )
+
+        except Exception as e:
+            self._logger.exception(f"加载更多消息失败: {e}")
+            # 隐藏按钮，避免重复点击
+            if self._message_list:
+                self._message_list.hide_load_more_button()
 
     async def _load_initial_conversations_async(self) -> None:
         """异步加载初始会话"""

@@ -284,6 +284,7 @@ class SqliteMemory(Memory):
         conversation_id: str,
         *,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         with get_session() as db:
             q = (
@@ -292,8 +293,10 @@ class SqliteMemory(Memory):
                 .order_by(Messages.id.asc())
             )
             rows = q.all()
+        if offset > 0:
+            rows = rows[offset:]
         if limit is not None and limit > 0:
-            rows = rows[-limit:]
+            rows = rows[:limit]
         return [Message.from_orm(r).to_record_dict() for r in rows]
 
     def list_user_conversations(self) -> list[Conversation]:

@@ -35,6 +35,7 @@ class MessageList(ft.Container):
         on_copy: Callable[[str], None] | None = None,
         on_speak: Callable[[str], None] | None = None,
         auto_scroll: bool = True,
+        on_load_more: Callable[[], None] | None = None,
     ):
         """
         初始化消息列表
@@ -43,6 +44,7 @@ class MessageList(ft.Container):
             on_copy: 复制回调函数
             on_speak: 朗读回调函数
             auto_scroll: 是否自动滚动到底部
+            on_load_more: 加载更多历史消息回调函数
         """
         super().__init__()
 
@@ -56,12 +58,18 @@ class MessageList(ft.Container):
         # 回调函数
         self._on_copy = on_copy
         self._on_speak = on_speak
+        self._on_load_more = on_load_more
 
         # 自动滚动
         self._auto_scroll = auto_scroll
 
         # 流式更新状态
         self._stream_task: asyncio.Task | None = None
+
+        # 分页加载状态
+        self._has_more_messages = False
+        self._load_more_button: ft.TextButton | None = None
+        self._loading_more = False
 
         # 构建UI
         self._build_ui()
@@ -76,12 +84,128 @@ class MessageList(ft.Container):
             auto_scroll=self._auto_scroll,
             spacing=0,
             padding=0,
+            on_scroll=self._on_list_scroll,
         )
 
         # 设置容器内容
         self.content = self._list_view
         self.expand = True
         self.bgcolor = self._colors.bg_page
+
+    def _create_load_more_button(self) -> ft.Container:
+        """创建"加载更多历史消息"按钮"""
+        self._load_more_button = ft.TextButton(
+            "加载更多历史消息",
+            on_click=self._on_load_more_clicked,
+            style=ft.ButtonStyle(
+                color=self._colors.primary,
+                bgcolor="transparent",
+            ),
+        )
+        return ft.Container(
+            content=self._load_more_button,
+            alignment=ft.alignment.center,
+            padding=ft.Padding(left=16, top=8, right=16, bottom=8),
+        )
+
+    def _on_load_more_clicked(self, e: ft.ControlEvent) -> None:
+        """处理"加载更多"按钮点击"""
+        if self._loading_more:
+            return
+        if self._on_load_more:
+            self._loading_more = True
+            # 更新按钮文本为加载中
+            if self._load_more_button:
+                self._load_more_button.text = "加载中..."
+                self._safe_update(self._load_more_button)
+            self._on_load_more()
+
+    def _on_list_scroll(self, e: ft.ScrollEvent) -> None:
+        """处理列表滚动事件，检测是否滚动到顶部"""
+        # 当滚动到顶部附近（距离顶部小于50像素）且有更多消息时，触发加载
+        if e.pixels < 50 and self._has_more_messages and not self._loading_more:
+            self._logger.info(f"检测到滚动到顶部，触发加载更多 (pixels={e.pixels})")
+            self._trigger_load_more()
+
+    def _trigger_load_more(self) -> None:
+        """触发加载更多"""
+        if self._loading_more or not self._on_load_more:
+            return
+        self._loading_more = True
+        # 更新按钮文本为加载中
+        if self._load_more_button:
+            self._load_more_button.text = "加载中..."
+            self._safe_update(self._load_more_button)
+        self._on_load_more()
+
+    def show_load_more_button(self, has_more: bool) -> None:
+        """显示或隐藏"加载更多"按钮"""
+        self._has_more_messages = has_more
+        if has_more:
+            # 检查是否已经存在"加载更多"按钮
+            has_button = any(
+                isinstance(c, ft.Container) and c.content == self._load_more_button
+                for c in self._list_view.controls
+            )
+            if not has_button and self._load_more_button:
+                # 在列表顶部插入按钮
+                self._list_view.controls.insert(0, self._create_load_more_button())
+                self._safe_update(self._list_view)
+        else:
+            # 移除按钮
+            self._list_view.controls = [
+                c for c in self._list_view.controls
+                if not (isinstance(c, ft.Container) and c.content == self._load_more_button)
+            ]
+            self._safe_update(self._list_view)
+
+    def hide_load_more_button(self) -> None:
+        """隐藏"加载更多"按钮"""
+        self.show_load_more_button(False)
+
+    def insert_messages_at_top(
+        self,
+        messages: list[tuple[MessageType, str]],
+    ) -> None:
+        """
+        在列表顶部插入多条消息（用于加载更多历史消息）
+
+        Args:
+            messages: 消息列表，每个元素为 (msg_type, content) 元组
+        """
+        if not messages:
+            return
+
+        # 移除"加载更多"按钮（如果存在）
+        self.hide_load_more_button()
+
+        # 创建消息卡片
+        new_cards = []
+        for msg_type, content in messages:
+            card = MessageCard(
+                msg_type=msg_type,
+                content=content,
+                on_copy=self._on_copy,
+                on_speak=self._on_speak if msg_type == "assistant" else None,
+            )
+            card.finalize_content()
+            new_cards.append(card)
+
+        # 在顶部插入（保留"加载更多"按钮的位置）
+        insert_index = 0
+        # 如果顶部有"加载更多"按钮，跳过它
+        if self._list_view.controls and isinstance(
+            self._list_view.controls[0], ft.Container
+        ):
+            insert_index = 1
+
+        for i, card in enumerate(new_cards):
+            self._list_view.controls.insert(insert_index + i, card)
+            self._message_cards.insert(insert_index + i, card)
+
+        self._loading_more = False
+        self._safe_update(self._list_view)
+        self._logger.debug(f"MessageList: 在顶部插入 {len(messages)} 条消息")
 
     def _safe_update(self, control: ft.Control) -> None:
         """安全更新控件（未挂载到页面时忽略）

@@ -829,10 +829,20 @@ class SkillAgent:
             return []
         return self.memory.list_user_conversations()
 
-    def message_records_for_conversation(self, conversation_id: str) -> list[dict[str, Any]]:
+    def message_records_for_conversation(
+        self,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         if self.memory is None:
             return []
-        return self.memory.get_message_records((conversation_id or "").strip())
+        return self.memory.get_message_records(
+            (conversation_id or "").strip(),
+            limit=limit,
+            offset=offset,
+        )
 
     @staticmethod
     def conversation_awaits_user_clarification(
@@ -1958,22 +1968,9 @@ class SkillAgent:
                         log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
                     else:
                         log_callback(f"选择 Skill: {args.get('skill_id', '')}", "tool")
-                if self.memory is not None:
-                    try:
-                        args_display = json.dumps(args, ensure_ascii=False)
-                    except (TypeError, ValueError):
-                        args_display = arg_str
-                    self.memory.append_message(
-                        self._conversation_id,
-                        "assistant",
-                        f"调用工具 `{fname}` · {args_display}",
-                        metadata={
-                            "type": "tool_call",
-                            "name": fname,
-                            "args": arg_str,
-                            "reasoning_content": full_thinking
-                        }
-                    )
+                # 注意：此处不再单独保存 assistant(tool_call) 消息，
+                # 由下方 _persist_after_tool_turn 统一保存完整的
+                # assistant(tool_calls) + tool(result) 序列，避免重复渲染。
             
                 if fname == "run_command":
                     command = str(args.get("command", "") or "").strip()
@@ -2208,7 +2205,6 @@ class SkillAgent:
                             r = r[:config.TOOL_OUTPUT_MAX_LENGTH] + "\n\n…（内容已截断）"
                     if fname == "run_command":
                         command = str(args.get("command", "") or "").strip()
-                        log_callback(f"执行命令: {command}", "base_tool")
                         
                         if "exit_code: 0" in r:
                             stdout_match = r.split("--- stdout ---")
@@ -2222,13 +2218,17 @@ class SkillAgent:
                                 if file_path:
                                     logger.debug("提取到文件路径: %s", file_path)
                                     check_result = self._verify_file_exists(file_path, args.get("cwd", "."))
-                                    if log_callback:
-                                        log_callback(f"检查结果: {check_result}", "base_tool")
-                                    r = r + "\n\n" + check_result
+                                    # 将命令信息和检查结果合并到结果中，一次性发送
+                                    r = f"执行命令: {command}\n\n{r}\n\n{check_result}"
                                     result = r
                                     logger.debug("验证结果已合并到工具结果")
                                 else:
                                     logger.debug("无法提取文件路径，跳过验证")
+                                    r = f"执行命令: {command}\n\n{r}"
+                            else:
+                                r = f"执行命令: {command}\n\n{r}"
+                        else:
+                            r = f"执行命令: {command}\n\n{r}"
                         
                         # 写入操作特例检测（保留原有逻辑）
                         # 此检测与通用重复检测协同工作，专门针对写入操作提供更严格的保护

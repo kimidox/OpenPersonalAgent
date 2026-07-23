@@ -602,8 +602,16 @@ def load_online_model(model_path: str = None, callback: Callable[[int, str], Non
     
     # 如果没有指定路径，尝试使用配置或默认目录
     if model_path is None:
-        model_path = getattr(config, 'ASR_ONNX_MODEL_PATH', '')
-        
+        # 优先使用 ASR_REALTIME_MODEL_PATH（新配置项）
+        model_path = getattr(config, 'ASR_REALTIME_MODEL_PATH', '')
+
+        # 向后兼容：如果 ASR_REALTIME_MODEL_PATH 为空，尝试读取旧配置项
+        if not model_path:
+            old_config_path = getattr(config, 'ASR_ONNX_MODEL_PATH', '')
+            if old_config_path:
+                model_path = old_config_path
+                logger.info("配置项迁移：使用旧配置项 ASR_ONNX_MODEL_PATH 作为流式模型路径")
+
         # 如果配置中没有路径，使用默认目录
         if not model_path and auto_download:
             default_dir = get_asr_model_dir() / DEFAULT_ONLINE_MODEL_NAME
@@ -689,13 +697,13 @@ def load_online_model(model_path: str = None, callback: Callable[[int, str], Non
         else:  # paraformer
             encoder_file = next((f for f in encoder_files if 'int8' in f.name), encoder_files[0])
             decoder_file = next((f for f in decoder_files if 'int8' in f.name), decoder_files[0])
-        
+        # 加载模型
         try:
             if use_gpu:
                 if callback:
                     callback(92, "尝试加载到 GPU...")
                 logger.info("尝试使用 CUDA GPU 加载流式模型")
-                
+
                 if model_type == "transducer":
                     _online_recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
                         encoder=str(encoder_file),
@@ -717,7 +725,7 @@ def load_online_model(model_path: str = None, callback: Callable[[int, str], Non
                         decoding_method="greedy_search",
                         provider="cuda",
                     )
-                
+
                 _online_device = "cuda"
                 logger.info(f"流式 {model_type} 模型成功加载到 CUDA GPU")
                 if callback:
@@ -729,7 +737,7 @@ def load_online_model(model_path: str = None, callback: Callable[[int, str], Non
             logger.warning(f"GPU 加载流式模型失败: {gpu_error}, 降级使用 CPU")
             if callback:
                 callback(93, "GPU 加载失败，使用 CPU...")
-            
+
             if model_type == "transducer":
                 _online_recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
                     encoder=str(encoder_file),
@@ -749,10 +757,10 @@ def load_online_model(model_path: str = None, callback: Callable[[int, str], Non
                     sample_rate=16000,
                     decoding_method="greedy_search",
                 )
-            
+
             _online_device = "cpu"
             logger.info(f"流式 {model_type} 模型加载到 CPU")
-        
+
         _online_model_path = str(model_path)
         
         if callback:
@@ -778,21 +786,23 @@ def release_online_model():
     global _online_recognizer, _online_model_path, _online_device, _online_stream
     
     logger.info("释放 sherpa-onnx 流式模型...")
-    
+
     # 先销毁识别流
     if _online_stream is not None:
         try:
-            destroy_online_stream()
+            _online_stream = None
+            logger.info("已销毁实时识别流")
         except Exception as e:
             logger.warning(f"销毁识别流时发生错误: {e}")
-    
+            _online_stream = None
+
     if _online_recognizer is not None:
         try:
             del _online_recognizer
         except Exception as e:
             logger.warning(f"清理流式模型资源时发生错误: {e}")
         _online_recognizer = None
-    
+
     _online_model_path = None
     _online_device = None
     logger.info("sherpa-onnx 流式模型已释放")
@@ -801,7 +811,7 @@ def release_online_model():
 def is_online_model_loaded() -> bool:
     """
     检查 sherpa-onnx 流式模型是否已加载
-    
+
     Returns:
         是否已加载
     """
@@ -811,7 +821,7 @@ def is_online_model_loaded() -> bool:
 def get_online_model_path() -> Optional[str]:
     """
     获取已加载流式模型的路径
-    
+
     Returns:
         模型路径，如果未加载则返回 None
     """
@@ -821,7 +831,7 @@ def get_online_model_path() -> Optional[str]:
 def get_online_device() -> Optional[str]:
     """
     获取流式模型当前运行的设备
-    
+
     Returns:
         设备名称（"cpu" 或 "cuda"），如果模型未加载则返回 None
     """
@@ -835,18 +845,18 @@ def get_online_device() -> Optional[str]:
 def create_online_stream() -> Optional[object]:
     """
     创建实时识别流
-    
+
     需要先加载流式模型
-    
+
     Returns:
         OnlineStream 实例，如果失败则返回 None
     """
     global _online_stream
-    
+
     if _online_recognizer is None:
         logger.error("流式模型未加载，无法创建识别流")
         return None
-    
+
     try:
         _online_stream = _online_recognizer.create_stream()
         logger.info("已创建实时识别流")
@@ -859,36 +869,36 @@ def create_online_stream() -> Optional[object]:
 def process_online_stream(audio_data: bytes, sample_rate: int = 16000) -> bool:
     """
     处理音频数据，将音频输入识别流
-    
+
     Args:
         audio_data: 音频数据（16-bit PCM）
         sample_rate: 采样率
-    
+
     Returns:
         是否处理成功
     """
     global _online_stream
-    
+
     if _online_stream is None:
         logger.error("识别流未创建")
         return False
-    
+
     if _online_recognizer is None:
         logger.error("流式模型未加载")
         return False
-    
+
     try:
         import numpy as np
-        
+
         # 转换为 numpy 数组
         audio_array = np.frombuffer(audio_data, dtype=np.int16)
-        
+
         # 转换为 float32 并归一化
         audio_float = audio_array.astype(np.float32) / 32768.0
-        
+
         # 输入识别流
         _online_stream.accept_waveform(sample_rate, audio_float)
-        
+
         return True
     except Exception as e:
         logger.exception(f"处理音频数据失败: {e}")
@@ -898,27 +908,27 @@ def process_online_stream(audio_data: bytes, sample_rate: int = 16000) -> bool:
 def get_online_stream_result() -> Optional[str]:
     """
     获取当前识别流的识别结果
-    
+
     Returns:
         当前识别的文本，如果没有结果则返回 None
     """
     global _online_stream
-    
+
     if _online_stream is None:
         return None
-    
+
     if _online_recognizer is None:
         return None
-    
+
     try:
         # 检查是否有结果
         if _online_recognizer.is_ready(_online_stream):
             _online_recognizer.decode_stream(_online_stream)
-        
+
         result = _online_recognizer.get_result(_online_stream)
         if result:
             return result.strip()
-        
+
         return None
     except Exception as e:
         logger.exception(f"获取识别结果失败: {e}")
@@ -928,7 +938,7 @@ def get_online_stream_result() -> Optional[str]:
 def destroy_online_stream():
     """销毁当前识别流，释放资源"""
     global _online_stream
-    
+
     if _online_stream is not None:
         try:
             # sherpa-onnx 的 stream 没有显式的 destroy 方法
@@ -1193,7 +1203,6 @@ class AudioRecorder:
         self._stop_event.clear()
         self._is_recording = True
         self._realtime_callback = realtime_callback
-        
         # 如果流式模型已加载且有回调，创建实时识别流
         if realtime_callback and _online_recognizer is not None:
             try:
@@ -1210,7 +1219,7 @@ class AudioRecorder:
                         raise sd.CallbackStop()
                     audio_chunk = indata.copy()
                     self._audio_frames.append(audio_chunk)
-                    
+
                     # 同时喂给实时识别流
                     if self._realtime_stream is not None:
                         try:
@@ -1219,11 +1228,19 @@ class AudioRecorder:
                             self._realtime_stream.accept_waveform(self._sample_rate, audio_float)
                         except Exception as e:
                             logger.warning(f"喂音频到识别流失败: {e}")
-                
+
+                # 获取音频输入设备配置
+                device_id = config.get_audio_input_device()
+                if device_id is not None:
+                    logger.info(f"使用配置的音频输入设备: ID={device_id}")
+                else:
+                    logger.debug("使用系统默认音频输入设备")
+
                 with sd.InputStream(
                     samplerate=self._sample_rate,
                     channels=self._channels,
                     dtype=self._dtype,
+                    device=device_id,
                     callback=callback
                 ):
                     while not self._stop_event.is_set():
@@ -1267,7 +1284,7 @@ class AudioRecorder:
                     # 先尝试解码（is_ready 时才解码）
                     if _online_recognizer.is_ready(self._realtime_stream):
                         _online_recognizer.decode_stream(self._realtime_stream)
-                    
+
                     # 无论是否解码，都尝试获取当前累积的识别结果
                     result = _online_recognizer.get_result(self._realtime_stream)
                     if result and result.strip():
@@ -1277,7 +1294,7 @@ class AudioRecorder:
                             logger.warning(f"实时识别回调失败: {e}")
             except Exception as e:
                 logger.warning(f"实时识别处理失败: {e}")
-            
+
             # 每 200ms 检查一次
             self._stop_event.wait(0.2)
     
