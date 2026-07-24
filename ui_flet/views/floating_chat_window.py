@@ -197,9 +197,16 @@ class FloatingChatWindow:
             animate_position=200,
         )
 
-        # 使用 GestureDetector 包装以支持拖拽
+        # 使用 Stack 包装以支持绝对定位（left/top 只能在 Stack 或 overlay 中使用）
+        self._stack = ft.Stack(
+            controls=[self._main_container],
+            width=self._width,
+            height=self._height,
+        )
+
+        # 使用 GestureDetector 包装 Stack 以支持拖拽
         self._gesture_detector = ft.GestureDetector(
-            content=self._main_container,
+            content=self._stack,
             on_pan_start=self._on_pan_start,
             on_pan_update=self._on_pan_update,
             on_pan_end=self._on_pan_end,
@@ -469,6 +476,12 @@ class FloatingChatWindow:
     def show(self):
         """显示悬浮窗口"""
         if not self._is_visible:
+            # 确保主窗口可见（悬浮球模式下主窗口可能已隐藏）
+            if self._page and not self._page.window.visible:
+                self._page.window.visible = True
+                self._page.window.minimized = False
+                self._logger.info("悬浮聊天窗口显示时恢复主窗口可见性")
+            
             self._is_visible = True
             self._main_container.visible = True
             self._page.update()

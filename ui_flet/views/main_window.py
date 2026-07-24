@@ -1393,14 +1393,31 @@ class MainWindow:
                     f"该情况通常意味着 _on_stream_started 未创建卡片"
                 )
 
-            # 同步完整消息到悬浮窗口
+            # 同步完整消息到悬浮窗口（Flet overlay）
             if self._floating_chat_window:
                 stream_type = self._app_state.stream.get_current_type()
                 msg_type = "think" if stream_type == StreamType.THINK else "assistant"
                 self._floating_chat_window.add_message(msg_type, full_text)
                 self._logger.info(f"[StreamCallback] 已同步完整消息到悬浮窗口: type={msg_type}, length={len(full_text)}")
+
+            # 同步完整消息到独立悬浮聊天窗口进程（PySide6）
+            self._send_to_floating_chat_process(full_text, token_usage)
         except Exception as e:
             self._logger.exception(f"[StreamCallback] _on_stream_completed 执行异常: {e}")
+
+    def _send_to_floating_chat_process(self, content: str, token_usage: dict | None = None) -> None:
+        """发送助手回复到悬浮聊天窗口（通过悬浮球进程）"""
+        try:
+            from ui_flet import main as main_module
+            from ui_flet.floating_ball_ipc import MessageType, make_message
+
+            # 使用悬浮球的队列发送消息
+            _to_ball_queue = getattr(main_module, '_to_ball_queue', None)
+            if _to_ball_queue is not None:
+                _to_ball_queue.put(make_message(MessageType.CHAT_RECEIVE_MESSAGE, content=content))
+                self._logger.info(f"[StreamCallback] 已发送助手回复到悬浮聊天窗口: length={len(content)}")
+        except Exception as e:
+            self._logger.warning(f"[StreamCallback] 发送助手回复到悬浮聊天窗口失败: {e}")
 
     def _start_stream_typing(self) -> None:
         """启动打字机效果循环"""
@@ -1824,13 +1841,28 @@ class MainWindow:
     async def quit_application(self) -> None:
         """退出应用（供桌面悬浮球调用）"""
         self._logger.info("悬浮球请求：退出应用")
+
+        # 使用线程延迟退出，避免在异步上下文中直接退出
+        import threading
+        import sys
+        import os
+
+        def _force_exit():
+            import time
+            time.sleep(0.5)  # 等待日志写入
+            self._logger.info("强制退出应用")
+            os._exit(0)
+
+        # 启动后台线程强制退出
+        exit_thread = threading.Thread(target=_force_exit, daemon=True)
+        exit_thread.start()
+
+        # 尝试优雅关闭（可能失败，但不影响强制退出）
         try:
             self._page.window.prevent_close = False
-            # 先 update 同步 prevent_close=False 到客户端，避免 close 被旧值阻止
             self._page.update()
-            await self._page.window.close()
         except Exception as e:
-            self._logger.exception(f"退出应用失败: {e}")
+            self._logger.warning(f"优雅关闭失败: {e}")
 
     def toggle_floating_chat(self) -> None:
         """切换悬浮聊天窗口显示状态（供桌面悬浮球调用）"""
