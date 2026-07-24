@@ -734,6 +734,31 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             },
             "required": ["keys"]
         },
+    },
+    {
+        "name": "install_skill_from_zip",
+        "description": (
+            "从 ZIP 压缩包安装 Skill。\n"
+            "支持两种 ZIP 结构：\n"
+            "- 平铺模式：ZIP 根目录直接包含 SKILL.md 等文件\n"
+            "- 包目录模式：ZIP 内含一级子目录，子目录中包含 SKILL.md\n"
+            "安装后 Skill 可立即被 SkillAgent 使用。\n"
+            "参数：zip_path(必需，ZIP文件路径)、overwrite(可选，是否覆盖已存在的Skill，默认false)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "zip_path": {
+                    "type": "string",
+                    "description": "ZIP 包文件的绝对路径或相对于工作目录的路径"
+                },
+                "overwrite": {
+                    "type": "string",
+                    "description": "是否覆盖已存在的同名 Skill。可选值：true、false（默认 false）"
+                }
+            },
+            "required": ["zip_path"]
+        },
     }
 ]
 

@@ -12,6 +12,7 @@ from .dispatch import (
     execute_atomic_tool,
     check_skill_dependencies,
     install_skill_dependencies,
+    install_skill_from_zip,
     splice_skill_path,
 )
 from .schema import tools_for_model
@@ -41,6 +42,7 @@ __all__ = [
     "all_definition_dicts",
     "check_skill_dependencies",
     "install_skill_dependencies",
+    "install_skill_from_zip",
     "splice_skill_path",
     "ToolRegistry",
     "ToolMetadata",

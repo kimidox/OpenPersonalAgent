@@ -6,6 +6,7 @@ from pathlib import Path
 from logger import get_module_logger
 
 from .loader import load_all_skills, load_builtin_skills, load_skill_from_path, resolve_skill_markdown_in_package
+from .skill_manager import SkillManager
 from .types import SkillDefinition
 
 logger = get_module_logger("skill_registry")
@@ -111,3 +112,37 @@ class SkillRegistry:
         except Exception as e:
             logger.error(f"删除 Skill「{skill_id}」时发生错误: {e}")
             return False
+
+    def install_skill_from_zip(self, zip_path: str, overwrite: bool = False) -> tuple[list[str], str]:
+        """从 ZIP 包安装 Skill。
+
+        Args:
+            zip_path: ZIP 文件路径。
+            overwrite: 是否覆盖已存在的 Skill。
+
+        Returns:
+            (installed_ids, error_message) 元组。成功时 error_message 为空字符串，
+            失败时 installed_ids 为空列表。
+        """
+        try:
+            manager = SkillManager(self.skills_dir)
+            installed_ids = manager.install_from_zip(zip_path, overwrite=overwrite)
+            self.reload()
+            logger.info(f"从 ZIP 包安装 Skill 成功: {installed_ids}")
+            return (installed_ids, "")
+        except FileNotFoundError as e:
+            msg = f"ZIP文件不存在: {zip_path}"
+            logger.error(msg)
+            return ([], msg)
+        except ValueError as e:
+            msg = str(e)
+            logger.error(msg)
+            return ([], msg)
+        except FileExistsError as e:
+            msg = f"Skill已存在: {e}，如需覆盖请设置 overwrite=True"
+            logger.error(msg)
+            return ([], msg)
+        except Exception as e:
+            msg = f"安装ZIP包失败: {e}"
+            logger.error(msg)
+            return ([], msg)

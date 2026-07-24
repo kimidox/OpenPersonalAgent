@@ -11,6 +11,7 @@ import threading
 from multiprocessing import Process, Queue
 from pathlib import Path
 
+import config
 import flet as ft
 
 # 确保项目根目录在 Python 路径中，支持直接运行 ui_flet/main.py
@@ -21,6 +22,7 @@ if str(_project_root) not in sys.path:
 from logger import get_logger
 from resource_path import paths
 from ui_flet.floating_ball_ipc import MessageType
+from ui_flet.floating_ball_process import run_floating_ball_process
 from ui_flet.views.main_window import MainWindow
 
 
@@ -30,6 +32,9 @@ _to_ball_queue: Queue | None = None
 _from_ball_queue: Queue | None = None
 _ipc_poll_thread: threading.Thread | None = None
 _ipc_stop_event = threading.Event()
+
+# 缓存 Flet 原生进程 PID，避免每次启动悬浮球时重复枚举进程
+_cached_flet_pid: int | None = None
 
 # 页面和主窗口引用，供悬浮球 IPC 回调使用
 _page: ft.Page | None = None
@@ -141,31 +146,74 @@ def _start_floating_ball_process() -> tuple[Process, Queue, Queue]:
 
     # 查找 Flet 原生进程 PID（使用进程树关系，不依赖进程名）
     # Flet 原生进程是 Python 主进程的直接子进程
+    global _cached_flet_pid
     flet_pid = None
-    try:
-        import psutil
-        current_process = psutil.Process(main_pid)
-        # 获取直接子进程（Flet 原生进程应该是最近启动的子进程）
-        children = current_process.children(recursive=False)
-        if children:
-            # 选择最近启动的子进程作为 Flet 进程
-            flet_process = max(children, key=lambda p: p.create_time())
-            flet_pid = flet_process.pid
-            logger.info(f"找到子进程 PID: {flet_pid}, 进程名: {flet_process.name()}")
-    except Exception as e:
-        logger.warning(f"查找子进程失败: {e}")
+    if _cached_flet_pid is not None:
+        # 验证缓存的 PID 是否仍然有效
+        try:
+            import psutil
+            if psutil.pid_exists(_cached_flet_pid) and psutil.Process(_cached_flet_pid).is_running():
+                flet_pid = _cached_flet_pid
+                logger.info(f"使用缓存的 Flet 子进程 PID: {flet_pid}")
+            else:
+                _cached_flet_pid = None  # 缓存失效
+        except Exception:
+            _cached_flet_pid = None
+    if flet_pid is None:
+        try:
+            import psutil
+            current_process = psutil.Process(main_pid)
+            # 获取直接子进程（Flet 原生进程应该是最近启动的子进程）
+            children = current_process.children(recursive=False)
+            if children:
+                # 选择最近启动的子进程作为 Flet 进程
+                flet_process = max(children, key=lambda p: p.create_time())
+                flet_pid = flet_process.pid
+                _cached_flet_pid = flet_pid  # 缓存查找结果
+                logger.info(f"找到子进程 PID: {flet_pid}, 进程名: {flet_process.name()}")
+        except Exception as e:
+            logger.warning(f"查找子进程失败: {e}")
+
+    # 读取 Live2D 配置
+    live2d_enabled = getattr(config, 'LIVE2D_ENABLED', False)
+    live2d_model_name = getattr(config, 'LIVE2D_MODEL_NAME', '')
+    live2d_width = getattr(config, 'LIVE2D_BALL_WIDTH', 200)
+    live2d_height = getattr(config, 'LIVE2D_BALL_HEIGHT', 200)
+
+    # 计算模型路径（查找 .model3.json 文件）
+    live2d_model_path = None
+    if live2d_enabled and live2d_model_name:
+        from ui_flet.live2d_model_manager import _find_model3_json
+
+        model_dir = paths.personal_data_dir / "2DLiveFiles" / live2d_model_name
+        model_json_path = _find_model3_json(model_dir)
+        if model_json_path:
+            live2d_model_path = str(model_json_path)
+            logger.info(f"找到 Live2D 模型文件: {live2d_model_path}")
+        else:
+            logger.warning(f"未找到 Live2D 模型文件: {model_dir}")
+            live2d_enabled = False  # 禁用 Live2D，fallback 到默认悬浮球
+
+    # 记录配置读取结果
+    logger.info(f"Live2D 配置读取结果:")
+    logger.info(f"  - LIVE2D_ENABLED: {live2d_enabled}")
+    logger.info(f"  - LIVE2D_MODEL_NAME: {live2d_model_name}")
+    logger.info(f"  - LIVE2D_BALL_WIDTH: {live2d_width}")
+    logger.info(f"  - LIVE2D_BALL_HEIGHT: {live2d_height}")
+    logger.info(f"  - 模型路径: {live2d_model_path}")
 
     # 延迟导入，避免主进程导入 PySide6 带来的额外开销
-    from ui_flet.floating_ball_process import run_floating_ball_process
+    # 注意：run_floating_ball_process 已移至模块级别导入（Task 1 后模块轻量化）
 
     process = ctx.Process(
         target=run_floating_ball_process,
-        args=(from_ball, to_ball, main_pid, flet_pid),
+        args=(from_ball, to_ball, main_pid, flet_pid, live2d_enabled, live2d_model_path, live2d_width, live2d_height),
         name="FloatingBallProcess",
         daemon=False,
     )
     process.start()
     logger.info(f"桌面悬浮球子进程已启动 (pid={process.pid}, main_pid={main_pid}, flet_pid={flet_pid})")
+    logger.info(f"传递给子进程的 Live2D 参数: enabled={live2d_enabled}, model_path={live2d_model_path}, width={live2d_width}, height={live2d_height}")
     return process, to_ball, from_ball
 
 

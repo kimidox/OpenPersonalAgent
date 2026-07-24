@@ -2355,6 +2355,39 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
         except Exception as e:
             return f"错误: 发送热键失败: {e}"
 
+    # ========== Skill ZIP 安装工具 ==========
+    if name == "install_skill_from_zip":
+        zip_path = args.get("zip_path", "")
+        overwrite = args.get("overwrite", "false")
+        if not zip_path:
+            return "错误: 缺少 zip_path 参数"
+
+        overwrite_bool = overwrite.lower() in ("true", "1", "yes")
+
+        try:
+            from skill.skill_manager import get_manager
+            mgr = get_manager()
+            installed_ids = mgr.install_from_zip(zip_path, overwrite=overwrite_bool)
+            if not installed_ids:
+                return "安装完成，但未成功注册任何 Skill"
+            result_lines = [f"✓ 已从 ZIP 包安装 {len(installed_ids)} 个 Skill：", ""]
+            for sid in installed_ids:
+                skill = mgr.get_skill_metadata(sid)
+                skill_name = skill.name if skill else sid
+                result_lines.append(f"- **{sid}**: {skill_name}")
+            # 刷新 registry
+            if registry:
+                registry.reload()
+            return "\n".join(result_lines)
+        except FileNotFoundError as e:
+            return f"错误: {e}"
+        except ValueError as e:
+            return f"错误: {e}"
+        except FileExistsError as e:
+            return f"错误: Skill已存在 - {e}。如需覆盖安装，请设置 overwrite=true"
+        except Exception as e:
+            return f"错误: 安装ZIP包失败: {e}"
+
     # ========== Skill 管理工具 ==========
     if name == "manage_skill":
         action = args.get("action", "")
@@ -2474,6 +2507,36 @@ def install_skill_dependencies(skill_id: str, registry: SkillRegistry) -> tuple[
     
     skill_dir = Path(config.WORKER_DIR) / skill.relative_path.parent
     return _install_skill_dependencies(skill_dir)
+
+
+def install_skill_from_zip(zip_path: str, registry: SkillRegistry, overwrite: bool = False) -> tuple[list[str], str]:
+    """
+    从 ZIP 包安装 Skill。
+    
+    Args:
+        zip_path: ZIP 文件路径
+        registry: SkillRegistry 实例
+        overwrite: 是否覆盖已存在的 Skill
+        
+    Returns:
+        (安装的 skill_id 列表, 错误消息)
+    """
+    try:
+        from skill.skill_manager import get_manager
+        mgr = get_manager()
+        installed_ids = mgr.install_from_zip(zip_path, overwrite=overwrite)
+        # 刷新 registry
+        if registry and installed_ids:
+            registry.reload()
+        return installed_ids, ""
+    except FileNotFoundError as e:
+        return [], f"ZIP文件不存在: {zip_path}"
+    except ValueError as e:
+        return [], str(e)
+    except FileExistsError as e:
+        return [], f"Skill已存在: {e}，如需覆盖请设置 overwrite=True"
+    except Exception as e:
+        return [], f"安装ZIP包失败: {e}"
 
 
 def splice_skill_path(rel_path: str, skill_id: str, registry: SkillRegistry) -> str:

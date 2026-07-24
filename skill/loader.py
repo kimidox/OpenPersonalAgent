@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from .types import SkillDefinition
 import config
 from resource_path import paths
@@ -10,7 +12,7 @@ from resource_path import paths
 
 def _parse_simple_frontmatter(raw: str) -> tuple[dict[str, str], str]:
     """
-    解析可选的 YAML 风格前置块（无 PyYAML 依赖）：以 --- 包裹的简单 key: value 行。
+    解析 YAML 风格前置块，使用 PyYAML 正确处理多行字符串。
     """
     text = raw.lstrip("\ufeff")
     if not text.startswith("---"):
@@ -22,15 +24,24 @@ def _parse_simple_frontmatter(raw: str) -> tuple[dict[str, str], str]:
 
     meta_block = parts[1].strip()
     body = parts[2].lstrip("\n")
+
+    try:
+        parsed = yaml.safe_load(meta_block) or {}
+    except yaml.YAMLError:
+        # 如果 YAML 解析失败，回退到空字典
+        parsed = {}
+
+    # 确保 meta 是字典类型，并将所有值转为字符串
     meta: dict[str, str] = {}
-    for line in meta_block.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if ":" not in line:
-            continue
-        k, v = line.split(":", 1)
-        meta[k.strip()] = v.strip().strip('"').strip("'")
+    if isinstance(parsed, dict):
+        for k, v in parsed.items():
+            if v is None:
+                meta[str(k)] = ""
+            elif isinstance(v, str):
+                meta[str(k)] = v
+            else:
+                meta[str(k)] = str(v)
+
     return meta, body
 
 

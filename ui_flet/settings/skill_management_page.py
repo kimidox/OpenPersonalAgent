@@ -6,6 +6,7 @@ Flet 技能管理页面
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -205,13 +206,21 @@ class SkillManagementPage:
         )
 
         # 延迟加载技能列表（在页面更新后）
-        self._page.on_view_pop = self._on_page_ready
+        # 使用 run_task 在构建完成后异步加载技能
+        self._page.run_task(self._async_load_skills)
 
         self._logger.info("SkillManagementPage: 页面构建完成")
         return self._container
 
+    async def _async_load_skills(self) -> None:
+        """异步加载技能列表"""
+        # 等待一小段时间确保页面已渲染
+        await asyncio.sleep(0.1)
+        self._load_skills()
+
     def _on_page_ready(self, e) -> None:
         """页面准备就绪时加载技能"""
+        # 确保在主线程中加载技能
         self._load_skills()
 
     def _load_skills(self) -> None:
@@ -430,7 +439,7 @@ class SkillManagementPage:
         if not self._file_picker:
             return
         files = await self._file_picker.pick_files(
-            allowed_extensions=["md"],
+            allowed_extensions=["md", "zip"],
             allow_multiple=False,
         )
         if not files:
@@ -438,12 +447,41 @@ class SkillManagementPage:
         file_path = files[0].path
         try:
             manager = self._get_skill_manager()
-            skill_id = manager.import_skill(file_path)
-            self._load_skills()
-            self._show_snackbar("Skill已导入", success=True)
+            if file_path.endswith(".zip"):
+                try:
+                    manager.install_from_zip(file_path)
+                    self._load_skills()
+                    self._show_snackbar("Skill ZIP已导入", success=True)
+                except FileExistsError as fee:
+                    # ZIP中包含已存在的Skill，询问是否覆盖
+                    skill_name = str(fee) if fee else "未知"
+                    self._confirm_zip_overwrite(file_path, skill_name)
+            else:
+                skill_id = manager.import_skill(file_path)
+                self._load_skills()
+                self._show_snackbar("Skill已导入", success=True)
         except Exception as ex:
             self._logger.exception("导入Skill失败")
             self._show_snackbar(f"导入失败: {ex}", success=False)
+
+    def _confirm_zip_overwrite(self, zip_path: str, skill_name: str) -> None:
+        """确认ZIP覆盖安装对话框"""
+        self._show_confirm_dialog(
+            "覆盖安装",
+            f"Skill '{skill_name}' 已存在，是否覆盖安装？",
+            lambda: self._install_zip_overwrite(zip_path),
+        )
+
+    def _install_zip_overwrite(self, zip_path: str) -> None:
+        """覆盖安装ZIP中的Skill"""
+        try:
+            manager = self._get_skill_manager()
+            manager.install_from_zip(zip_path, overwrite=True)
+            self._load_skills()
+            self._show_snackbar("Skill ZIP已覆盖安装", success=True)
+        except Exception as ex:
+            self._logger.exception("覆盖安装Skill ZIP失败")
+            self._show_snackbar(f"覆盖安装失败: {ex}", success=False)
 
     def _on_export_click(self, skill_id: str) -> None:
         """导出按钮点击事件"""
@@ -480,6 +518,8 @@ class SkillManagementPage:
         manager = self._get_skill_manager()
         skill = manager.get_skill_metadata(skill_id)
         if skill is None:
+            self._show_snackbar(f"Skill '{skill_id}' 不存在或目录结构不正确", success=False)
+            self._logger.warning(f"Skill '{skill_id}' 不存在，可能需要重新导入")
             return
 
         # 检查是否已发布

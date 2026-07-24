@@ -11,6 +11,7 @@ import re
 import shutil
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -297,6 +298,187 @@ class SkillManager:
 
         skill_file.write_text(content, encoding="utf-8")
         logger.info(f"已导入Skill: {skill_id}")
+
+        return skill_id
+
+    def install_from_zip(self, zip_path: str, overwrite: bool = False) -> list[str]:
+        """从ZIP包安装Skill
+
+        支持两种ZIP结构：
+        - Flat模式：ZIP根目录直接包含 .md/.markdown 文件
+        - Package模式：ZIP根目录包含子目录，每个子目录中有 .md/.markdown 文件
+
+        Args:
+            zip_path: ZIP文件路径
+            overwrite: 是否覆盖已存在的Skill
+
+        Returns:
+            安装的skill_id列表
+
+        Raises:
+            FileNotFoundError: ZIP文件不存在
+            ValueError: ZIP文件无效或未找到Markdown文件
+            FileExistsError: Skill已存在且overwrite=False
+        """
+        zip_file = Path(zip_path)
+        if not zip_file.exists():
+            raise FileNotFoundError(f"ZIP文件不存在: {zip_path}")
+
+        if not zipfile.is_zipfile(zip_path):
+            raise ValueError(f"文件不是有效的ZIP格式: {zip_path}")
+
+        installed_ids: list[str] = []
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+
+            # 过滤隐藏文件和 __pycache__
+            filtered_names = [
+                n for n in names
+                if not any(
+                    part.startswith(".") or part == "__pycache__"
+                    for part in Path(n).parts
+                )
+            ]
+
+            # 扫描ZIP结构，确定模式
+            root_md_files: list[str] = []  # 根目录下的.md文件
+            subdir_md_files: dict[str, list[str]] = {}  # 子目录 -> [.md文件列表]
+
+            for name in filtered_names:
+                parts = Path(name).parts
+                # 检查是否为 .md/.markdown 文件
+                if name.endswith((".md", ".markdown")):
+                    if len(parts) == 1:
+                        # 根目录下的 .md 文件
+                        root_md_files.append(name)
+                    elif len(parts) >= 2:
+                        # 子目录下的 .md 文件
+                        subdir_name = parts[0]
+                        if subdir_name not in subdir_md_files:
+                            subdir_md_files[subdir_name] = []
+                        subdir_md_files[subdir_name].append(name)
+
+            # 验证是否找到有效的Markdown文件
+            if not root_md_files and not subdir_md_files:
+                raise ValueError("ZIP 包中未找到有效的 Skill Markdown 文件")
+
+            if root_md_files:
+                # Flat模式：使用ZIP文件名作为Skill目录名
+                skill_dir_name = zip_file.stem
+                target_dir = Path(self.skills_dir) / skill_dir_name
+
+                if target_dir.exists() and not overwrite:
+                    raise FileExistsError(
+                        f"Skill目录已存在: {target_dir}，如需覆盖请设置 overwrite=True"
+                    )
+
+                # 提取所有内容到目标目录
+                for name in filtered_names:
+                    # 跳过目录条目
+                    if name.endswith("/"):
+                        continue
+                    target_path = target_dir / name
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(name) as src, open(target_path, "wb") as dst:
+                        dst.write(src.read())
+
+                logger.info(f"已从ZIP提取Skill文件到: {target_dir}")
+
+                # 更新YAML front matter
+                skill_id = self._update_skill_front_matter(target_dir)
+                if skill_id:
+                    installed_ids.append(skill_id)
+            else:
+                # Package模式：每个包含.md文件的子目录为一个Skill
+                for subdir_name, md_files in subdir_md_files.items():
+                    target_dir = Path(self.skills_dir) / subdir_name
+
+                    if target_dir.exists() and not overwrite:
+                        raise FileExistsError(
+                            f"Skill目录已存在: {target_dir}，如需覆盖请设置 overwrite=True"
+                        )
+
+                    # 提取该子目录的内容
+                    for name in filtered_names:
+                        parts = Path(name).parts
+                        if len(parts) >= 2 and parts[0] == subdir_name:
+                            # 跳过目录条目
+                            if name.endswith("/"):
+                                continue
+                            # 去掉顶层子目录前缀
+                            relative_path = Path(name).relative_to(subdir_name)
+                            target_path = target_dir / relative_path
+                            target_path.parent.mkdir(parents=True, exist_ok=True)
+                            with zf.open(name) as src, open(target_path, "wb") as dst:
+                                dst.write(src.read())
+
+                    logger.info(f"已从ZIP提取Skill '{subdir_name}' 到: {target_dir}")
+
+                    # 更新YAML front matter
+                    skill_id = self._update_skill_front_matter(target_dir)
+                    if skill_id:
+                        installed_ids.append(skill_id)
+
+        logger.info(f"从ZIP安装完成，共安装 {len(installed_ids)} 个Skill")
+        return installed_ids
+
+    def _update_skill_front_matter(self, skill_dir: Path) -> Optional[str]:
+        """更新Skill目录中的Markdown文件YAML front matter
+
+        更新id为新生成的skill_id，更新created_at为当前时间。
+        如果Markdown文件不叫SKILL.md，会自动重命名为SKILL.md。
+        同时将目录重命名为skill_id。
+
+        Args:
+            skill_dir: Skill目录路径
+
+        Returns:
+            更新后的skill_id，如果未找到.md文件则返回None
+        """
+        # 查找目录中的 .md/.markdown 文件
+        md_file = None
+        for f in skill_dir.iterdir():
+            if f.is_file() and f.suffix in (".md", ".markdown"):
+                md_file = f
+                break
+
+        if md_file is None:
+            logger.warning(f"Skill目录中未找到Markdown文件: {skill_dir}")
+            return None
+
+        content = md_file.read_text(encoding="utf-8")
+        skill_id = generate_skill_id()
+
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                yaml_content = parts[1].strip()
+                yaml_dict = yaml.safe_load(yaml_content) or {}
+                yaml_dict["id"] = skill_id
+                yaml_dict["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                updated_yaml = yaml.dump(yaml_dict, allow_unicode=True, default_flow_style=False)
+                content = f"---\n{updated_yaml}---\n\n{parts[2].strip()}"
+
+        # 如果文件名不是SKILL.md，重命名为SKILL.md
+        if md_file.name != "SKILL.md":
+            skil_md_path = md_file.parent / "SKILL.md"
+            md_file.rename(skil_md_path)
+            md_file = skil_md_path
+            logger.info(f"已重命名Markdown文件为SKILL.md: {skill_dir}")
+
+        md_file.write_text(content, encoding="utf-8")
+        logger.info(f"已更新Skill front matter: {skill_id}")
+
+        # 将目录重命名为skill_id
+        parent_dir = skill_dir.parent
+        new_dir = parent_dir / skill_id
+        if skill_dir.name != skill_id:
+            # 如果目标目录已存在，先删除
+            if new_dir.exists():
+                shutil.rmtree(new_dir)
+            skill_dir.rename(new_dir)
+            logger.info(f"已重命名Skill目录: {skill_dir.name} -> {skill_id}")
 
         return skill_id
 
