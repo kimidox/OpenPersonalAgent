@@ -547,15 +547,23 @@ def main(page: ft.Page, background: bool = False) -> None:
         """包装原窗口事件处理器，在确认关闭时清理子进程"""
         event_type = e.type if hasattr(e, 'type') else None
         if event_type == ft.WindowEventType.CLOSE:
-            if not page.window.prevent_close:
-                # prevent_close 为 False 表示正在执行真实关闭，清理子进程
-                logger.info("主窗口关闭，开始清理悬浮球子进程")
-                _stop_floating_ball_process()
-                return
+            logger.info("主窗口关闭事件触发，开始清理悬浮球子进程")
+            _stop_floating_ball_process()
+            # 调用原事件处理器后继续关闭流程
+            if original_on_event is not None:
+                original_on_event(e)
+            return
         if original_on_event is not None:
             original_on_event(e)
 
     page.window.on_event = _on_window_event
+
+    # 注册 atexit 钩子，确保程序异常退出或正常退出时都能清理悬浮球进程
+    import atexit
+    def _cleanup_on_exit():
+        logger.info("程序退出 atexit 钩子触发，清理悬浮球子进程")
+        _stop_floating_ball_process()
+    atexit.register(_cleanup_on_exit)
 
     # 后台模式处理
     logger.info(f"ui_flet.main: background = {background}")

@@ -110,7 +110,7 @@ def run_floating_ball_process(
     # =====================================================================
     # 延迟导入 PySide6 —— 避免子进程 spawn 时在模块顶层加载 PySide6
     # =====================================================================
-    from PySide6.QtCore import Qt, QPoint, QTimer
+    from PySide6.QtCore import Qt, QPoint, QTimer, QCoreApplication
     from PySide6.QtGui import (
         QPainter,
         QColor,
@@ -189,6 +189,8 @@ def run_floating_ball_process(
             self._perf_frames_since_report = 0  # 自上次报告以来的帧数
 
             # 设置组件属性（作为子组件，不需要窗口标志）
+            # 注意：某些系统/显卡下，透明背景会导致 Live2D 渲染不出来
+            # 暂时使用半透明红色背景进行测试，便于观察窗口是否真的显示
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             self.setStyleSheet("background:transparent")
 
@@ -216,6 +218,8 @@ def run_floating_ball_process(
 
                 # 初始化 OpenGL 上下文（glInit 而不是 init）
                 try:
+                    # Cubism 框架已在 run_floating_ball_process 中初始化
+                    # 这里只需要初始化 OpenGL 绑定
                     live2d.glInit()
                     self._live2d_initialized = True
                     self._logger.info("Live2D OpenGL 上下文初始化成功")
@@ -324,7 +328,7 @@ def run_floating_ball_process(
             """渲染 Live2D 模型（包含性能监控）"""
             # 在方法开始处添加日志（仅在前几帧和每300帧记录）
             if self._render_frame_count < 5:
-                self._logger.debug(f"paintGL 被调用，当前帧数: {self._render_frame_count}")
+                self._logger.info(f"paintGL 被调用，当前帧数: {self._render_frame_count}")
             
             # 记录帧开始时间
             frame_start_time = time.time()
@@ -347,6 +351,18 @@ def run_floating_ball_process(
 
                 # 设置 OpenGL 视口（关键！）
                 gl.glViewport(0, 0, self.width(), self.height())
+
+                # 启用 Alpha 混合（透明背景必需）
+                # 注意：QOpenGLFunctions 中没有 GL_BLEND 常量，使用 OpenGL 原生常量
+                try:
+                    from OpenGL.GL import GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+                    gl.glEnable(GL_BLEND)
+                    gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+                except Exception:
+                    # 如果 PyOpenGL 未安装，尝试使用 Qt 中的常量
+                    from PySide6.QtOpenGL import QOpenGL
+                    gl.glEnable(QOpenGL.GL_BLEND)
+                    gl.glBlendFunc(QOpenGL.GL_SRC_ALPHA, QOpenGL.GL_ONE_MINUS_SRC_ALPHA)
 
                 # 清除缓冲区（透明背景）
                 live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
@@ -1147,6 +1163,7 @@ def run_floating_ball_process(
                 | Qt.WindowType.WindowDoesNotAcceptFocus
             )
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            self.setStyleSheet("background:transparent")
 
             # 根据是否启用 Live2D 调整窗口大小
             if self._live2d_enabled and self._live2d_model_path:
@@ -1234,8 +1251,12 @@ def run_floating_ball_process(
 
                 self._logger.info(
                     f"Live2D 组件已初始化: {self._live2d_model_path}, "
-                    f"大小: {self._live2d_width}x{self._live2d_height}"
+                    f"大小: {self._live2d_width}x{self._live2d_height}, "
+                    f"可见性: {self._live2d_widget.isVisible()}, "
+                    f"几何: {self._live2d_widget.geometry()}"
                 )
+                # 强制重绘以触发 initializeGL/paintGL
+                self._live2d_widget.update()
 
             except Exception as e:
                 self._logger.error(
@@ -1525,6 +1546,15 @@ def run_floating_ball_process(
             msg_type = msg.get("type")
             if msg_type == MessageType.EXIT:
                 self._logger.info("悬浮球收到退出消息，关闭窗口")
+                # 清理 Live2D 资源
+                if self._live2d_widget:
+                    try:
+                        self._live2d_widget.cleanup()
+                        self._live2d_widget.close()
+                        self._live2d_widget = None
+                        self._logger.info("Live2D 组件已清理")
+                    except Exception as e:
+                        self._logger.error(f"清理 Live2D 组件失败: {e}")
                 if self._chat_window:
                     self._chat_window.close()
                 self.close()
@@ -1564,10 +1594,27 @@ def run_floating_ball_process(
     fmt.setStencilBufferSize(8)
     QSurfaceFormat.setDefaultFormat(fmt)
 
+    # 共享 OpenGL 上下文属性已在 QApplication 创建后设置
+    # 这里保留日志记录用于调试
+    logger.info("OpenGL 上下文共享属性已设置")
+
     _set_dpi_awareness()
     log_perf("DPI 感知设置完成")
 
+    # 初始化 Live2D Cubism 框架（创建模型前必须调用）
+    live2d_module = None
+    if live2d_enabled and live2d_model_path:
+        try:
+            import live2d.v3 as live2d_module
+            live2d_module.init()
+            logger.info("Live2D Cubism 框架初始化完成（live2d.init()）")
+        except Exception as e:
+            logger.error(f"Live2D Cubism 框架初始化失败: {e}", exc_info=True)
+            live2d_enabled = False
+            live2d_module = None
+
     app = QApplication(sys.argv)
+    app.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     fusion = QStyleFactory.create("Fusion")
     if fusion is not None:
         app.setStyle(fusion)
@@ -1592,7 +1639,16 @@ def run_floating_ball_process(
 
     if show_immediately:
         ball.show()
+        ball.raise_()
+        ball.activateWindow()
         log_perf("默认悬浮球窗口显示完成")
+        logger.info(
+            f"悬浮球窗口显示信息: "
+            f"visible={ball.isVisible()}, "
+            f"geometry={ball.geometry()}, "
+            f"pos={ball.pos()}, "
+            f"size={ball.size()}"
+        )
     else:
         # 预启动模式：窗口初始隐藏，等待主进程的 SHOW_WINDOW 消息
         logger.info("预启动模式：悬浮球窗口已创建，初始隐藏")
@@ -1620,6 +1676,12 @@ def run_floating_ball_process(
             logger.warning("Live2D 启用但初始化失败，回退到默认悬浮球窗口")
     else:
         logger.info("使用默认悬浮球窗口")
+
+    # 确保 Live2D 组件在最上层（如果存在）
+    if ball._live2d_widget is not None:
+        ball._live2d_widget.raise_()
+        ball._live2d_widget.update()
+        logger.info("Live2D 组件已提升到最上层并触发更新")
 
     # 运行应用
     try:
