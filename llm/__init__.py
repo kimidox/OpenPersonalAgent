@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import config
 from openai import APIError, APIConnectionError, AuthenticationError, RateLimitError
@@ -351,7 +351,7 @@ def try_next_config_on_failure(
 
 
 def execute_with_fallback(
-    action: Callable[[BaseChatModel], any],
+    action: Callable[[BaseChatModel], Any],
     switch_callback: Optional[SwitchCallback] = None,
     max_retries: int = 10,
 ) -> FallbackResult:

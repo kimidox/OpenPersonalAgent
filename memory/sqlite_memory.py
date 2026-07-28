@@ -8,12 +8,17 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from config import WORKER_DIR
 from database import get_session
 from database.models import Conversations, Messages, User
 from memory.conversation import Conversation
 from memory.memory import Memory
 from memory.message import Message
+
+# 注意：WORKER_DIR 虽然未在本文件中使用，但保持导入以避免破坏依赖链
+try:
+    from config import WORKER_DIR
+except ImportError:
+    WORKER_DIR = None
 
 
 
@@ -298,6 +303,59 @@ class SqliteMemory(Memory):
         if limit is not None and limit > 0:
             rows = rows[:limit]
         return [Message.from_orm(r).to_record_dict() for r in rows]
+
+    def count_messages(self, conversation_id: str) -> int:
+        """返回会话的消息总数（单次 COUNT 查询）"""
+        with get_session() as db:
+            count = (
+                db.query(Messages)
+                .filter(Messages.conversation_id == conversation_id)
+                .count()
+            )
+            return count
+
+    def get_messages_slice(
+        self,
+        conversation_id: str,
+        offset: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """
+        分页查询消息（SQL LIMIT + OFFSET，避免全量加载）
+
+        Args:
+            conversation_id: 会话 ID
+            offset: 偏移量（从最新消息开始计数，0 表示最新）
+            limit: 返回数量
+
+        Returns:
+            消息记录列表（按时间正序，最旧的消息在前）
+        """
+        with get_session() as db:
+            # 使用子查询获取总数，然后计算偏移
+            total_count = (
+                db.query(Messages)
+                .filter(Messages.conversation_id == conversation_id)
+                .count()
+            )
+
+            # 计算实际偏移量（从旧到新排序，offset=0 表示最新的消息）
+            # 例如：总数100，offset=0, limit=20 -> 查询最旧的20条（id 1-20）
+            #       总数100，offset=20, limit=20 -> 查询id 21-40
+            # 但我们想要的是：offset=0, limit=20 -> 查询最新的20条（id 81-100）
+            # 所以需要：actual_offset = total_count - offset - limit
+            actual_offset = max(0, total_count - offset - limit)
+
+            rows = (
+                db.query(Messages)
+                .filter(Messages.conversation_id == conversation_id)
+                .order_by(Messages.id.asc())
+                .offset(actual_offset)
+                .limit(limit)
+                .all()
+            )
+
+            return [Message.from_orm(r).to_record_dict() for r in rows]
 
     def list_user_conversations(self) -> list[Conversation]:
         with get_session() as db:

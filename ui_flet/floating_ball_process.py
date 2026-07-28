@@ -5,13 +5,17 @@
 通过 multiprocessing.Queue 与主 Flet 进程通信。
 聊天窗口与悬浮球共享同一进程，点击悬浮球立即显示聊天窗口。
 
-优化：PySide6 相关导入和类定义全部延迟到 run_floating_ball_process() 内部，
-避免 spawn 子进程在模块导入时加载 PySide6，从而减少启动延迟。
+优化：
+1. PySide6 相关导入和类定义全部延迟到 run_floating_ball_process() 内部
+2. 模块级导入最小化，仅保留路径设置和 IPC 协议
+3. 性能监控：记录启动各阶段耗时
 """
 from __future__ import annotations
 
 import sys
 import threading
+import time
+import traceback
 from multiprocessing import Queue
 from pathlib import Path
 from typing import Optional
@@ -21,9 +25,8 @@ _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from logger import get_logger
-from resource_path import paths
-from ui_flet.floating_ball_ipc import MessageType, make_message
+# 最小化模块级导入 - 仅导入必要的类型定义
+# 延迟导入 logger, paths 等模块到函数内部
 
 
 BALL_SIZE = 50
@@ -65,6 +68,7 @@ def run_floating_ball_process(
     live2d_model_path: str | None = None,
     live2d_width: int = 200,
     live2d_height: int = 200,
+    show_immediately: bool = True,
 ) -> None:
     """
     悬浮球子进程入口
@@ -78,7 +82,31 @@ def run_floating_ball_process(
         live2d_model_path: Live2D 模型路径
         live2d_width: Live2D 窗口宽度
         live2d_height: Live2D 窗口高度
+        show_immediately: 是否立即显示窗口（预启动模式下为 False）
     """
+    # =====================================================================
+    # 性能监控：启动时间测量
+    # =====================================================================
+    start_time = time.time()
+    perf_log = []  # 性能日志缓存
+
+    def log_perf(stage: str):
+        """记录性能日志"""
+        elapsed = time.time() - start_time
+        perf_log.append(f"[{elapsed:.3f}s] {stage}")
+
+    log_perf("进程入口开始执行")
+
+    # =====================================================================
+    # 延迟导入基础模块
+    # =====================================================================
+    from logger import get_logger
+    from resource_path import paths
+    from ui_flet.floating_ball_ipc import MessageType, make_message
+
+    logger = get_logger()
+    log_perf("基础模块导入完成")
+
     # =====================================================================
     # 延迟导入 PySide6 —— 避免子进程 spawn 时在模块顶层加载 PySide6
     # =====================================================================
@@ -89,6 +117,7 @@ def run_floating_ball_process(
         QBrush,
         QIcon,
         QAction,
+        QSurfaceFormat,
     )
     from PySide6.QtWidgets import (
         QApplication,
@@ -105,6 +134,8 @@ def run_floating_ball_process(
     )
     from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
+    log_perf("PySide6 导入完成")
+
     # QColor 相关常量（依赖 PySide6，必须在导入之后定义）
     DEFAULT_PRIMARY_COLOR = QColor("#3B82F6")
     DEFAULT_HOVER_COLOR = QColor("#2563EB")
@@ -113,9 +144,9 @@ def run_floating_ball_process(
     # 类定义（依赖 PySide6，必须在导入之后定义）
     # =====================================================================
 
-    class Live2DBallWindow(QOpenGLWidget):
+    class Live2DWidget(QOpenGLWidget):
         """
-        Live2D 渲染窗口 - 支持交互功能
+        Live2D 渲染组件 - 作为悬浮球的子组件
 
         使用 live2d-py 库渲染 Live2D 模型
         参考: https://github.com/EasyLive2D/live2d-py/tree/main/demos/PyQt
@@ -124,25 +155,13 @@ def run_floating_ball_process(
         def __init__(
             self,
             model_path: str,
-            to_main_queue: Queue,
-            from_main_queue: Queue,
-            main_pid: int,
-            flet_pid: int | None,
-            width: int = 200,
-            height: int = 200,
             parent: Optional[QWidget] = None,
         ) -> None:
             """
-            初始化 Live2D 渲染窗口
+            初始化 Live2D 渲染组件
 
             Args:
                 model_path: 模型 JSON 文件路径（.model3.json）
-                to_main_queue: 发送到主进程的队列
-                from_main_queue: 从主进程接收消息的队列
-                main_pid: 主进程 PID
-                flet_pid: Flet 进程 PID
-                width: 窗口宽度
-                height: 窗口高度
                 parent: 父窗口
 
             Raises:
@@ -153,95 +172,181 @@ def run_floating_ball_process(
             self._model_path = model_path
             self._model = None
             self._live2d_initialized = False
+            self._render_frame_count = 0
+            self._render_timer_id: int | None = None  # 渲染定时器 ID
 
-            # IPC 通信
-            self._to_main = to_main_queue
-            self._from_main = from_main_queue
-            self._main_pid = main_pid
-            self._flet_pid = flet_pid
+            # 渲染节流相关状态
+            self._is_interactive = False  # 用户是否正在交互（悬停/点击）
+            self._last_interaction_time = 0.0  # 上次交互时间
+            self._throttle_mode = False  # 是否处于节流模式（降低渲染频率）
+            self._throttle_frame_skip = 0  # 节流模式下的帧跳过计数
 
-            # 拖拽状态
-            self._is_dragging = False
-            self._drag_start_global = QPoint()
-            self._drag_start_pos = QPoint()
+            # 性能监控相关状态
+            self._perf_last_frame_time = 0.0  # 上帧渲染时间
+            self._perf_frame_times: list[float] = []  # 最近 N 帧的渲染时间（用于计算平均值）
+            self._perf_fps_samples: list[float] = []  # 最近 N 帧的 FPS 样本
+            self._perf_last_report_time = 0.0  # 上次性能报告时间
+            self._perf_frames_since_report = 0  # 自上次报告以来的帧数
 
-            # 录音状态
-            self._is_recording = False
-
-            # 聊天窗口
-            self._chat_window: FloatingChatWindow | None = None
-
-            # 设置窗口属性
-            self.setWindowFlags(
-                Qt.WindowType.FramelessWindowHint
-                | Qt.WindowType.WindowStaysOnTopHint
-                | Qt.WindowType.Tool
-                | Qt.WindowType.WindowDoesNotAcceptFocus
-            )
+            # 设置组件属性（作为子组件，不需要窗口标志）
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-            self.setFixedSize(width, height)
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-            # 初始化菜单和 IPC 轮询
-            self._init_menu()
-            self._init_position()
-            self._init_ipc_poll()
+            self.setStyleSheet("background:transparent")
 
             # 初始化 Live2D 框架（在 OpenGL 上下文创建后）
-            # 注意: initializeGL 会在窗口显示后自动调用
+            # 注意: initializeGL 会在组件显示后自动调用
 
         def initializeGL(self) -> None:
             """初始化 OpenGL 上下文和 Live2D 框架"""
             try:
                 # 导入 Live2D（延迟导入以便捕获错误）
-                import live2d.v3 as live2d
+                try:
+                    import live2d.v3 as live2d
+                except ImportError as e:
+                    self._logger.error(
+                        f"导入 live2d-py 失败，请确保已安装 live2d-py 包。"
+                        f"错误类型: {type(e).__name__}, 错误信息: {e}",
+                        exc_info=True
+                    )
+                    # 设置错误标志
+                    self._live2d_initialized = False
+                    # 通知父窗口 Live2D 加载失败
+                    if self.parent():
+                        self.parent()._live2d_widget = None
+                    return
 
                 # 初始化 OpenGL 上下文（glInit 而不是 init）
-                live2d.glInit()
-                self._live2d_initialized = True
-                self._logger.info("Live2D OpenGL 上下文初始化成功")
+                try:
+                    live2d.glInit()
+                    self._live2d_initialized = True
+                    self._logger.info("Live2D OpenGL 上下文初始化成功")
+                except Exception as e:
+                    self._logger.error(
+                        f"Live2D OpenGL 上下文初始化失败。"
+                        f"错误类型: {type(e).__name__}, 错误信息: {e}",
+                        exc_info=True
+                    )
+                    # 设置错误标志
+                    self._live2d_initialized = False
+                    # 通知父窗口 Live2D 加载失败
+                    if self.parent():
+                        self.parent()._live2d_widget = None
+                    return
 
                 # 创建模型实例
-                self._model = live2d.LAppModel()
+                self._logger.info("步骤 1/5: 准备创建 Live2D 模型实例...")
+                try:
+                    self._model = live2d.LAppModel()
+                    self._logger.info("步骤 1/5: ✓ Live2D 模型实例创建成功")
+                except Exception as e:
+                    self._logger.error(
+                        f"步骤 1/5: ✗ 创建 Live2D 模型实例失败。"
+                        f"错误类型: {type(e).__name__}, 错误信息: {e}",
+                        exc_info=True
+                    )
+                    # 设置错误标志
+                    self._live2d_initialized = False
+                    # 通知父窗口 Live2D 加载失败
+                    if self.parent():
+                        self.parent()._live2d_widget = None
+                    return
 
                 # 加载模型
+                self._logger.info(f"步骤 2/5: 准备加载 Live2D 模型...")
                 model_path_obj = Path(self._model_path)
+                self._logger.info(f"步骤 2/5: 模型路径对象创建完成: {model_path_obj}")
+                self._logger.info(f"步骤 2/5: 模型路径（字符串）: {self._model_path}")
+                self._logger.info(f"步骤 2/5: 模型路径（绝对路径）: {model_path_obj.absolute()}")
+                self._logger.info(f"步骤 2/5: 模型路径是否存在: {model_path_obj.exists()}")
+                
                 if not model_path_obj.exists():
-                    raise FileNotFoundError(f"模型文件不存在: {self._model_path}")
+                    self._logger.error(
+                        f"步骤 2/5: ✗ Live2D 模型文件不存在。路径: {self._model_path}, "
+                        f"绝对路径: {model_path_obj.absolute()}"
+                    )
+                    # 设置错误标志
+                    self._live2d_initialized = False
+                    # 通知父窗口 Live2D 加载失败
+                    if self.parent():
+                        self.parent()._live2d_widget = None
+                    return
 
-                self._model.LoadModelJson(self._model_path)
-                self._logger.info(f"Live2D 模型加载成功: {self._model_path}")
+                try:
+                    self._logger.info(f"步骤 2/5: 开始调用 LoadModelJson...")
+                    self._model.LoadModelJson(self._model_path)
+                    self._logger.info(f"步骤 2/5: ✓ Live2D 模型加载成功: {self._model_path}")
+                except Exception as e:
+                    self._logger.error(
+                        f"步骤 2/5: ✗ 加载 Live2D 模型失败。模型路径: {self._model_path}, "
+                        f"错误类型: {type(e).__name__}, 错误信息: {e}",
+                        exc_info=True
+                    )
+                    # 设置错误标志
+                    self._live2d_initialized = False
+                    # 通知父窗口 Live2D 加载失败
+                    if self.parent():
+                        self.parent()._live2d_widget = None
+                    return
 
                 # 启动 idle 动作
+                self._logger.info("步骤 3/5: 准备启动 Live2D idle 动作...")
                 try:
                     self._model.StartMotion("idle", 0, 3)
-                    self._logger.info("Live2D idle 动作已启动")
+                    self._logger.info("步骤 3/5: ✓ Live2D idle 动作已启动")
                 except Exception as e:
-                    self._logger.warning(f"启动 idle 动作失败: {e} (可能是模型没有该动作)")
+                    self._logger.warning(f"步骤 3/5: ⚠ 启动 idle 动作失败: {e} (可能是模型没有该动作)")
 
                 # 设置初始视图矩阵
+                self._logger.info("步骤 4/5: 准备设置初始视图矩阵...")
                 self._update_view_matrix()
+                self._logger.info("步骤 4/5: ✓ 初始视图矩阵设置完成")
 
-                # 启动渲染定时器（60 FPS，使用 startTimer 而不是 QTimer）
-                self.startTimer(int(1000 / 60))
+                # 启动渲染定时器（30 FPS，降低 CPU/GPU 占用）
+                self._logger.info("步骤 5/5: 准备启动渲染定时器（30 FPS）...")
+                self._render_timer_id = self.startTimer(int(1000 / 30))
+                self._logger.info(f"步骤 5/5: ✓ 渲染定时器已启动，定时器 ID: {self._render_timer_id}")
 
-            except ImportError as e:
-                self._logger.error(f"导入 live2d-py 失败，请确保已安装: {e}")
-                raise RuntimeError(f"导入 live2d-py 失败: {e}") from e
-            except FileNotFoundError as e:
-                self._logger.error(f"Live2D 模型文件不存在: {e}")
-                raise RuntimeError(f"Live2D 模型文件不存在: {e}") from e
+                # 记录初始化完成
+                self._logger.info("Live2D initializeGL 完成，等待第一帧渲染")
+
             except Exception as e:
-                self._logger.error(f"Live2D 初始化失败: {e}")
-                raise RuntimeError(f"Live2D 初始化失败: {e}") from e
+                self._logger.error(
+                    f"Live2D 初始化过程中发生未知错误。"
+                    f"错误类型: {type(e).__name__}, 错误信息: {e}",
+                    exc_info=True
+                )
+                # 设置错误标志
+                self._live2d_initialized = False
+                # 通知父窗口 Live2D 加载失败
+                if self.parent():
+                    self.parent()._live2d_widget = None
 
         def paintGL(self) -> None:
-            """渲染 Live2D 模型"""
+            """渲染 Live2D 模型（包含性能监控）"""
+            # 在方法开始处添加日志（仅在前几帧和每300帧记录）
+            if self._render_frame_count < 5:
+                self._logger.debug(f"paintGL 被调用，当前帧数: {self._render_frame_count}")
+            
+            # 记录帧开始时间
+            frame_start_time = time.time()
+
+            # 检查 OpenGL 上下文是否仍然有效
+            if self.context() is None or not self.context().isValid():
+                self._logger.error("paintGL: OpenGL 上下文已失效")
+                return
+
             if not self._live2d_initialized or self._model is None:
+                self._logger.error("paintGL called but model not initialized!")
                 return
 
             try:
+                from PySide6.QtGui import QOpenGLContext
                 import live2d.v3 as live2d
+
+                # 获取 OpenGL 函数
+                gl = QOpenGLContext.currentContext().functions()
+
+                # 设置 OpenGL 视口（关键！）
+                gl.glViewport(0, 0, self.width(), self.height())
 
                 # 清除缓冲区（透明背景）
                 live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
@@ -252,12 +357,180 @@ def run_floating_ball_process(
                 # 渲染模型
                 self._model.Draw()
 
+                # 检查 OpenGL 错误
+                error = gl.glGetError()
+                if error != 0:  # GL_NO_ERROR = 0
+                    self._logger.warning(f"OpenGL 错误: {error}")
+
+                # 记录渲染成功
+                self._render_frame_count += 1
+
+                # ----------------- 性能监控 -----------------
+                frame_end_time = time.time()
+                frame_time = frame_end_time - frame_start_time
+
+                # 计算帧率（FPS）
+                if self._perf_last_frame_time > 0:
+                    delta_time = frame_end_time - self._perf_last_frame_time
+                    if delta_time > 0:
+                        fps = 1.0 / delta_time
+                        self._perf_fps_samples.append(fps)
+
+                        # 只保留最近 60 帧的数据
+                        if len(self._perf_fps_samples) > 60:
+                            self._perf_fps_samples.pop(0)
+
+                self._perf_last_frame_time = frame_end_time
+
+                # 记录渲染时间
+                self._perf_frame_times.append(frame_time)
+                if len(self._perf_frame_times) > 60:
+                    self._perf_frame_times.pop(0)
+
+                # 统计帧数
+                self._perf_frames_since_report += 1
+
+                # 每 10 秒记录一次性能统计
+                if frame_end_time - self._perf_last_report_time >= 10.0:
+                    if self._perf_fps_samples and self._perf_frame_times:
+                        avg_fps = sum(self._perf_fps_samples) / len(self._perf_fps_samples)
+                        avg_frame_time = sum(self._perf_frame_times) / len(self._perf_frame_times)
+                        total_frames = self._perf_frames_since_report
+                        actual_fps = total_frames / 10.0
+
+                        self._logger.info(
+                            f"Live2D 性能统计: "
+                            f"平均帧率={avg_fps:.1f} FPS, "
+                            f"实际帧率={actual_fps:.1f} FPS, "
+                            f"平均渲染时间={avg_frame_time*1000:.2f} ms, "
+                            f"总帧数={self._render_frame_count}, "
+                            f"节流模式={'是' if self._throttle_mode else '否'}"
+                        )
+
+                    self._perf_last_report_time = frame_end_time
+                    self._perf_frames_since_report = 0
+
+                # 第一帧时记录详细的模型信息（第1帧）
+                if self._render_frame_count == 1:
+                    try:
+                        # 获取模型信息
+                        model_info = {
+                            "window_size": f"{self.width()}x{self.height()}",
+                            "model_path": self._model_path,
+                            "window_visible": self.isVisible(),
+                            "window_opacity": self.windowOpacity(),
+                            "widget_opacity": self.opacity(),
+                        }
+
+                        # 尝试获取模型画布信息（如果有API）
+                        try:
+                            if hasattr(self._model, 'GetCanvasWidth'):
+                                model_info["canvas_width"] = self._model.GetCanvasWidth()
+                            if hasattr(self._model, 'GetCanvasHeight'):
+                                model_info["canvas_height"] = self._model.GetCanvasHeight()
+                            if hasattr(self._model, 'GetModelColor'):
+                                model_info["has_color"] = True
+                        except Exception as e:
+                            self._logger.warning(f"获取模型属性失败: {e}")
+
+                        # 检查 OpenGL 状态
+                        try:
+                            gl_error = gl.glGetError()
+                            model_info["gl_error"] = gl_error
+                            model_info["viewport"] = f"{gl.glGetIntegerv(gl.GL_VIEWPORT)}" if hasattr(gl, 'GL_VIEWPORT') else "unknown"
+                        except Exception as e:
+                            self._logger.warning(f"获取 OpenGL 状态失败: {e}")
+
+                        self._logger.info(f"Live2D 第一帧渲染信息: {model_info}")
+                    except Exception as e:
+                        self._logger.warning(f"获取模型信息失败: {e}")
+
+                # 第30帧时记录渲染成功（从 60 改为 30，适应新的帧率）
+                elif self._render_frame_count == 30:
+                    self._logger.info(f"Live2D 第一秒渲染成功！窗口大小: {self.width()}x{self.height()}")
+                # 每300帧记录一次（从 60 改为 300，适应新的帧率）
+                elif self._render_frame_count % 300 == 0:
+                    self._logger.info(f"Live2D 已渲染 {self._render_frame_count} 帧")
+
             except Exception as e:
                 self._logger.error(f"Live2D 渲染异常: {e}")
+                import traceback
+                self._logger.error(f"异常堆栈: {traceback.format_exc()}")
 
         def timerEvent(self, event) -> None:
-            """定时器事件：触发重绘"""
+            """定时器事件：触发重绘（支持渲染节流）"""
+            # 仅在前 10 次定时器触发时记录日志
+            if self._render_frame_count < 10:
+                self._logger.debug(
+                    f"timerEvent 触发，帧数: {self._render_frame_count}, "
+                    f"live2d_initialized: {self._live2d_initialized}, "
+                    f"model is None: {self._model is None}, "
+                    f"timer_id: {self._render_timer_id}"
+                )
+            
+            if self._render_frame_count == 0:
+                self._logger.debug("Live2D 渲染定时器触发，等待第一帧")
+
+            # 检查是否需要切换到节流模式
+            current_time = time.time()
+            if self._is_interactive:
+                # 有交互，更新交互时间并禁用节流模式
+                self._last_interaction_time = current_time
+                if self._throttle_mode:
+                    self._throttle_mode = False
+                    self._throttle_frame_skip = 0
+                    self._logger.debug("Live2D 恢复正常渲染频率（用户交互）")
+            else:
+                # 无交互，检查是否超过 5 秒
+                if current_time - self._last_interaction_time > 5.0 and not self._throttle_mode:
+                    self._throttle_mode = True
+                    self._logger.debug("Live2D 进入节流模式（无交互超过 5 秒）")
+
+            # 节流模式：每 6 帧渲染一次（30 FPS / 6 ≈ 5 FPS）
+            if self._throttle_mode:
+                self._throttle_frame_skip += 1
+                if self._throttle_frame_skip < 6:
+                    return  # 跳过本次渲染
+                self._throttle_frame_skip = 0
+
             self.update()
+
+        def showEvent(self, event) -> None:
+            """窗口显示事件"""
+            super().showEvent(event)
+            self._logger.info(f"Live2D 窗口 showEvent: visible={self.isVisible()}, geometry={self.geometry()}")
+
+        def hideEvent(self, event) -> None:
+            """窗口隐藏事件"""
+            super().hideEvent(event)
+            import traceback
+            self._logger.warning(f"Live2D 窗口 hideEvent: 调用堆栈:\n{''.join(traceback.format_stack())}")
+
+        def closeEvent(self, event) -> None:
+            """窗口关闭事件 - 清理资源"""
+            self._logger.info("Live2D 窗口 closeEvent: 开始清理资源")
+            
+            # 停止渲染定时器
+            if self._render_timer_id is not None:
+                try:
+                    self.killTimer(self._render_timer_id)
+                    self._logger.info(f"渲染定时器已停止 (ID: {self._render_timer_id})")
+                    self._render_timer_id = None
+                except Exception as e:
+                    self._logger.error(f"停止渲染定时器失败: {e}")
+            
+            # 清理 Live2D 资源
+            try:
+                self.cleanup()
+                self._logger.info("Live2D 资源清理完成")
+            except Exception as e:
+                self._logger.error(f"清理 Live2D 资源失败: {e}")
+            
+            # 调用父类方法
+            super().closeEvent(event)
+            
+            import traceback
+            self._logger.info(f"Live2D 窗口 closeEvent 完成，调用堆栈:\n{''.join(traceback.format_stack())}")
 
         def resizeGL(self, width: int, height: int) -> None:
             """窗口尺寸变化时更新视图矩阵"""
@@ -281,6 +554,7 @@ def run_floating_ball_process(
 
         def cleanup(self) -> None:
             """清理资源"""
+            # 清理 Live2D 模型
             if self._model is not None:
                 try:
                     # 如果模型有清理方法，调用它
@@ -290,106 +564,50 @@ def run_floating_ball_process(
                     self._logger.error(f"清理 Live2D 模型失败: {e}")
 
             self._model = None
-            self._logger.info("Live2D 资源已清理")
 
-        # ----------------- UI 初始化 -----------------
+            # 清理性能监控数据（释放内存）
+            self._perf_frame_times.clear()
+            self._perf_fps_samples.clear()
 
-        def _init_menu(self) -> None:
-            """初始化右键菜单"""
-            self._menu = QMenu(self)
-            self._menu.setStyleSheet(
-                "QMenu { background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px; }"
-                "QMenu::item { padding: 6px 24px; border-radius: 4px; }"
-                "QMenu::item:selected { background-color: #eff6ff; color: #1d4ed8; }"
-                "QMenu::separator { height: 1px; background-color: #e5e7eb; margin: 4px 0px; }"
-            )
+            # 重置状态标志
+            self._live2d_initialized = False
 
-            self._toggle_chat_action = QAction("展开聊天窗口", self)
-            self._toggle_chat_action.triggered.connect(self._on_toggle_chat)
-            self._menu.addAction(self._toggle_chat_action)
-
-            self._show_main_action = QAction("显示主窗口", self)
-            self._show_main_action.triggered.connect(self._on_show_main_window)
-            self._menu.addAction(self._show_main_action)
-
-            self._menu.addSeparator()
-
-            self._recording_action = QAction("开始录音", self)
-            self._recording_action.triggered.connect(self._on_toggle_recording)
-            self._menu.addAction(self._recording_action)
-
-            self._menu.addSeparator()
-
-            self._quit_action = QAction("退出应用", self)
-            self._quit_action.triggered.connect(self._on_quit)
-            self._menu.addAction(self._quit_action)
-
-        def _init_position(self) -> None:
-            """默认放到屏幕右下角"""
-            screen = QApplication.primaryScreen()
-            if screen is None:
-                return
-            geometry = screen.availableGeometry()
-            x = geometry.width() - self.width() - BALL_MARGIN
-            y = geometry.height() - self.height() - BALL_MARGIN
-            self.move(x, y)
-
-        def _init_ipc_poll(self) -> None:
-            """启动定时器，轮询主进程发来的消息"""
-            self._ipc_timer = QTimer(self)
-            self._ipc_timer.timeout.connect(self._poll_ipc)
-            self._ipc_timer.start(100)  # 100ms 轮询一次
-
-        # ----------------- 聊天窗口管理 -----------------
-
-        def _create_chat_window(self) -> None:
-            """创建聊天窗口（只创建一次）"""
-            if self._chat_window is not None:
-                return
-
-            self._chat_window = FloatingChatWindow(
-                self._to_main,
-                self._from_main,
-            )
-            self._logger.info("Live2D 窗口: 聊天窗口已创建")
-
-        def _toggle_chat_window(self) -> None:
-            """切换聊天窗口显示/隐藏"""
-            if self._chat_window is None:
-                self._create_chat_window()
-
-            if self._chat_window is None:
-                return
-
-            if self._chat_window.isVisible():
-                self._chat_window.hide()
-                self._toggle_chat_action.setText("展开聊天窗口")
-                self._logger.info("Live2D 窗口: 聊天窗口已隐藏")
-            else:
-                # 更新聊天窗口位置（贴着悬浮球左上角）
-                self._chat_window.update_position(self.pos())
-                self._chat_window.show()
-                self._toggle_chat_action.setText("收起聊天窗口")
-                self._logger.info(f"Live2D 窗口: 聊天窗口已显示，悬浮球位置: {self.pos()}")
+            self._logger.info("Live2D 资源已清理（包括性能监控数据）")
 
         # ----------------- Live2D 模型动作 -----------------
 
-        def _play_click_animation(self) -> None:
-            """播放点击动画"""
+        def play_click_animation(self, hit_area: str | None = None) -> None:
+            """
+            播放点击动画（供外部调用）
+
+            Args:
+                hit_area: 点击的区域名称，如果为 None 则自动选择动作
+            """
             if not self._live2d_initialized or self._model is None:
                 return
 
             try:
-                # 尝试播放点击动作（优先级从高到低）
+                # 根据点击区域选择动作
                 motion_played = False
 
-                # 尝试 touch_body
-                try:
-                    self._model.StartMotion("touch_body", 0, 3)
-                    self._logger.info("Live2D 播放 touch_body 动作")
-                    motion_played = True
-                except Exception:
-                    pass
+                # 优先使用点击区域对应的动作
+                if hit_area:
+                    try:
+                        self._model.StartMotion(hit_area, 0, 3)
+                        self._logger.info(f"Live2D 播放 {hit_area} 动作")
+                        motion_played = True
+                    except Exception as e:
+                        self._logger.debug(f"播放 {hit_area} 动作失败: {e}")
+
+                # 如果指定区域动作失败，尝试其他常见动作
+                if not motion_played:
+                    # 尝试 touch_body
+                    try:
+                        self._model.StartMotion("touch_body", 0, 3)
+                        self._logger.info("Live2D 播放 touch_body 动作")
+                        motion_played = True
+                    except Exception:
+                        pass
 
                 # 如果 touch_body 失败，尝试 touch_head
                 if not motion_played:
@@ -407,7 +625,7 @@ def run_floating_ball_process(
             except Exception as e:
                 self._logger.error(f"播放 Live2D 点击动画失败: {e}")
 
-        def _check_model_hit_test(self, x: int, y: int) -> bool:
+        def check_model_hit_test(self, x: int, y: int) -> bool:
             """
             检测点击是否在模型上（碰撞检测）
 
@@ -418,9 +636,23 @@ def run_floating_ball_process(
             Returns:
                 True 如果点击在模型上
             """
+            hit_area = self.get_hit_area(x, y)
+            return hit_area is not None
+
+        def get_hit_area(self, x: int, y: int) -> str | None:
+            """
+            获取点击的区域名称（碰撞检测）
+
+            Args:
+                x: 点击的 x 坐标（窗口坐标系）
+                y: 点击的 y 坐标（窗口坐标系）
+
+            Returns:
+                点击的区域名称（如 "touch_body", "touch_head"），如果没有点击到任何区域则返回 None
+            """
             if not self._live2d_initialized or self._model is None:
-                # 如果模型未初始化，默认返回 True（整个窗口都可点击）
-                return True
+                # 如果模型未初始化，返回 None
+                return None
 
             try:
                 # 尝试使用模型的碰撞检测
@@ -433,163 +665,55 @@ def run_floating_ball_process(
                 if hasattr(self._model, "HitTest"):
                     # HitTest 返回点击的区域名称，如果没有点击到任何区域则返回 None
                     hit_area = self._model.HitTest(norm_x, norm_y)
-                    self._logger.debug(f"Live2D 碰撞检测: ({x}, {y}) -> hit_area={hit_area}")
-                    return hit_area is not None
+                    self._logger.debug(f"Live2D 碰撞检测: ({x}, {y}) -> norm=({norm_x:.3f}, {norm_y:.3f}) -> hit_area={hit_area}")
+                    return hit_area
 
-                # 如果模型没有 HitTest 方法，默认返回 True
-                return True
+                # 如果模型没有 HitTest 方法，返回 None
+                return None
 
             except Exception as e:
                 self._logger.error(f"Live2D 碰撞检测失败: {e}")
-                # 出错时默认返回 True（允许点击）
-                return True
+                return None
 
-        # ----------------- 鼠标事件 -----------------
+        # ----------------- 鼠标事件转发（确保拖拽功能正常） -----------------
 
         def mousePressEvent(self, event) -> None:
-            """鼠标按下事件"""
-            if event.button() == Qt.MouseButton.LeftButton:
-                self._is_dragging = False
-                self._drag_start_global = event.globalPosition().toPoint()
-                self._drag_start_pos = self.pos()
-            super().mousePressEvent(event)
+            """鼠标按下事件 - 转发到父窗口以支持拖拽"""
+            # 由于我们是父窗口的子组件，直接忽略事件让父窗口处理
+            if self.parent():
+                event.ignore()
+            else:
+                super().mousePressEvent(event)
 
         def mouseMoveEvent(self, event) -> None:
-            """鼠标移动事件（拖拽）"""
-            if event.buttons() & Qt.MouseButton.LeftButton:
-                current = event.globalPosition().toPoint()
-                delta = current - self._drag_start_global
-
-                # 判断是否开始拖拽（移动距离超过阈值）
-                if not self._is_dragging and delta.manhattanLength() > 5:
-                    self._is_dragging = True
-                    self._logger.debug("Live2D 窗口开始拖拽")
-
-                if self._is_dragging:
-                    self.move(self._drag_start_pos + delta)
-                    # 同时更新聊天窗口位置
-                    if self._chat_window and self._chat_window.isVisible():
-                        self._chat_window.update_position(self.pos())
-
-            super().mouseMoveEvent(event)
+            """鼠标移动事件 - 转发到父窗口以支持拖拽"""
+            if self.parent():
+                event.ignore()
+            else:
+                super().mouseMoveEvent(event)
 
         def mouseReleaseEvent(self, event) -> None:
-            """鼠标释放事件"""
-            if event.button() == Qt.MouseButton.LeftButton:
-                # 如果不是拖拽，则视为点击
-                if not self._is_dragging:
-                    # 检测点击位置是否在模型上
-                    local_pos = event.position().toPoint()
-                    if self._check_model_hit_test(local_pos.x(), local_pos.y()):
-                        # 播放点击动画
-                        self._play_click_animation()
-
-                    # 切换聊天窗口
-                    self._toggle_chat_window()
-
-                self._is_dragging = False
-
-            super().mouseReleaseEvent(event)
-
-        def contextMenuEvent(self, event) -> None:
-            """右键菜单事件"""
-            self._menu.exec(event.globalPos())
-
-        # ----------------- 菜单回调 -----------------
-
-        def _on_toggle_chat(self) -> None:
-            """切换聊天窗口"""
-            self._toggle_chat_window()
-
-        def _on_show_main_window(self) -> None:
-            """显示主窗口"""
-            self._send(MessageType.SHOW_MAIN_WINDOW)
-
-        def _on_toggle_recording(self) -> None:
-            """切换录音状态"""
-            if self._is_recording:
-                self._is_recording = False
-                self._recording_action.setText("开始录音")
-                self._send(MessageType.STOP_RECORDING)
+            """鼠标释放事件 - 转发到父窗口以支持拖拽和点击"""
+            if self.parent():
+                event.ignore()
             else:
-                self._is_recording = True
-                self._recording_action.setText("停止录音")
-                self._send(MessageType.START_RECORDING)
+                super().mouseReleaseEvent(event)
 
-        def _on_quit(self) -> None:
-            """退出应用：终止所有相关进程"""
-            import os
-            import subprocess
+        def enterEvent(self, event) -> None:
+            """鼠标进入事件 - 设置交互状态，提高渲染频率"""
+            self._is_interactive = True
+            self._last_interaction_time = time.time()
+            if self._throttle_mode:
+                self._throttle_mode = False
+                self._throttle_frame_skip = 0
+                self._logger.debug("Live2D 恢复正常渲染频率（鼠标悬停）")
+            super().enterEvent(event)
 
-            self._logger.info("Live2D 窗口请求退出应用...")
-            self._logger.info(f"主进程 PID: {self._main_pid}, Flet 进程 PID: {self._flet_pid}")
-
-            # 先关闭聊天窗口和悬浮球窗口
-            if self._chat_window:
-                self._chat_window.close()
-            self.close()
-
-            # 先终止 Flet 原生进程（精确使用 PID）
-            if self._flet_pid:
-                try:
-                    result = subprocess.run(
-                        ["taskkill", "/F", "/PID", str(self._flet_pid)],
-                        check=False,
-                        capture_output=True,
-                        text=True
-                    )
-                    self._logger.info(f"终止 Flet 进程 {self._flet_pid}: {result.stdout} {result.stderr}")
-                except Exception as e:
-                    self._logger.error(f"终止 Flet 进程失败: {e}")
-
-            # 再终止主进程及其子进程（使用 /T 终止进程树）
-            try:
-                if self._main_pid and self._main_pid != os.getpid():
-                    result = subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(self._main_pid)],
-                        check=False,
-                        capture_output=True,
-                        text=True
-                    )
-                    self._logger.info(f"终止主进程树 {self._main_pid}: {result.stdout} {result.stderr}")
-            except Exception as e:
-                self._logger.error(f"终止主进程失败: {e}")
-
-            # 悬浮球进程退出
-            self._logger.info("Live2D 悬浮球进程退出")
-            QApplication.quit()
-
-        # ----------------- IPC 通信 -----------------
-
-        def _send(self, msg_type: MessageType, **payload) -> None:
-            """发送 IPC 消息到主进程"""
-            try:
-                self._to_main.put(make_message(msg_type, **payload))
-            except Exception as e:
-                self._logger.error(f"Live2D 窗口 IPC 发送失败: {e}")
-
-        def _poll_ipc(self) -> None:
-            """非阻塞地读取主进程消息"""
-            try:
-                while not self._from_main.empty():
-                    msg = self._from_main.get_nowait()
-                    self._handle_ipc_message(msg)
-            except Exception as e:
-                self._logger.error(f"Live2D 窗口 IPC 轮询异常: {e}")
-
-        def _handle_ipc_message(self, msg: dict) -> None:
-            """处理从主进程收到的消息"""
-            msg_type = msg.get("type")
-            if msg_type == MessageType.EXIT:
-                self._logger.info("Live2D 窗口收到退出消息，关闭窗口")
-                if self._chat_window:
-                    self._chat_window.close()
-                self.close()
-                QApplication.quit()
-            elif msg_type == MessageType.CHAT_RECEIVE_MESSAGE:
-                # 转发给聊天窗口
-                if self._chat_window:
-                    self._chat_window._handle_ipc_message(msg)
+        def leaveEvent(self, event) -> None:
+            """鼠标离开事件 - 记录交互结束时间"""
+            self._is_interactive = False
+            self._last_interaction_time = time.time()
+            super().leaveEvent(event)
 
     class MessageBubble(QFrame):
         """消息气泡组件"""
@@ -914,13 +1038,37 @@ def run_floating_ball_process(
                 self._logger.error(f"悬浮聊天窗口 IPC 发送失败: {e}")
 
         def _poll_ipc(self) -> None:
-            """非阻塞地读取主进程消息"""
+            """非阻塞地读取主进程消息（支持批量消息解包）"""
             try:
                 while not self._from_main.empty():
                     msg = self._from_main.get_nowait()
-                    self._handle_ipc_message(msg)
+                    # 解包批量消息
+                    messages = self._unwrap_batch_message(msg)
+                    for message in messages:
+                        self._handle_ipc_message(message)
             except Exception as e:
                 self._logger.error(f"悬浮聊天窗口 IPC 轮询异常: {e}")
+
+        def _unwrap_batch_message(self, msg: dict | bytes) -> list[dict]:
+            """解包批量消息（兼容新旧格式）"""
+            # 处理 bytes 类型（msgpack 序列化）
+            if isinstance(msg, bytes):
+                try:
+                    import msgpack
+                    msg = msgpack.unpackb(msg, raw=False)
+                except ImportError:
+                    # msgpack 未安装，尝试 pickle
+                    import pickle
+                    msg = pickle.loads(msg)
+                except Exception as e:
+                    self._logger.error(f"消息反序列化失败: {e}")
+                    return []
+
+            # 检查是否是批量消息
+            if isinstance(msg, dict) and msg.get("type") == "__batch__":
+                return msg.get("messages", [])
+            else:
+                return [msg] if isinstance(msg, dict) else []
 
         def _handle_ipc_message(self, msg: dict) -> None:
             msg_type = msg.get("type")
@@ -976,9 +1124,17 @@ def run_floating_ball_process(
             # 聊天窗口（共享同一进程）
             self._chat_window: FloatingChatWindow | None = None
 
+            # Live2D 组件（如果启用）
+            self._live2d_widget: Live2DWidget | None = None
+
             self._init_window()
             self._init_menu()
             self._init_position()
+
+            # 如果启用 Live2D，初始化 Live2D 组件
+            if live2d_enabled and live2d_model_path:
+                self._init_live2d()
+
             self._init_ipc_poll()
 
         # ----------------- UI 初始化 -----------------
@@ -991,7 +1147,17 @@ def run_floating_ball_process(
                 | Qt.WindowType.WindowDoesNotAcceptFocus
             )
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-            self.setFixedSize(BALL_SIZE, BALL_SIZE)
+
+            # 根据是否启用 Live2D 调整窗口大小
+            if self._live2d_enabled and self._live2d_model_path:
+                window_width = self._live2d_width
+                window_height = self._live2d_height
+                self._logger.info(f"Live2D 悬浮球窗口大小: {window_width}x{window_height}")
+            else:
+                window_width = BALL_SIZE
+                window_height = BALL_SIZE
+
+            self.setFixedSize(window_width, window_height)
             self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         def _init_menu(self) -> None:
@@ -1029,9 +1195,60 @@ def run_floating_ball_process(
             if screen is None:
                 return
             geometry = screen.availableGeometry()
-            x = geometry.width() - BALL_SIZE - BALL_MARGIN
-            y = geometry.height() - BALL_SIZE - BALL_MARGIN
+
+            # 根据窗口大小计算位置
+            window_width = self.width()
+            window_height = self.height()
+            x = geometry.width() - window_width - BALL_MARGIN
+            y = geometry.height() - window_height - BALL_MARGIN
             self.move(x, y)
+
+        def _init_live2d(self) -> None:
+            """初始化 Live2D 组件"""
+            try:
+                # 检查模型路径是否有效
+                if not self._live2d_model_path:
+                    self._logger.warning("Live2D 模型路径为空，使用默认悬浮球")
+                    self._live2d_widget = None
+                    return
+
+                model_path_obj = Path(self._live2d_model_path)
+                if not model_path_obj.exists():
+                    self._logger.warning(
+                        f"Live2D 模型文件不存在: {self._live2d_model_path}, 使用默认悬浮球"
+                    )
+                    self._live2d_widget = None
+                    return
+
+                self._logger.info(f"正在初始化 Live2D 组件: {self._live2d_model_path}")
+
+                # 创建 Live2D 组件实例
+                self._live2d_widget = Live2DWidget(
+                    model_path=self._live2d_model_path,
+                    parent=self
+                )
+
+                # 设置组件大小和位置（填充整个窗口）
+                self._live2d_widget.setGeometry(0, 0, self._live2d_width, self._live2d_height)
+                self._live2d_widget.show()
+
+                self._logger.info(
+                    f"Live2D 组件已初始化: {self._live2d_model_path}, "
+                    f"大小: {self._live2d_width}x{self._live2d_height}"
+                )
+
+            except Exception as e:
+                self._logger.error(
+                    f"初始化 Live2D 组件失败: {e}, 使用默认悬浮球",
+                    exc_info=True
+                )
+                # 确保失败时清理组件引用
+                if self._live2d_widget:
+                    try:
+                        self._live2d_widget.close()
+                    except Exception:
+                        pass
+                self._live2d_widget = None
 
         def _init_ipc_poll(self) -> None:
             """启动定时器，轮询主进程发来的消息"""
@@ -1074,6 +1291,12 @@ def run_floating_ball_process(
         # ----------------- 绘制 -----------------
 
         def paintEvent(self, event) -> None:  # noqa: ARG002
+            # 如果 Live2D 组件存在，不绘制默认圆形
+            if self._live2d_widget is not None:
+                # Live2D 组件会自己渲染，这里不绘制背景
+                return
+
+            # 绘制默认圆形悬浮球
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -1126,7 +1349,23 @@ def run_floating_ball_process(
         def mouseReleaseEvent(self, event) -> None:
             if event.button() == Qt.MouseButton.LeftButton:
                 if not self._is_dragging:
-                    self._toggle_chat_window()
+                    # 如果有 Live2D 组件，进行碰撞检测并播放动画
+                    if self._live2d_widget is not None:
+                        # 获取点击位置（相对于窗口）
+                        local_pos = event.position().toPoint()
+                        hit_area = self._live2d_widget.get_hit_area(local_pos.x(), local_pos.y())
+
+                        if hit_area:
+                            # 点击在模型上，播放对应动作
+                            self._live2d_widget.play_click_animation(hit_area)
+                            self._logger.info(f"Live2D 点击区域: {hit_area}")
+                        else:
+                            # 点击在模型外，切换聊天窗口
+                            self._toggle_chat_window()
+                            self._logger.debug("点击在 Live2D 模型外，切换聊天窗口")
+                    else:
+                        # 没有 Live2D，切换聊天窗口
+                        self._toggle_chat_window()
                 self._is_dragging = False
             super().mouseReleaseEvent(event)
 
@@ -1140,6 +1379,34 @@ def run_floating_ball_process(
 
         def contextMenuEvent(self, event) -> None:
             self._menu.exec(event.globalPos())
+
+        def closeEvent(self, event) -> None:
+            """窗口关闭事件 - 确保资源清理"""
+            self._logger.info("悬浮球窗口 closeEvent: 开始清理资源")
+
+            # 清理 Live2D 组件
+            if self._live2d_widget:
+                try:
+                    self._live2d_widget.cleanup()
+                    self._live2d_widget.close()
+                    self._live2d_widget = None
+                    self._logger.info("Live2D 组件已清理")
+                except Exception as e:
+                    self._logger.error(f"清理 Live2D 组件失败: {e}")
+                    self._live2d_widget = None
+
+            # 清理聊天窗口
+            if self._chat_window:
+                try:
+                    self._chat_window.close()
+                    self._chat_window = None
+                    self._logger.info("聊天窗口已清理")
+                except Exception as e:
+                    self._logger.error(f"清理聊天窗口失败: {e}")
+                    self._chat_window = None
+
+            super().closeEvent(event)
+            self._logger.info("悬浮球窗口 closeEvent 完成")
 
         # ----------------- 菜单/交互回调 -----------------
 
@@ -1166,6 +1433,17 @@ def run_floating_ball_process(
 
             self._logger.info("悬浮球请求退出应用...")
             self._logger.info(f"主进程 PID: {self._main_pid}, Flet 进程 PID: {self._flet_pid}")
+
+            # 先清理 Live2D 组件
+            if self._live2d_widget:
+                try:
+                    self._live2d_widget.cleanup()
+                    self._live2d_widget.close()
+                    self._live2d_widget = None  # 释放引用
+                    self._logger.info("Live2D 组件已清理并释放引用")
+                except Exception as e:
+                    self._logger.error(f"清理 Live2D 组件失败: {e}")
+                    self._live2d_widget = None  # 即使失败也置空引用
 
             # 先关闭聊天窗口和悬浮球窗口
             if self._chat_window:
@@ -1211,13 +1489,37 @@ def run_floating_ball_process(
         # ----------------- IPC 接收 -----------------
 
         def _poll_ipc(self) -> None:
-            """非阻塞地读取主进程消息"""
+            """非阻塞地读取主进程消息（支持批量消息解包）"""
             try:
                 while not self._from_main.empty():
                     msg = self._from_main.get_nowait()
-                    self._handle_ipc_message(msg)
+                    # 解包批量消息
+                    messages = self._unwrap_batch_message(msg)
+                    for message in messages:
+                        self._handle_ipc_message(message)
             except Exception as e:
                 self._logger.error(f"悬浮球 IPC 轮询异常: {e}")
+
+        def _unwrap_batch_message(self, msg: dict | bytes) -> list[dict]:
+            """解包批量消息（兼容新旧格式）"""
+            # 处理 bytes 类型（msgpack 序列化）
+            if isinstance(msg, bytes):
+                try:
+                    import msgpack
+                    msg = msgpack.unpackb(msg, raw=False)
+                except ImportError:
+                    # msgpack 未安装，尝试 pickle
+                    import pickle
+                    msg = pickle.loads(msg)
+                except Exception as e:
+                    self._logger.error(f"消息反序列化失败: {e}")
+                    return []
+
+            # 检查是否是批量消息
+            if isinstance(msg, dict) and msg.get("type") == "__batch__":
+                return msg.get("messages", [])
+            else:
+                return [msg] if isinstance(msg, dict) else []
 
         def _handle_ipc_message(self, msg: dict) -> None:
             msg_type = msg.get("type")
@@ -1227,6 +1529,16 @@ def run_floating_ball_process(
                     self._chat_window.close()
                 self.close()
                 QApplication.quit()
+            elif msg_type == MessageType.SHOW_WINDOW:
+                # 显示悬浮球窗口（预启动模式）
+                self.show()
+                self._logger.info("悬浮球窗口已显示（预启动模式）")
+            elif msg_type == MessageType.HIDE_WINDOW:
+                # 隐藏悬浮球窗口（预启动模式）
+                if self._chat_window:
+                    self._chat_window.hide()
+                self.hide()
+                self._logger.info("悬浮球窗口已隐藏（预启动模式）")
             elif msg_type == MessageType.SET_THEME:
                 color = msg.get("color", "#3B82F6")
                 self._primary_color = QColor(color)
@@ -1241,13 +1553,19 @@ def run_floating_ball_process(
     # 以下是 run_floating_ball_process 的主逻辑（使用上面定义的类）
     # =====================================================================
 
-    logger = get_logger()
-
     # 设置环境变量（必须在创建应用前）
     import os
     os.environ["QSG_RHI_BACKEND"] = "opengl"
 
+    # 设置 OpenGL 格式（必须在 QApplication 创建之前）
+    fmt = QSurfaceFormat()
+    fmt.setAlphaBufferSize(8)
+    fmt.setDepthBufferSize(24)
+    fmt.setStencilBufferSize(8)
+    QSurfaceFormat.setDefaultFormat(fmt)
+
     _set_dpi_awareness()
+    log_perf("DPI 感知设置完成")
 
     app = QApplication(sys.argv)
     fusion = QStyleFactory.create("Fusion")
@@ -1257,6 +1575,7 @@ def run_floating_ball_process(
     icon_path = paths.get_bundled_resource("application.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
+    log_perf("QApplication 初始化完成")
 
     # 始终先创建并显示默认悬浮球（快速可见，无需等待 Live2D）
     ball = FloatingBallWindow(
@@ -1269,113 +1588,46 @@ def run_floating_ball_process(
         live2d_width,
         live2d_height,
     )
-    ball.show()
-    logger.info("默认悬浮球窗口已显示（快速启动）")
+    log_perf("默认悬浮球创建完成")
 
-    # Live2D 异步加载状态
-    live2d_loading = live2d_enabled and live2d_model_path
-    live2d_result = {"ready": False, "success": False, "module": None}
-
-    if live2d_loading:
-        def _load_live2d_async():
-            """后台线程：异步加载 Live2D 框架"""
-            try:
-                import live2d.v3 as live2d_module
-                live2d_module.init()
-                live2d_result["module"] = live2d_module
-                live2d_result["success"] = True
-                logger.info("Live2D 框架异步加载成功")
-            except ImportError as e:
-                logger.error(f"导入 live2d-py 失败: {e}")
-            except Exception as e:
-                logger.error(f"Live2D 初始化失败: {e}")
-            finally:
-                live2d_result["ready"] = True
-
-        live2d_thread = threading.Thread(target=_load_live2d_async, name="live2d-async-load", daemon=True)
-        live2d_thread.start()
-        logger.info("Live2D 后台加载线程已启动")
-
-        # 主线程定时器：检查 Live2D 加载状态
-        def _check_live2d_and_switch():
-            """主线程回调：Live2D 加载完成后切换窗口"""
-            if not live2d_result["ready"]:
-                return  # 还没加载完，继续等待
-
-            # 加载完成，停止定时器
-            live2d_check_timer.stop()
-
-            if not live2d_result["success"]:
-                logger.info("Live2D 加载失败，保持默认悬浮球")
-                return
-
-            # 验证模型路径
-            live2d_module = live2d_result["module"]
-            model_path_obj = Path(live2d_model_path)
-            if not model_path_obj.exists():
-                logger.warning(f"Live2D 模型文件不存在: {live2d_model_path}，保持默认悬浮球")
-                return
-
-            # 在主线程中创建 Live2D 窗口并替换
-            try:
-                live2d_ball = Live2DBallWindow(
-                    model_path=live2d_model_path,
-                    to_main_queue=to_main_queue,
-                    from_main_queue=from_main_queue,
-                    main_pid=main_pid,
-                    flet_pid=flet_pid,
-                    width=live2d_width,
-                    height=live2d_height,
-                )
-
-                # 迁移聊天窗口（如果已创建）
-                if ball._chat_window is not None:
-                    chat_win = ball._chat_window
-                    was_visible = chat_win.isVisible()
-                    chat_win.hide()
-                    # 将聊天窗口转移给 Live2D 窗口
-                    live2d_ball._chat_window = chat_win
-                    if was_visible:
-                        live2d_ball._chat_window.update_position(live2d_ball.pos())
-                        live2d_ball._chat_window.show()
-                    live2d_ball._toggle_chat_action.setText(
-                        "收起聊天窗口" if was_visible else "展开聊天窗口"
-                    )
-
-                # 隐藏默认悬浮球，显示 Live2D 窗口
-                ball.hide()
-                # 将 Live2D 窗口放到默认悬浮球相同位置
-                live2d_ball.move(ball.pos())
-                live2d_ball.show()
-
-                logger.info("Live2D 窗口已替换默认悬浮球（异步切换完成）")
-
-                # 将 live2d_module 和窗口引用存在 app 上，供 finally 清理使用
-                app.setProperty("live2d_module", live2d_module)
-                app.setProperty("live2d_ball", live2d_ball)
-                app.setProperty("default_ball", ball)
-
-            except Exception as e:
-                logger.error(f"创建 Live2D 窗口失败，保持默认悬浮球: {e}")
-
-        live2d_check_timer = QTimer()
-        live2d_check_timer.timeout.connect(_check_live2d_and_switch)
-        live2d_check_timer.start(100)  # 每 100ms 检查一次
+    if show_immediately:
+        ball.show()
+        log_perf("默认悬浮球窗口显示完成")
     else:
-        logger.info("Live2D 未启用或模型路径无效，使用默认悬浮球窗口")
+        # 预启动模式：窗口初始隐藏，等待主进程的 SHOW_WINDOW 消息
+        logger.info("预启动模式：悬浮球窗口已创建，初始隐藏")
+
+    # 输出启动性能日志
+    total_time = time.time() - start_time
+    logger.info("=" * 60)
+    logger.info("悬浮球进程启动性能报告:")
+    for log_entry in perf_log:
+        logger.info(f"  {log_entry}")
+    logger.info(f"  [{total_time:.3f}s] 总启动时间")
+    logger.info("=" * 60)
+
+    # 判断是否达标
+    if total_time < 2.0:
+        logger.info(f"✓ 启动性能达标（{total_time:.3f}s < 2s）")
+    else:
+        logger.warning(f"✗ 启动性能未达标（{total_time:.3f}s >= 2s）")
+
+    # 检查 Live2D 状态并记录日志
+    if live2d_enabled and live2d_model_path:
+        if ball._live2d_widget is not None:
+            logger.info("Live2D 悬浮球已启用并成功初始化")
+        else:
+            logger.warning("Live2D 启用但初始化失败，回退到默认悬浮球窗口")
+    else:
+        logger.info("使用默认悬浮球窗口")
 
     # 运行应用
     try:
         sys.exit(app.exec())
-    finally:
-        # 清理 Live2D 资源
-        live2d_mod = app.property("live2d_module") if app.property("live2d_module") is not None else None
-        if live2d_mod:
-            try:
-                live2d_mod.dispose()
-                logger.info("Live2D 资源已清理")
-            except Exception as e:
-                logger.error(f"清理 Live2D 资源失败: {e}")
+    except KeyboardInterrupt:
+        logger.info("应用被用户中断")
+    except Exception as e:
+        logger.error(f"应用运行异常: {e}")
 
 
 def test_live2d_integration() -> None:

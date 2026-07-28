@@ -18,11 +18,13 @@ from config import get_config, set_config
 from logger import get_logger
 from executor import Executor
 from memory import SqliteMemory
+from scheduler import TaskScheduler
 from skill_agent import SkillAgent, SKILL_AGENT_AWAITING_USER_REPLY
-from ui_flet.state import AppState, StreamType
+from ui_flet.state import AppState, LLMCommunicationState, StreamType
 from ui_flet.theme import ThemeManager, get_color, DEFAULT_FONT_CONFIG
 from ui_flet.components.message_list import MessageList
 from ui_flet.components.input_area import InputArea
+from ui_flet.components.llm_status_indicator import LLMStatusIndicator
 from ui_flet.utils.file_upload_manager import UploadedFileInfo
 from ui_flet.utils.message_utils import try_parse_json_content
 from ui_flet.components.await_user_card import AwaitUserCard
@@ -32,6 +34,50 @@ from ui_flet.views.settings_dialog import SettingsDialog
 
 if TYPE_CHECKING:
     from skill_agent import SkillAgent
+
+
+def _get_state_display_text(state: str) -> str:
+    """将状态枚举转换为友好的中文显示文本
+
+    Args:
+        state: LLM通信状态枚举值
+
+    Returns:
+        中文显示文本
+    """
+    state_map = {
+        "IDLE": "空闲",
+        "SENDING_REQUEST": "正在发送请求",
+        "WAITING_FOR_RESPONSE": "等待响应中",
+        "RECEIVING_STREAM": "正在接收响应",
+        "COMMUNICATION_ENDED": "通信结束"
+    }
+    return state_map.get(state, state)
+
+
+def _get_warning_display_text(warning_type: str, state: str, duration_ms: int) -> str:
+    """将告警信息转换为友好的中文显示文本
+
+    Args:
+        warning_type: 告警类型（timeout, stream_stall等）
+        state: LLM通信状态
+        duration_ms: 持续时间（毫秒）
+
+    Returns:
+        中文显示文本
+    """
+    duration_sec = duration_ms // 1000
+
+    if warning_type == "timeout":
+        return f"等待响应超时 ({duration_sec}秒)"
+    elif warning_type == "stream_stall":
+        return f"数据流停滞 ({duration_sec}秒未收到数据)"
+    elif warning_type == "response_timeout":
+        return f"响应超时 ({duration_sec}秒)"
+    elif warning_type == "network_error":
+        return f"网络通信异常 ({duration_sec}秒)"
+    else:
+        return f"未知告警: {warning_type} ({duration_sec}秒)"
 
 
 class MainWindow:
@@ -69,6 +115,9 @@ class MainWindow:
         # 主题管理
         self._theme_manager = ThemeManager()
 
+        # 定时任务调度器（在 _init_backend_components 中实例化）
+        self._scheduler: TaskScheduler | None = None
+
         # 初始化后端组件
         self._init_backend_components()
 
@@ -79,6 +128,7 @@ class MainWindow:
         self._message_list: MessageList | None = None
         self._input_area: InputArea | None = None
         self._floating_chat_window: FloatingChatWindow | None = None
+        self._llm_status_indicator: LLMStatusIndicator | None = None
 
         # 侧边栏折叠状态
         self._sidebar_collapsed = False
@@ -158,6 +208,11 @@ class MainWindow:
             )
             self._logger.info("SkillAgent 初始化完成")
 
+            # 初始化定时任务调度器（依赖主窗口引用，需在最后实例化）
+            self._scheduler = TaskScheduler(tray_icon=None, main_window=self)
+            self._scheduler.start()
+            self._logger.info("TaskScheduler 初始化完成")
+
         except Exception:
             self._logger.exception("后端组件初始化失败")
             # 即使初始化失败，也要创建基本组件以避免程序崩溃
@@ -165,6 +220,7 @@ class MainWindow:
             self.executor = None
             self._memory = None
             self.skill_agent = None
+            self._scheduler = None
 
     def _setup_window_events(self) -> None:
         """设置窗口事件处理"""
@@ -344,6 +400,7 @@ class MainWindow:
         async def on_close(e):
             """直接关闭"""
             self._dismiss_close_dialog()
+            self._stop_scheduler()
             self._page.window.prevent_close = False
             # 必须先 update 同步 prevent_close=False 到客户端，
             # 否则 window.close() 触发的关闭会被客户端的旧值(True)阻止
@@ -494,13 +551,18 @@ class MainWindow:
         # 创建输入区域
         self._input_area = InputArea(self._page)
         self._input_area.set_on_send(self._on_message_send)
+        self._input_area.set_on_stop(self.request_stop_worker)
 
-        # 右侧聊天区域（消息列表 + 等待用户卡片 + 输入区域，与旧版 PySide6 一致：内边距 10，间距 8）
+        # 创建LLM状态指示器
+        self._llm_status_indicator = LLMStatusIndicator()
+
+        # 右侧聊天区域（消息列表 + 等待用户卡片 + 输入区域 + 状态指示器，与旧版 PySide6 一致：内边距 10，间距 8）
         chat_content = ft.Column(
             [
                 self._message_list,
                 self._await_user_card,
                 self._input_area.get_control(),
+                self._llm_status_indicator.get_control(),
             ],
             spacing=8,
             expand=True,
@@ -1322,7 +1384,12 @@ class MainWindow:
                 return
 
             stream_type = self._app_state.stream.get_current_type()
-            msg_type = "think" if stream_type == StreamType.THINK else "assistant"
+            if stream_type == StreamType.THINK:
+                msg_type = "think"
+            elif stream_type == StreamType.TOOL_CALL:
+                msg_type = "tool_call"
+            else:
+                msg_type = "assistant"
             self._logger.info(f"[StreamCallback] 流类型: {stream_type}, 消息类型: {msg_type}")
 
             # 添加一条空消息卡片，并立即把它登记为本次流的"打字机目标卡片"。
@@ -1396,7 +1463,12 @@ class MainWindow:
             # 同步完整消息到悬浮窗口（Flet overlay）
             if self._floating_chat_window:
                 stream_type = self._app_state.stream.get_current_type()
-                msg_type = "think" if stream_type == StreamType.THINK else "assistant"
+                if stream_type == StreamType.THINK:
+                    msg_type = "think"
+                elif stream_type == StreamType.TOOL_CALL:
+                    msg_type = "tool_call"
+                else:
+                    msg_type = "assistant"
                 self._floating_chat_window.add_message(msg_type, full_text)
                 self._logger.info(f"[StreamCallback] 已同步完整消息到悬浮窗口: type={msg_type}, length={len(full_text)}")
 
@@ -1411,11 +1483,17 @@ class MainWindow:
             from ui_flet import main as main_module
             from ui_flet.floating_ball_ipc import MessageType, make_message
 
-            # 使用悬浮球的队列发送消息
-            _to_ball_queue = getattr(main_module, '_to_ball_queue', None)
-            if _to_ball_queue is not None:
-                _to_ball_queue.put(make_message(MessageType.CHAT_RECEIVE_MESSAGE, content=content))
-                self._logger.info(f"[StreamCallback] 已发送助手回复到悬浮聊天窗口: length={len(content)}")
+            # 使用优化的 IPC 发送函数（批量发送）
+            send_ipc_message = getattr(main_module, 'send_ipc_message', None)
+            if send_ipc_message is not None:
+                send_ipc_message(make_message(MessageType.CHAT_RECEIVE_MESSAGE, content=content))
+                self._logger.debug(f"[StreamCallback] 已发送助手回复到悬浮聊天窗口: length={len(content)}")
+            else:
+                # 回退到原始方式
+                _to_ball_queue = getattr(main_module, '_to_ball_queue', None)
+                if _to_ball_queue is not None:
+                    _to_ball_queue.put(make_message(MessageType.CHAT_RECEIVE_MESSAGE, content=content))
+                    self._logger.debug(f"[StreamCallback] 已发送助手回复到悬浮聊天窗口: length={len(content)}")
         except Exception as e:
             self._logger.warning(f"[StreamCallback] 发送助手回复到悬浮聊天窗口失败: {e}")
 
@@ -1626,6 +1704,10 @@ class MainWindow:
             # 思考消息
             self._handle_stream_message(message, "think", conversation_id)
             # 注意：不在此处同步到悬浮窗口，流式消息已在 _handle_stream_message 中处理
+        elif msg_type == "tool_call":
+            # 工具调用流式消息（新增）
+            self._handle_stream_message(message, "tool_call", conversation_id)
+            # 注意：不在此处同步到悬浮窗口，流式消息已在 _handle_stream_message 中处理
         elif msg_type == "tool":
             # 工具调用消息（只在主窗口显示）
             # 关键修复：必须先 complete 当前流，再添加 tool_call 卡片。
@@ -1656,8 +1738,8 @@ class MainWindow:
                 try:
                     token_usage = json.loads(message)
                     self._floating_chat_window.finalize_last_message(token_usage)
-                except:
-                    pass
+                except Exception as e:
+                    self._logger.debug(f"解析 token_usage JSON 失败: {e}")
         elif msg_type == "await_user":
             # 等待用户回复
             self._handle_await_user(message, conversation_id)
@@ -1670,8 +1752,8 @@ class MainWindow:
                         spec,
                         on_confirm_send=lambda t: self._on_floating_chat_send(t)
                     )
-                except:
-                    pass
+                except Exception as e:
+                    self._logger.debug(f"解析 await_user JSON 失败: {e}")
         elif msg_type == "mode":
             # 模式消息（用于显示徽章）
             pass  # 可以在这里添加模式徽章显示
@@ -1686,6 +1768,59 @@ class MainWindow:
             # 同步到悬浮窗口
             if self._floating_chat_window:
                 self._floating_chat_window.add_message("assistant", message)
+        elif msg_type == "llm_state_update":
+            # LLM通信状态更新
+            import json
+            state_data = json.loads(message)
+            # 更新前端状态
+            new_state = LLMCommunicationState(
+                state=state_data.get("state", "IDLE"),
+                timestamp=state_data.get("timestamp", 0.0),
+                model=state_data.get("model"),
+                session_id=state_data.get("session_id"),
+                duration_ms=state_data.get("duration_ms", 0),
+                error_message=state_data.get("error_message")
+            )
+            self._app_state.llm_communication = new_state
+
+            # 更新状态指示器UI
+            if self._llm_status_indicator:
+                self._llm_status_indicator.update_state(new_state)
+
+            # 在控制台日志中显示状态信息
+            state_display = _get_state_display_text(state_data.get("state", "IDLE"))
+            duration_ms = state_data.get("duration_ms", 0)
+            self._logger.info(f"[LLM通信] {state_display} (耗时: {duration_ms}ms)")
+        elif msg_type == "llm_state_warning":
+            # LLM通信超时告警
+            try:
+                warning_data = json.loads(message)
+                warning_type = warning_data.get("warning_type", "unknown")
+                state = warning_data.get("state", "UNKNOWN")
+                duration_ms = warning_data.get("duration_ms", 0)
+                warning_msg = warning_data.get("message", "")
+
+                # 转换为友好显示文本
+                display_text = _get_warning_display_text(warning_type, state, duration_ms)
+
+                # 记录告警日志（WARNING级别）
+                self._logger.warning(
+                    f"[LLM告警] {display_text} (详情: {warning_msg})"
+                )
+
+                # 可选：在UI中显示告警通知（SnackBar）
+                # 注意：SnackBar 可能会干扰用户操作，建议仅在严重超时时启用
+                # self._page.snack_bar = ft.SnackBar(
+                #     content=ft.Text(display_text, color=ft.Colors.WHITE),
+                #     bgcolor=ft.Colors.ORANGE_700,
+                #     duration=3000,
+                # )
+                # self._page.snack_bar.open = True
+
+            except json.JSONDecodeError:
+                self._logger.error(f"[LLM告警] 解析告警数据失败: {message}")
+            except Exception as e:
+                self._logger.exception(f"[LLM告警] 处理告警异常: {e}")
         else:
             # 其他消息类型（info, tool_call等）
             if self._message_list and msg_type in ["info", "tool_call"]:
@@ -1756,7 +1891,12 @@ class MainWindow:
 
         # 检查是否需要切换流类型
         current_stream_type = stream_state.get_current_type()
-        new_stream_type = StreamType.THINK if msg_type == "think" else StreamType.CONTENT
+        if msg_type == "think":
+            new_stream_type = StreamType.THINK
+        elif msg_type == "tool_call":
+            new_stream_type = StreamType.TOOL_CALL
+        else:
+            new_stream_type = StreamType.CONTENT
 
         self._logger.debug("[_handle_stream_message] 流状态: current_type=%s, new_type=%s, is_streaming=%s",
                            current_stream_type, new_stream_type, stream_state.is_streaming())
@@ -1825,6 +1965,77 @@ class MainWindow:
                 self.skill_agent.request_stop()
             self._logger.info("请求停止工作线程")
 
+    # ==================== 定时任务接口 ====================
+
+    def is_agent_busy(self) -> bool:
+        """Agent 工作线程是否正在运行（供 TaskScheduler 触发前检查，避免线程竞争）"""
+        return bool(self._worker_thread and self._worker_thread.is_alive())
+
+    def create_conversation_for_scheduled_task(self, task) -> None:
+        """
+        定时任务触发：创建新会话并将任务内容作为用户消息发起 Agent 对话。
+
+        供 TaskScheduler（后台线程）调用；UI 操作通过 page.run_task 调度到
+        Flet 主线程执行，避免跨线程操作 UI。
+
+        Args:
+            task: ScheduledTask 对象（使用 task.content 作为用户消息）
+        """
+        if not self.skill_agent:
+            self._logger.error("SkillAgent 未初始化，无法处理定时任务对话")
+            return
+
+        content = (getattr(task, "content", "") or "").strip()
+        if not content:
+            self._logger.warning(f"定时任务 {getattr(task, 'task_id', '?')} 内容为空，跳过")
+            return
+
+        self._logger.info(
+            f"定时任务触发 Agent 对话: {getattr(task, 'title', '')} - {content[:50]}"
+        )
+        self._page.run_task(self._run_scheduled_task_conversation, content)
+
+    async def _run_scheduled_task_conversation(self, content: str) -> None:
+        """在 Flet 主线程中执行定时任务对话流程"""
+        try:
+            # 按配置决定是否显示主窗口
+            if config.SCHEDULED_TASK_SHOW_WINDOW:
+                self.show_main_window()
+
+            # 双重检查：若触发后用户抢先发起了对话，则跳过本次（任务已被标记 triggered）
+            if self.is_agent_busy():
+                self._logger.warning("定时任务对话执行时工作线程正忙，跳过本次对话")
+                return
+
+            # 创建新会话并切换
+            conversation_id = self._create_new_conversation()
+            if not conversation_id:
+                self._logger.error("定时任务创建新会话失败")
+                return
+
+            # 添加用户消息到消息列表
+            if self._message_list:
+                self._message_list.add_message("user", content)
+
+            # 设置 UI 运行状态
+            self._app_state.ui.set_task_running(True)
+            if self._input_area:
+                self._input_area.set_inference_running(True)
+
+            # 启动工作线程处理 SkillAgent 调用
+            self._start_skill_agent_worker(content, conversation_id)
+        except Exception as e:
+            self._logger.exception(f"定时任务对话执行失败: {e}")
+
+    def _stop_scheduler(self) -> None:
+        """停止定时任务调度器（窗口关闭/退出应用时调用）"""
+        scheduler = getattr(self, "_scheduler", None)
+        if scheduler is not None:
+            try:
+                scheduler.stop()
+            except Exception as e:
+                self._logger.warning(f"停止 TaskScheduler 失败: {e}")
+
     # ==================== 悬浮球公共接口 ====================
 
     def show_main_window(self) -> None:
@@ -1841,6 +2052,7 @@ class MainWindow:
     async def quit_application(self) -> None:
         """退出应用（供桌面悬浮球调用）"""
         self._logger.info("悬浮球请求：退出应用")
+        self._stop_scheduler()
 
         # 使用线程延迟退出，避免在异步上下文中直接退出
         import threading

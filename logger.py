@@ -4,8 +4,15 @@
 日志文件位置:
 - 开发环境: PersonalData/logs/app.log
 - 打包环境: %APPDATA%/OpenPersonalAgent/logs/app.log
+
+性能优化：
+- 生产环境默认使用INFO级别，降低I/O开销
+- 支持DEBUG_MODE环境变量切换DEBUG级别
+- 区分控制台和文件日志级别
+- 使用延迟字符串格式化（%）避免无效字符串操作
 """
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -16,13 +23,33 @@ from resource_path import paths
 _logger: Optional[logging.Logger] = None
 
 
-def setup_logger(name: str = "OpenPersonalAgent", level: int = logging.DEBUG) -> logging.Logger:
+def _get_log_levels() -> tuple[int, int]:
+    """
+    获取日志级别配置（生产环境优化）
+    
+    Returns:
+        (console_level, file_level) 元组
+        - 生产环境：控制台INFO，文件INFO
+        - DEBUG模式：控制台DEBUG，文件DEBUG
+    """
+    # 检查环境变量或配置文件中的DEBUG_MODE
+    debug_mode = os.getenv("DEBUG_MODE", "").lower() in ("true", "1", "yes", "on")
+    
+    if debug_mode:
+        # 开发/调试模式：使用DEBUG级别
+        return logging.DEBUG, logging.DEBUG
+    else:
+        # 生产环境：使用INFO级别，降低I/O开销
+        return logging.INFO, logging.INFO
+
+
+def setup_logger(name: str = "OpenPersonalAgent", level: int = None) -> logging.Logger:
     """
     配置并返回日志记录器
     
     Args:
         name: 日志记录器名称
-        level: 日志级别
+        level: 日志级别（可选，未提供时自动检测DEBUG_MODE）
         
     Returns:
         配置好的日志记录器
@@ -32,8 +59,17 @@ def setup_logger(name: str = "OpenPersonalAgent", level: int = logging.DEBUG) ->
     if _logger is not None:
         return _logger
     
+    # 自动获取日志级别配置
+    if level is None:
+        console_level, file_level = _get_log_levels()
+    else:
+        # 显式指定级别时，统一使用该级别
+        console_level = level
+        file_level = level
+    
     logger = logging.getLogger(name)
-    logger.setLevel(level)
+    # Logger的级别设为最低，由各个Handler控制输出
+    logger.setLevel(logging.DEBUG)
     
     # 避免重复添加 handler
     if logger.handlers:
@@ -46,29 +82,32 @@ def setup_logger(name: str = "OpenPersonalAgent", level: int = logging.DEBUG) ->
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # 控制台处理器 - 始终添加
+    # 控制台处理器 - 区分日志级别
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(console_level)  # 生产环境INFO，调试模式DEBUG
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
-    # 文件处理器
+    # 文件处理器（delay=True：首次写入才打开文件，避免启动时I/O）
     try:
         log_dir = paths.get_log_dir()
         log_file = log_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
-        
+
         file_handler = logging.FileHandler(
             log_file,
             encoding='utf-8',
-            mode='a'
+            mode='a',
+            delay=True  # 延迟打开文件，优化启动性能
         )
-        file_handler.setLevel(logging.DEBUG)
+        file_handler.setLevel(file_level)  # 生产环境INFO，调试模式DEBUG
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-        
-        logger.info(f"日志文件: {log_file}")
+
+        # 使用延迟格式化（%），避免无效字符串操作
+        logger.info("日志文件: %s", log_file)
     except Exception as e:
-        logger.warning(f"无法创建日志文件: {e}")
+        # 使用延迟格式化（%），避免无效字符串操作
+        logger.warning("无法创建日志文件: %s", e)
     
     _logger = logger
     return logger
@@ -95,7 +134,12 @@ def install_exception_hook():
 
 
 class LoggerAdapter:
-    """日志适配器，提供便捷的日志方法"""
+    """日志适配器，提供便捷的日志方法
+    
+    性能优化：
+    - 使用延迟字符串格式化（%），避免无效字符串操作
+    - 使用 isEnabledFor() 检查，避免无效格式化
+    """
     
     def __init__(self, module_name: str = ""):
         self._module_name = module_name
@@ -108,29 +152,44 @@ class LoggerAdapter:
         return self._logger
     
     def debug(self, msg: str, *args, **kwargs):
-        if self._module_name:
-            msg = f"[{self._module_name}] {msg}"
-        self.logger.debug(msg, *args, **kwargs)
-    
+        """使用延迟格式化的debug方法"""
+        if self.logger.isEnabledFor(logging.DEBUG):
+            if self._module_name:
+                self.logger.debug("[%s] " + msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.debug(msg, *args, **kwargs)
+
     def info(self, msg: str, *args, **kwargs):
-        if self._module_name:
-            msg = f"[{self._module_name}] {msg}"
-        self.logger.info(msg, *args, **kwargs)
-    
+        """使用延迟格式化的info方法"""
+        if self.logger.isEnabledFor(logging.INFO):
+            if self._module_name:
+                self.logger.info("[%s] " + msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.info(msg, *args, **kwargs)
+
     def warning(self, msg: str, *args, **kwargs):
-        if self._module_name:
-            msg = f"[{self._module_name}] {msg}"
-        self.logger.warning(msg, *args, **kwargs)
-    
+        """使用延迟格式化的warning方法"""
+        if self.logger.isEnabledFor(logging.WARNING):
+            if self._module_name:
+                self.logger.warning("[%s] " + msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.warning(msg, *args, **kwargs)
+
     def error(self, msg: str, *args, **kwargs):
-        if self._module_name:
-            msg = f"[{self._module_name}] {msg}"
-        self.logger.error(msg, *args, **kwargs)
-    
+        """使用延迟格式化的error方法"""
+        if self.logger.isEnabledFor(logging.ERROR):
+            if self._module_name:
+                self.logger.error("[%s] " + msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.error(msg, *args, **kwargs)
+
     def exception(self, msg: str, *args, **kwargs):
-        if self._module_name:
-            msg = f"[{self._module_name}] {msg}"
-        self.logger.exception(msg, *args, **kwargs)
+        """使用延迟格式化的exception方法"""
+        if self.logger.isEnabledFor(logging.ERROR):
+            if self._module_name:
+                self.logger.exception("[%s] " + msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.exception(msg, *args, **kwargs)
 
 
 def get_module_logger(module_name: str) -> LoggerAdapter:

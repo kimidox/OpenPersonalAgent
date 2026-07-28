@@ -40,21 +40,32 @@ def _get_live2d_base_dir() -> Path:
 
 def _find_model3_json(model_dir: Path) -> Optional[Path]:
     """在模型目录中查找 .model3.json 文件"""
+    logger.debug(f"_find_model3_json: 开始查找，模型目录: {model_dir}")
+    
     if not model_dir.is_dir():
+        logger.warning(f"_find_model3_json: 目录不存在或不是目录: {model_dir}")
         return None
 
     # 直接在目录下查找
+    logger.debug(f"_find_model3_json: 在目录下直接查找 {MODEL3_JSON_SUFFIX} 文件...")
     for f in model_dir.iterdir():
+        logger.debug(f"_find_model3_json: 检查文件: {f.name}, 是否匹配: {f.name.endswith(MODEL3_JSON_SUFFIX)}")
         if f.is_file() and f.name.endswith(MODEL3_JSON_SUFFIX):
+            logger.info(f"_find_model3_json: ✓ 在目录下找到模型文件: {f}")
             return f
 
     # 可能在一级子目录中
+    logger.debug(f"_find_model3_json: 在一级子目录中查找...")
     for sub in model_dir.iterdir():
         if sub.is_dir():
+            logger.debug(f"_find_model3_json: 检查子目录: {sub.name}")
             for f in sub.iterdir():
+                logger.debug(f"_find_model3_json: 检查子目录文件: {f.name}, 是否匹配: {f.name.endswith(MODEL3_JSON_SUFFIX)}")
                 if f.is_file() and f.name.endswith(MODEL3_JSON_SUFFIX):
+                    logger.info(f"_find_model3_json: ✓ 在子目录中找到模型文件: {f}")
                     return f
 
+    logger.warning(f"_find_model3_json: ✗ 未找到 {MODEL3_JSON_SUFFIX} 文件，目录: {model_dir}")
     return None
 
 

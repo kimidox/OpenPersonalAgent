@@ -19,36 +19,48 @@ class SkillRegistry:
         self.skills_dir = Path(skills_dir).resolve()
         self._builtin_dir = Path(builtin_dir).resolve() if builtin_dir else None
         self._by_id: dict[str, SkillDefinition] = {}
-        self.reload()
+        self._loaded: bool = False  # 惰性加载标志
+
+    def _ensure_loaded(self) -> None:
+        """确保 Skills 已加载（惰性加载：首次访问时才扫描目录）"""
+        if not self._loaded:
+            self.reload()
 
     def reload(self) -> None:
         user_skills = load_all_skills(self.skills_dir)
         for s in user_skills:
             s.skill_type = "user"
-        
+
         builtin_skills: list[SkillDefinition] = []
         if self._builtin_dir and self._builtin_dir.is_dir():
             builtin_skills = load_builtin_skills(self._builtin_dir)
-        
+
         self._by_id = {}
         for s in user_skills:
             self._by_id[s.skill_id] = s
         for s in builtin_skills:
             self._by_id[s.skill_id] = s
 
+        self._loaded = True
+
     def list_skills(self) -> list[SkillDefinition]:
+        self._ensure_loaded()
         return list(self._by_id.values())
 
     def list_user_skills(self) -> list[SkillDefinition]:
+        self._ensure_loaded()
         return [s for s in self._by_id.values() if s.skill_type == "user"]
 
     def list_builtin_skills(self) -> list[SkillDefinition]:
+        self._ensure_loaded()
         return [s for s in self._by_id.values() if s.skill_type == "builtin"]
 
     def get(self, skill_id: str) -> SkillDefinition | None:
+        self._ensure_loaded()
         return self._by_id.get((skill_id or "").strip())
 
     def load_file(self, path: str | Path) -> SkillDefinition:
+        self._ensure_loaded()
         p = Path(path)
         if p.is_file():
             s = load_skill_from_path(p)
@@ -84,14 +96,11 @@ class SkillRegistry:
             logger.warning(f"系统内置 Skill「{skill_id}」不可移除")
             return False
         
-        skill_path = None
-        if skill.relative_path:
-            skill_path = self.skills_dir / skill.relative_path.parent
-        else:
-            skill_path = self.skills_dir / skill_id
+        # 直接用 skill_id 定位目录
+        skill_path = self.skills_dir / skill_id
         
-        if skill_path is None or not skill_path.exists():
-            logger.warning(f"无法找到 Skill「{skill_id}」的文件路径")
+        if not skill_path.exists():
+            logger.warning(f"无法找到 Skill「{skill_id}」的文件路径: {skill_path}")
             return False
         
         try:

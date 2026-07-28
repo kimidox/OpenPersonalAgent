@@ -205,22 +205,12 @@ class SkillManagementPage:
             expand=True,
         )
 
-        # 延迟加载技能列表（在页面更新后）
-        # 使用 run_task 在构建完成后异步加载技能
-        self._page.run_task(self._async_load_skills)
-
         self._logger.info("SkillManagementPage: 页面构建完成")
         return self._container
 
-    async def _async_load_skills(self) -> None:
-        """异步加载技能列表"""
-        # 等待一小段时间确保页面已渲染
-        await asyncio.sleep(0.1)
-        self._load_skills()
-
-    def _on_page_ready(self, e) -> None:
-        """页面准备就绪时加载技能"""
-        # 确保在主线程中加载技能
+    async def async_load_data(self) -> None:
+        """异步加载数据，在页面可见后调用"""
+        await asyncio.sleep(0)
         self._load_skills()
 
     def _load_skills(self) -> None:
@@ -241,6 +231,10 @@ class SkillManagementPage:
 
         filtered_skills = []
         for skill in skills:
+            # 跳过 id 为空的异常条目（通常是安装残留的损坏 Skill）
+            if not (getattr(skill, "id", "") or "").strip():
+                continue
+
             # 类型筛选
             if filter_type != "all":
                 if filter_type not in skill.tags and filter_type not in skill.name.lower():
@@ -448,14 +442,17 @@ class SkillManagementPage:
         try:
             manager = self._get_skill_manager()
             if file_path.endswith(".zip"):
-                try:
+                # 先预检查冲突，不提取任何文件
+                conflicts = manager.check_zip_conflicts(file_path)
+                if conflicts:
+                    # 有冲突，先询问用户是否覆盖
+                    conflict_names = ", ".join(conflicts)
+                    self._confirm_zip_overwrite(file_path, conflict_names)
+                else:
+                    # 无冲突，直接安装
                     manager.install_from_zip(file_path)
                     self._load_skills()
                     self._show_snackbar("Skill ZIP已导入", success=True)
-                except FileExistsError as fee:
-                    # ZIP中包含已存在的Skill，询问是否覆盖
-                    skill_name = str(fee) if fee else "未知"
-                    self._confirm_zip_overwrite(file_path, skill_name)
             else:
                 skill_id = manager.import_skill(file_path)
                 self._load_skills()
@@ -515,6 +512,8 @@ class SkillManagementPage:
 
     def _on_publish_click(self, skill_id: str) -> None:
         """发布按钮点击事件"""
+        if not (skill_id or "").strip():
+            return
         manager = self._get_skill_manager()
         skill = manager.get_skill_metadata(skill_id)
         if skill is None:
@@ -695,6 +694,19 @@ class SkillManagementPage:
             f"确定要删除Skill '{skill.name}' 吗？\n此操作不可撤销。",
             lambda: self._delete_skill(skill_id),
         )
+
+    def _delete_skill(self, skill_id: str) -> None:
+        """删除技能"""
+        try:
+            manager = self._get_skill_manager()
+            if manager.delete_skill(skill_id):
+                self._load_skills()
+                self._show_snackbar("Skill已删除", success=True)
+            else:
+                self._show_snackbar("删除Skill失败", success=False)
+        except Exception as ex:
+            self._logger.exception("删除Skill失败")
+            self._show_snackbar(f"删除失败: {ex}", success=False)
 
     def _show_confirm_dialog(
         self,

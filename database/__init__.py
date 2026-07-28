@@ -59,69 +59,56 @@ def _create_fts_tables():
         conn.commit()
 
 
+def _get_existing_columns(table_name: str) -> set[str]:
+    """获取表的现有列名集合（单次 PRAGMA table_info）"""
+    with engine.connect() as conn:
+        result = conn.execute(text(f"PRAGMA table_info({table_name})"))
+        return {row[1] for row in result}
+
+
+def _add_missing_columns(table_name: str, columns: dict[str, str]) -> None:
+    """
+    批量添加缺失的列
+
+    Args:
+        table_name: 表名
+        columns: {列名: SQL定义} 字典，如 {"execution_type": "TEXT DEFAULT 'notification'"}
+    """
+    existing = _get_existing_columns(table_name)
+    missing = {name: definition for name, definition in columns.items() if name not in existing}
+
+    if not missing:
+        return
+
+    with engine.connect() as conn:
+        for col_name, col_def in missing.items():
+            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}"))
+        conn.commit()
+
+
 def _migrate_scheduled_tasks():
-    """
-    为 scheduled_tasks 表添加缺失的列
-    """
-    with engine.connect() as conn:
-        # 检查列是否已存在，不存在则添加
-        # 1. execution_type 列
-        try:
-            conn.execute(text("SELECT execution_type FROM scheduled_tasks LIMIT 1"))
-        except Exception:
-            conn.execute(text("ALTER TABLE scheduled_tasks ADD COLUMN execution_type TEXT DEFAULT 'notification'"))
-        
-        # 2. execution_chain 列
-        try:
-            conn.execute(text("SELECT execution_chain FROM scheduled_tasks LIMIT 1"))
-        except Exception:
-            conn.execute(text("ALTER TABLE scheduled_tasks ADD COLUMN execution_chain TEXT"))
-        
-        # 3. source_conversation_id 列
-        try:
-            conn.execute(text("SELECT source_conversation_id FROM scheduled_tasks LIMIT 1"))
-        except Exception:
-            conn.execute(text("ALTER TABLE scheduled_tasks ADD COLUMN source_conversation_id TEXT"))
-        
-        # 4. skill_ids 列
-        try:
-            conn.execute(text("SELECT skill_ids FROM scheduled_tasks LIMIT 1"))
-        except Exception:
-            conn.execute(text("ALTER TABLE scheduled_tasks ADD COLUMN skill_ids TEXT"))
-        
-        conn.commit()
+    """为 scheduled_tasks 表添加缺失的列（批量检查 + 批量添加）"""
+    _add_missing_columns("scheduled_tasks", {
+        "execution_type": "TEXT DEFAULT 'notification'",
+        "execution_chain": "TEXT",
+        "source_conversation_id": "TEXT",
+        "skill_ids": "TEXT",
+    })
 
 
-def _migrate_conversations_type():
-    """
-    为 conversations 表添加 type 列
-    """
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("SELECT type FROM conversations LIMIT 1"))
-        except Exception:
-            conn.execute(text("ALTER TABLE conversations ADD COLUMN type TEXT DEFAULT 'agent_conversation'"))
-        conn.commit()
-
-
-def _migrate_conversations_default_skills():
-    """
-    为 conversations 表添加 default_skills 列
-    """
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("SELECT default_skills FROM conversations LIMIT 1"))
-        except Exception:
-            conn.execute(text("ALTER TABLE conversations ADD COLUMN default_skills TEXT DEFAULT '[]'"))
-        conn.commit()
+def _migrate_conversations():
+    """为 conversations 表添加缺失的列（批量检查 + 批量添加）"""
+    _add_missing_columns("conversations", {
+        "type": "TEXT DEFAULT 'agent_conversation'",
+        "default_skills": "TEXT DEFAULT '[]'",
+    })
 
 
 def init_db():
     Base.metadata.create_all(engine)
     _create_fts_tables()
     _migrate_scheduled_tasks()
-    _migrate_conversations_type()
-    _migrate_conversations_default_skills()
+    _migrate_conversations()
 
 
 if __name__ == '__main__':

@@ -10,6 +10,7 @@ Flet 设置对话框
 """
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Callable
 
 import flet as ft
@@ -120,12 +121,15 @@ class SettingsDialog:
         # 内层容器引用（用于拖动）
         self._inner_container: ft.Container | None = None
 
-        # 创建对话框内容
-        self._build_dialog()
+        # 加载占位符引用
+        self._loading_placeholder: ft.Column | None = None
 
-    def _build_dialog(self) -> None:
-        """构建对话框内容"""
-        self._logger.info("SettingsDialog: 开始构建对话框")
+        # 创建对话框外壳（不创建任何页面实例）
+        self._build_dialog_shell()
+
+    def _build_dialog_shell(self) -> None:
+        """构建对话框外壳（不含页面内容，页面内容将异步加载）"""
+        self._logger.info("SettingsDialog: 开始构建对话框外壳")
         colors = self._theme_manager.get_color_scheme()
 
         # 创建顶部标题栏
@@ -212,7 +216,7 @@ class SettingsDialog:
             expand=True,
             bgcolor="#00000059",
         )
-        self._logger.info("SettingsDialog: 对话框构建完成")
+        self._logger.info("SettingsDialog: 对话框外壳构建完成")
 
     def _create_title_bar(self) -> ft.Container:
         """
@@ -349,25 +353,87 @@ class SettingsDialog:
 
     def _create_content_area(self) -> ft.Column:
         """
-        创建右侧内容区域
+        创建右侧内容区域（初始仅显示加载占位符，默认页面将异步加载）
 
         Returns:
             内容区域
         """
-        # 只创建默认分类的内容面板（懒加载）
-        # 其他分类的面板在切换时才创建
-        default_panel = self._create_content_panel(self._current_category)
-        self._content_panels[self._current_category] = default_panel
-        default_panel.visible = True  # 默认面板可见
+        colors = self._theme_manager.get_color_scheme()
 
-        # 返回面板容器（后续切换时动态添加面板）
+        # 加载占位符
+        self._loading_placeholder = ft.Column([
+            ft.Container(height=40),
+            ft.ProgressBar(width=200, color=colors.primary),
+            ft.Container(height=16),
+            ft.Text("加载中...", size=11, color=colors.text_muted, text_align=ft.TextAlign.CENTER),
+        ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True)
+
         self._content_area = ft.Column(
-            [default_panel],
+            [self._loading_placeholder],
             spacing=0,
             expand=True,
         )
 
         return self._content_area
+
+    def _show_loading_placeholder(self) -> None:
+        """在内容区域显示加载占位符"""
+        if not self._content_area or not self._loading_placeholder:
+            return
+        if self._loading_placeholder not in self._content_area.controls:
+            # 隐藏其他面板
+            for p in list(self._content_area.controls):
+                if p != self._loading_placeholder:
+                    p.visible = False
+            self._content_area.controls.clear()
+            self._content_area.controls.append(self._loading_placeholder)
+        self._page.update()
+
+    def _remove_loading_placeholder(self) -> None:
+        """从内容区域移除加载占位符"""
+        if self._content_area and self._loading_placeholder and self._loading_placeholder in self._content_area.controls:
+            self._content_area.controls.remove(self._loading_placeholder)
+
+    async def _async_create_and_load_panel(self, category_id: str) -> None:
+        """异步创建内容面板并加载数据"""
+        try:
+            panel = self._create_content_panel(category_id)
+            self._content_panels[category_id] = panel
+
+            # 移除加载占位符并添加实际面板
+            self._remove_loading_placeholder()
+            if self._content_area:
+                self._content_area.controls.append(panel)
+
+            # 异步加载页面数据
+            await self._async_load_page_data(category_id)
+
+            # 显示面板
+            panel.visible = True
+            self._page.update()
+        except Exception as e:
+            self._logger.exception(f"异步创建面板失败: {e}")
+
+    async def _async_load_page_data(self, category_id: str) -> None:
+        """异步加载页面的数据"""
+        await asyncio.sleep(0)  # 让出 UI 线程
+
+        if category_id == "model" and self._model_config_page:
+            await self._model_config_page.async_load_data()
+        elif category_id == "skill_toggle" and self._skill_toggle_page:
+            await self._skill_toggle_page.async_load_data()
+        elif category_id == "skills" and self._skill_management_page:
+            await self._skill_management_page.async_load_data()
+        elif category_id == "voice" and self._voice_settings_page:
+            await self._voice_settings_page.async_load_data()
+        elif category_id == "shortcuts" and self._hotkey_settings_page:
+            pass  # 快捷键设置无需异步加载
+        elif category_id == "scheduled_tasks" and self._scheduled_tasks_page:
+            await self._scheduled_tasks_page.async_load_data()
+        elif category_id == "prompt_template" and self._prompt_template_page:
+            await self._prompt_template_page.async_load_data()
+        elif category_id == "live2d" and self._live2d_settings_page:
+            await self._live2d_settings_page.async_load_data()
 
     def _create_content_panel(self, category_id: str) -> ft.Container:
         """
@@ -518,24 +584,30 @@ class SettingsDialog:
                         control.color = colors.text if is_selected else colors.text_muted
 
     def _switch_content_panel(self) -> None:
-        """切换内容面板"""
-        # 隐藏所有面板
+        """切换内容面板（异步加载）"""
+        # 隐藏所有已有面板
         for panel in self._content_panels.values():
             panel.visible = False
 
-        # 检查当前选中的面板是否存在，不存在则创建（懒加载）
+        # 面板尚未创建，显示加载占位符并异步创建
         if self._current_category not in self._content_panels:
-            self._logger.info(f"SettingsDialog: 懒加载创建面板 {self._current_category}")
-            # 创建新的面板
-            new_panel = self._create_content_panel(self._current_category)
-            self._content_panels[self._current_category] = new_panel
-            # 将新面板添加到内容区域
-            if self._content_area:
-                self._content_area.controls.append(new_panel)
-
-        # 显示当前选中的面板
-        if self._current_category in self._content_panels:
-            self._content_panels[self._current_category].visible = True
+            self._logger.info(f"SettingsDialog: 异步创建面板 {self._current_category}")
+            # 显示加载占位符
+            self._show_loading_placeholder()
+            # 异步创建并加载面板
+            self._page.run_task(self._async_create_and_load_panel, self._current_category)
+        else:
+            # 面板已存在，确保它在内容区域中并显示
+            panel = self._content_panels.get(self._current_category)
+            if panel:
+                # 移除加载占位符（如果存在）
+                self._remove_loading_placeholder()
+                # 确保面板在内容区域中
+                if panel not in self._content_area.controls:
+                    self._content_area.controls.append(panel)
+                panel.visible = True
+            # 异步重新加载当前面板的数据
+            self._page.run_task(self._async_load_page_data, self._current_category)
 
     def _on_close_click(self, e) -> None:
         """
@@ -630,11 +702,23 @@ class SettingsDialog:
 
                 self._logger.debug(f"设置页面初始位置: x={self._dialog_x}, y={self._dialog_y}")
 
-            # 打开时刷新 Skill 相关页面，确保列表与磁盘状态一致
-            if self._skill_toggle_page is not None:
-                self._skill_toggle_page.refresh()
-            if self._skill_management_page is not None:
-                self._skill_management_page.refresh()
+            # 检查默认面板是否已创建，根据情况处理面板显示和数据加载
+            if self._current_category not in self._content_panels:
+                # 面板未创建：调用 _switch_content_panel() 异步创建面板并加载数据
+                self._switch_content_panel()
+            else:
+                # 面板已创建：确保面板在内容区域中并重新加载数据
+                panel = self._content_panels.get(self._current_category)
+                if panel and self._content_area:
+                    # 移除加载占位符（如果存在）
+                    self._remove_loading_placeholder()
+                    # 确保面板在内容区域中
+                    if panel not in self._content_area.controls:
+                        self._content_area.controls.append(panel)
+                    panel.visible = True
+                # 异步重新加载当前面板的数据
+                self._page.run_task(self._async_load_page_data, self._current_category)
+
             self._page.update()
 
     def close(self) -> None:

@@ -9,6 +9,8 @@ Flet 语音设置页面
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import threading
 import time
 from pathlib import Path
@@ -123,11 +125,6 @@ class VoiceSettingsPage:
             padding=20,
         )
 
-        # 初始状态刷新
-        self._refresh_asr_status()
-        self._refresh_tts_status()
-        self._refresh_tts_speakers()
-
         self._logger.info("VoiceSettingsPage: 页面构建完成")
         return self._container
 
@@ -155,8 +152,8 @@ class VoiceSettingsPage:
             label_style=ft.TextStyle(size=11),
             text_size=11,
             hint_text="选择语音识别模型",
-            options=self._get_asr_model_options(),
-            value=self._get_current_asr_model(),
+            options=[ft.dropdown.Option("default", "默认模型")],
+            value="default",
             on_select=self._on_asr_model_changed,
             expand=True,
         )
@@ -419,8 +416,8 @@ class VoiceSettingsPage:
             label_style=ft.TextStyle(size=11),
             text_size=11,
             hint_text="选择语音合成模型",
-            options=self._get_tts_model_options(),
-            value=self._get_current_tts_model(),
+            options=[ft.dropdown.Option("default", "默认模型")],
+            value="default",
             on_select=self._on_tts_model_changed,
             expand=True,
         )
@@ -648,8 +645,8 @@ class VoiceSettingsPage:
             label_style=ft.TextStyle(size=11),
             text_size=11,
             hint_text="选择麦克风",
-            options=self._get_audio_input_devices(),
-            value=self._get_current_input_device(),
+            options=[ft.dropdown.Option("default", "加载中...")],
+            value="default",
             on_select=self._on_input_device_changed,
             expand=True,
         )
@@ -659,8 +656,8 @@ class VoiceSettingsPage:
             label_style=ft.TextStyle(size=11),
             text_size=11,
             hint_text="选择扬声器",
-            options=self._get_audio_output_devices(),
-            value=self._get_current_output_device(),
+            options=[ft.dropdown.Option("default", "加载中...")],
+            value="default",
             on_select=self._on_output_device_changed,
             expand=True,
         )
@@ -1390,9 +1387,59 @@ class VoiceSettingsPage:
             if self._page.platform_thread_id == threading.current_thread().ident:
                 callback()
             else:
-                self._page.run(callback)
+                # 使用 run_task 在主线程调度异步任务
+                async def _wrapper():
+                    callback()
+                self._page.run_task(_wrapper)
         except Exception:
             try:
                 callback()
             except Exception:
                 pass
+
+    async def async_load_data(self) -> None:
+        """异步加载数据，在页面可见后调用"""
+        await asyncio.sleep(0)  # yield to UI
+
+        # 在线程中运行磁盘 I/O：音频设备枚举
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            input_future = executor.submit(self._get_audio_input_devices)
+            output_future = executor.submit(self._get_audio_output_devices)
+            asr_options_future = executor.submit(self._get_asr_model_options)
+            tts_options_future = executor.submit(self._get_tts_model_options)
+
+            input_devices = await asyncio.wrap_future(input_future)
+            output_devices = await asyncio.wrap_future(output_future)
+            asr_options = await asyncio.wrap_future(asr_options_future)
+            tts_options = await asyncio.wrap_future(tts_options_future)
+
+        # 更新音频设备下拉框
+        if self._input_device_dropdown:
+            self._input_device_dropdown.options = input_devices
+            self._input_device_dropdown.value = self._get_current_input_device()
+
+        if self._output_device_dropdown:
+            self._output_device_dropdown.options = output_devices
+            self._output_device_dropdown.value = self._get_current_output_device()
+
+        # 更新 ASR 模型下拉框
+        if self._asr_model_dropdown:
+            self._asr_model_dropdown.options = asr_options
+            self._asr_model_dropdown.value = self._get_current_asr_model()
+
+        # 更新 TTS 模型下拉框
+        if self._tts_model_dropdown:
+            self._tts_model_dropdown.options = tts_options
+            self._tts_model_dropdown.value = self._get_current_tts_model()
+
+        # 刷新状态
+        self._refresh_asr_status()
+        self._refresh_tts_status()
+        self._refresh_tts_speakers()
+
+        # 更新页面
+        try:
+            if self._page:
+                self._page.update()
+        except Exception:
+            pass

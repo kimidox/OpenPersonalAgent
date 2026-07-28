@@ -295,11 +295,91 @@ class SkillManager:
                 yaml_dict["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
                 updated_yaml = yaml.dump(yaml_dict, allow_unicode=True, default_flow_style=False)
                 content = f"---\n{updated_yaml}---\n\n{parts[2].strip()}"
+        else:
+            # 文件没有YAML front matter，添加新的
+            yaml_dict = {
+                "id": skill_id,
+                "name": source_path.stem,
+                "description": "",
+                "tags": [],
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            updated_yaml = yaml.dump(yaml_dict, allow_unicode=True, default_flow_style=False)
+            content = f"---\n{updated_yaml}---\n\n{content}"
 
         skill_file.write_text(content, encoding="utf-8")
         logger.info(f"已导入Skill: {skill_id}")
 
         return skill_id
+
+    def check_zip_conflicts(self, zip_path: str) -> list[str]:
+        """预检查ZIP包中的Skill是否与已有Skill冲突
+
+        只扫描ZIP结构，不提取任何文件。
+
+        Args:
+            zip_path: ZIP文件路径
+
+        Returns:
+            冲突的目录名列表（空列表表示无冲突）
+
+        Raises:
+            FileNotFoundError: ZIP文件不存在
+            ValueError: ZIP文件无效或未找到Markdown文件
+        """
+        zip_file = Path(zip_path)
+        if not zip_file.exists():
+            raise FileNotFoundError(f"ZIP文件不存在: {zip_path}")
+
+        if not zipfile.is_zipfile(zip_path):
+            raise ValueError(f"文件不是有效的ZIP格式: {zip_path}")
+
+        conflicts: list[str] = []
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+
+            # 过滤隐藏文件和 __pycache__
+            filtered_names = [
+                n for n in names
+                if not any(
+                    part.startswith(".") or part == "__pycache__"
+                    for part in Path(n).parts
+                )
+            ]
+
+            # 扫描ZIP结构，确定模式
+            root_md_files: list[str] = []
+            subdir_md_files: dict[str, list[str]] = {}
+
+            for name in filtered_names:
+                parts = Path(name).parts
+                if name.endswith((".md", ".markdown")):
+                    if len(parts) == 1:
+                        root_md_files.append(name)
+                    elif len(parts) >= 2:
+                        subdir_name = parts[0]
+                        if subdir_name not in subdir_md_files:
+                            subdir_md_files[subdir_name] = []
+                        subdir_md_files[subdir_name].append(name)
+
+            if not root_md_files and not subdir_md_files:
+                raise ValueError("ZIP 包中未找到有效的 Skill Markdown 文件")
+
+            if root_md_files:
+                # Flat模式
+                skill_dir_name = zip_file.stem
+                target_dir = Path(self.skills_dir) / skill_dir_name
+                if target_dir.exists():
+                    conflicts.append(skill_dir_name)
+            else:
+                # Package模式
+                for subdir_name in subdir_md_files:
+                    target_dir = Path(self.skills_dir) / subdir_name
+                    if target_dir.exists():
+                        conflicts.append(subdir_name)
+
+        return conflicts
 
     def install_from_zip(self, zip_path: str, overwrite: bool = False) -> list[str]:
         """从ZIP包安装Skill
@@ -368,10 +448,13 @@ class SkillManager:
                 skill_dir_name = zip_file.stem
                 target_dir = Path(self.skills_dir) / skill_dir_name
 
-                if target_dir.exists() and not overwrite:
-                    raise FileExistsError(
-                        f"Skill目录已存在: {target_dir}，如需覆盖请设置 overwrite=True"
-                    )
+                if target_dir.exists():
+                    if not overwrite:
+                        raise FileExistsError(
+                            f"Skill目录已存在: {target_dir}，如需覆盖请设置 overwrite=True"
+                        )
+                    # 覆盖安装前先清空旧目录，避免旧文件残留导致安装旧版本内容
+                    shutil.rmtree(target_dir)
 
                 # 提取所有内容到目标目录
                 for name in filtered_names:
@@ -394,10 +477,13 @@ class SkillManager:
                 for subdir_name, md_files in subdir_md_files.items():
                     target_dir = Path(self.skills_dir) / subdir_name
 
-                    if target_dir.exists() and not overwrite:
-                        raise FileExistsError(
-                            f"Skill目录已存在: {target_dir}，如需覆盖请设置 overwrite=True"
-                        )
+                    if target_dir.exists():
+                        if not overwrite:
+                            raise FileExistsError(
+                                f"Skill目录已存在: {target_dir}，如需覆盖请设置 overwrite=True"
+                            )
+                        # 覆盖安装前先清空旧目录，避免旧文件残留导致安装旧版本内容
+                        shutil.rmtree(target_dir)
 
                     # 提取该子目录的内容
                     for name in filtered_names:
@@ -429,6 +515,7 @@ class SkillManager:
         更新id为新生成的skill_id，更新created_at为当前时间。
         如果Markdown文件不叫SKILL.md，会自动重命名为SKILL.md。
         同时将目录重命名为skill_id。
+        如果文件没有YAML front matter，会自动添加。
 
         Args:
             skill_dir: Skill目录路径
@@ -436,12 +523,19 @@ class SkillManager:
         Returns:
             更新后的skill_id，如果未找到.md文件则返回None
         """
-        # 查找目录中的 .md/.markdown 文件
+        # 优先查找 SKILL.md
+        skill_md_path = skill_dir / "SKILL.md"
         md_file = None
-        for f in skill_dir.iterdir():
-            if f.is_file() and f.suffix in (".md", ".markdown"):
-                md_file = f
-                break
+        
+        if skill_md_path.exists():
+            # 已有 SKILL.md，直接使用
+            md_file = skill_md_path
+        else:
+            # 查找其他 .md/.markdown 文件
+            for f in skill_dir.iterdir():
+                if f.is_file() and f.suffix in (".md", ".markdown"):
+                    md_file = f
+                    break
 
         if md_file is None:
             logger.warning(f"Skill目录中未找到Markdown文件: {skill_dir}")
@@ -459,12 +553,26 @@ class SkillManager:
                 yaml_dict["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
                 updated_yaml = yaml.dump(yaml_dict, allow_unicode=True, default_flow_style=False)
                 content = f"---\n{updated_yaml}---\n\n{parts[2].strip()}"
+        else:
+            # 文件没有YAML front matter，添加新的
+            yaml_dict = {
+                "id": skill_id,
+                "name": skill_dir.name,
+                "description": "",
+                "tags": [],
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            updated_yaml = yaml.dump(yaml_dict, allow_unicode=True, default_flow_style=False)
+            content = f"---\n{updated_yaml}---\n\n{content}"
 
         # 如果文件名不是SKILL.md，重命名为SKILL.md
         if md_file.name != "SKILL.md":
-            skil_md_path = md_file.parent / "SKILL.md"
-            md_file.rename(skil_md_path)
-            md_file = skil_md_path
+            target_path = md_file.parent / "SKILL.md"
+            # 如果目标文件已存在，先删除（Windows 上 rename 不允许覆盖）
+            if target_path.exists():
+                target_path.unlink()
+            md_file.rename(target_path)
+            md_file = target_path
             logger.info(f"已重命名Markdown文件为SKILL.md: {skill_dir}")
 
         md_file.write_text(content, encoding="utf-8")

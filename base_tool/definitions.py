@@ -113,23 +113,41 @@ CONTROL_TOOL_DEFINITIONS: list[dict] = [
             "向用户询问关键信息或请求确认。\n"
             "用于：缺关键信息、多种策略需选择、敏感/不可逆操作需确认。\n"
             "用户回复后会从当前进度继续。\n"
-            "参数：question(必需)、choices(可选)、context(可选)。"
+            "参数：question(必需)、choices(可选)、context(可选)。\n\n"
+            "【参数构造规范】\n"
+            "- question: 必须是非空字符串，不能为 None 或空字符串\n"
+            "- choices: 可选参数，如果提供必须是字符串数组，不能包含 None 值\n"
+            "- context: 可选参数，如果提供必须是非空字符串，不能为 None\n\n"
+            "✅ 正确示例：\n"
+            "1. ask_user(question=\"是否继续执行？\", choices=[\"是\", \"否\"])\n"
+            "2. ask_user(question=\"请选择处理方式\", choices=[\"自动处理\", \"手动处理\", \"取消\"])\n"
+            "3. ask_user(question=\"缺少关键信息\", context=\"需要提供文件路径\")\n\n"
+            "❌ 错误示例：\n"
+            "错误1: ask_user(question=None) \n"
+            "原因：question 不能为 None，必须是字符串\n"
+            "修正：ask_user(question=\"请提供信息\")\n\n"
+            "错误2: ask_user(question=\"选择\", choices=[\"选项1\", None, \"选项3\"])\n"
+            "原因：choices 数组不能包含 None 值\n"
+            "修正：ask_user(question=\"选择\", choices=[\"选项1\", \"选项2\", \"选项3\"])\n\n"
+            "错误3: ask_user(question=\"测试\", context=None)\n"
+            "原因：如果提供 context 参数，必须是字符串，不能为 None\n"
+            "修正：ask_user(question=\"测试\") 或 ask_user(question=\"测试\", context=\"说明信息\")"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "question": {
                     "type": "string",
-                    "description": "要问用户的问题"
+                    "description": "要问用户的问题。必须是有效的字符串，不能为 None 或空字符串。"
                 },
                 "choices": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "可选的回答选项列表"
+                    "description": "可选的回答选项列表。如果提供，必须是字符串数组，不能包含 None 值。"
                 },
                 "context": {
                     "type": "string",
-                    "description": "问题的上下文信息"
+                    "description": "问题的上下文信息（可选）。如果提供，必须是有效的字符串，不能为 None。"
                 }
             },
             "required": ["question"]
@@ -181,7 +199,27 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "- 输出超过配置的阈值时会被截断（默认 12000 字符，可通过 .env 文件中的 TOOL_OUTPUT_MAX_LENGTH 配置）\n"
             "- 截断时会显示详细信息：原始长度和截断后长度（可通过 .env 文件中的 TOOL_TRUNCATE_SHOW_DETAILS=false 关闭）\n"
             "- **读取 skill 包内文件请用 file_operation(action=\"read\", skill_id=...)**，不要用 run_command + type/Get-Content\n"
-            "- 执行 skill 包内脚本时**必须**传 skill_id 参数，命令中的相对路径（如 scripts/xxx.py）会自动相对于 skill 包目录解析"
+            "- 执行 skill 包内脚本时**必须**传 skill_id 参数，命令中的相对路径（如 scripts/xxx.py）会自动相对于 skill 包目录解析\n\n"
+            "【参数预校验说明】\n"
+            "系统在执行命令前会进行参数格式预校验，检测以下问题：\n"
+            "- 引号匹配:检测单引号和双引号是否成对匹配\n"
+            "- 参数截断:识别参数是否完整，检测未闭合的引号和参数边界\n"
+            "- 禁止语法:检测批处理变量(%%a)、findstr /C:\"...\"、wmic 等禁止语法\n"
+            "- 环境变量:检测 PowerShell 环境变量引用是否完整($env:VAR)\n\n"
+            "如果预校验失败，系统将返回结构化错误报告，包含：\n"
+            "- 错误类型:标准化的错误类型代码(如 QUOTE_MISMATCH)\n"
+            "- 错误摘要:一句话描述错误本质\n"
+            "- 错误详情:包含错误位置、上下文等详细信息\n"
+            "- 修复建议:针对性的修复步骤\n"
+            "- 重试模板:修正后的命令格式示例\n\n"
+            "【常见错误类型代码】\n"
+            "- QUOTE_MISMATCH: 引号不匹配\n"
+            "- UNCLOSED_QUOTE: 未闭合引号\n"
+            "- PARAMETER_TRUNCATION: 参数截断\n"
+            "- INCOMPLETE_ARGUMENT: 参数不完整\n"
+            "- FORBIDDEN_SYNTAX: 禁止语法\n"
+            "- CMD_BATCH_SYNTAX: CMD批处理语法\n"
+            "- ENV_VAR_TRUNCATION: 环境变量截断"
         ),
         "parameters": {
             "type": "object",
@@ -200,7 +238,47 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                         "5. 常用系统信息查询示例：\n"
                         "   - 操作系统: powershell Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version\n"
                         "   - CPU: powershell Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores\n"
-                        "   - 进程列表: powershell Get-Process | Select-Object Name,Id,CPU"
+                        "   - 进程列表: powershell Get-Process | Select-Object Name,Id,CPU\n\n"
+                        "【引号和参数构造规范】★★★ 重要 ★★★\n"
+                        "引号使用规则：\n"
+                        "- Python 命令中，包含空格或特殊字符的参数必须用引号包裹\n"
+                        "- PowerShell 命令中，使用单引号包裹包含空格的字符串（单引号内的单引号用 '' 转义）\n"
+                        "- 外层引号和内层引号必须交替使用，避免混淆\n"
+                        "- **JSON 数据或复杂字符串建议用三引号包裹**\n\n"
+                        "✅ 正确示例：\n"
+                        "1. 带空格参数的 Python 命令：\n"
+                        "   python scripts/search.py \"长鑫上市 A股 半导体 影响\" --engines baidu,bing,sogou,sohu,eastmoney --limit 10 --timeout 30\n"
+                        "   说明：参数含空格，用双引号包裹整个参数值\n\n"
+                        "2. 多参数命令（参数列表）：\n"
+                        "   python scripts/analyze.py --keywords \"人工智能 机器学习\" --sources \"百度,必应\" --max-results 20\n"
+                        "   说明：多个参数值用逗号分隔，整个值用引号包裹\n\n"
+                        "3. PowerShell 字符串参数：\n"
+                        "   powershell Write-Host 'Hello World'\n"
+                        "   powershell Write-Host \"Hello $env:USERNAME\"\n"
+                        "   说明：单引号用于字面字符串，双引号支持变量展开\n\n"
+                        "4. 复杂 JSON 或配置参数：\n"
+                        "   python scripts/config.py --data '{\"name\":\"test\",\"value\":123}'\n"
+                        "   说明：JSON 字符串用单引号包裹（避免与内部双引号冲突）\n\n"
+                        "❌ 常见错误示例：\n"
+                        "错误1 - 引号不匹配：\n"
+                        "   错误: python scripts/search.py \"长鑫上市 A股 半导体 影响 --engines baidu\n"
+                        "   原因：缺少闭合引号\n"
+                        "   修正：确保每个引号成对出现\n\n"
+                        "错误2 - 参数截断：\n"
+                        "   错误: python scripts/search.py \"长鑫上市 A股 半导体 影响\" --engines baidu,bing,sogou,sohu,eastmoney --limit 10 --timeout 30\n"
+                        "   现象：错误提示 \"unrecognized arguments: A股 半导体 影响\"\"\n"
+                        "   原因：引号被截断或参数解析错误\n"
+                        "   诊断：检查引号是否完整，检查参数顺序是否符合脚本要求\n\n"
+                        "错误3 - 引号嵌套错误：\n"
+                        "   错误: python scripts/config.py --data \"{\"name\":\"test\"}\" \n"
+                        "   原因：双引号嵌套双引号导致解析错误\n"
+                        "   修正：python scripts/config.py --data '{\"name\":\"test\"}'\n\n"
+                        "【参数验证提示】\n"
+                        "如果命令执行失败，系统会返回详细的诊断信息：\n"
+                        "1. 引号匹配检查：检测引号是否成对\n"
+                        "2. 环境变量检查：检测 $env: 格式是否完整\n"
+                        "3. 命令长度检查：检测是否超过系统限制\n"
+                        "请根据诊断信息修正命令参数"
                     ),
                 },
                 "cwd": {
@@ -227,7 +305,24 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "- write: 写入文件，参数 path、content\n"
             "- delete: 删除文件，参数 path\n"
             "- list: 列出目录内容，参数 path\n"
-            "参数：action(必需，read/write/delete/list)、path(必需)、content(可选，仅write)、skill_id(可选，访问skill包内文件)。"
+            "参数：action(必需，read/write/delete/list)、path(必需)、content(可选，仅write)、skill_id(可选，访问skill包内文件)。\n\n"
+            "【参数构造规范】\n"
+            "- action: 必需参数，必须是 ['read', 'write', 'delete', 'list'] 之一\n"
+            "- path: 必需参数，必须是有效的文件或目录路径字符串\n"
+            "- content: 仅当 action='write' 时需要，必须是字符串\n"
+            "- skill_id: 可选参数，如果提供必须是有效的 Skill ID 字符串\n\n"
+            "✅ 正确示例：\n"
+            "1. file_operation(action='read', path='data/config.json')\n"
+            "2. file_operation(action='write', path='output/result.txt', content='处理结果')\n"
+            "3. file_operation(action='list', path='scripts/')\n"
+            "4. file_operation(action='read', path='SKILL.md', skill_id='8')\n\n"
+            "❌ 错误示例：\n"
+            "错误1: file_operation(action=None, path='test.txt')\n"
+            "原因：action 不能为 None\n"
+            "修正：file_operation(action='read', path='test.txt')\n\n"
+            "错误2: file_operation(action='write', path='test.txt', content=None)\n"
+            "原因：write 操作的 content 不能为 None\n"
+            "修正：file_operation(action='write', path='test.txt', content='内容')"
         ),
         "parameters": {
             "type": "object",
@@ -235,19 +330,19 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 "action": {
                     "type": "string",
                     "enum": ["read", "write", "delete", "list"],
-                    "description": "操作类型：read读取、write写入、delete删除、list列出目录"
+                    "description": "操作类型：read读取、write写入、delete删除、list列出目录。必须是枚举值之一，不能为 None。"
                 },
                 "path": {
                     "type": "string",
-                    "description": "文件或目录路径"
+                    "description": "文件或目录路径。必须是有效的路径字符串，不能为 None。"
                 },
                 "content": {
                     "type": "string",
-                    "description": "写入内容（仅 action=write 时使用，注意write会全量覆盖。）"
+                    "description": "写入内容（仅 action=write 时使用，注意write会全量覆盖）。如果提供，必须是字符串，不能为 None。"
                 },
                 "skill_id": {
                     "type": "string",
-                    "description": "Skill ID，指定后 path 相对于 skill 包目录"
+                    "description": "Skill ID，指定后 path 相对于 skill 包目录。如果提供，必须是有效的字符串。"
                 }
             },
             "required": ["action", "path"]
@@ -258,26 +353,42 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
         "description": (
             "精确编辑文件。在文件中搜索指定内容并替换。\n"
             "特点：只替换第一个匹配项，未找到则报错。\n"
-            "参数：path(必需)、old_str(必需，要搜索的内容)、new_str(必需，替换后的内容)、skill_id(可选)。"
+            "参数：path(必需)、old_str(必需，要搜索的内容)、new_str(必需，替换后的内容)、skill_id(可选)。\n\n"
+            "【参数构造规范】\n"
+            "- path: 必需参数，必须是有效的文件路径字符串\n"
+            "- old_str: 必需参数，必须是精确的字符串内容（包括空格和换行）\n"
+            "- new_str: 必需参数，替换后的内容，必须是非空字符串\n"
+            "- skill_id: 可选参数，如果提供必须是有效的 Skill ID 字符串\n\n"
+            "✅ 正确示例：\n"
+            "1. edit(path='config.py', old_str='DEBUG = False', new_str='DEBUG = True')\n"
+            "2. edit(path='data.txt', old_str='old content', new_str='new content')\n"
+            "3. edit(path='SKILL.md', old_str='version: 1.0', new_str='version: 1.1', skill_id='8')\n\n"
+            "❌ 错误示例：\n"
+            "错误1: edit(path='test.txt', old_str='old', new_str=None)\n"
+            "原因：new_str 不能为 None\n"
+            "修正：edit(path='test.txt', old_str='old', new_str='new')\n\n"
+            "错误2: edit(path='test.txt', old_str='', new_str='new')\n"
+            "原因：old_str 不能为空字符串\n"
+            "修正：edit(path='test.txt', old_str='要替换的内容', new_str='new')"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "要编辑的文件路径"
+                    "description": "要编辑的文件路径。必须是有效的路径字符串，不能为 None。"
                 },
                 "old_str": {
                     "type": "string",
-                    "description": "要搜索的内容（必须精确匹配）"
+                    "description": "要搜索的内容（必须精确匹配）。必须是非空字符串，不能为 None。"
                 },
                 "new_str": {
                     "type": "string",
-                    "description": "替换后的内容"
+                    "description": "替换后的内容。必须是有效的字符串，不能为 None。"
                 },
                 "skill_id": {
                     "type": "string",
-                    "description": "Skill ID，指定后 path 相对于 skill 包目录"
+                    "description": "Skill ID，指定后 path 相对于 skill 包目录。如果提供，必须是有效的字符串。"
                 }
             },
             "required": ["path", "old_str", "new_str"]

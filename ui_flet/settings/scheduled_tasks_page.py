@@ -6,6 +6,7 @@ Flet 定时任务管理页面
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -185,10 +186,6 @@ class ScheduledTasksPage:
             padding=20,
             expand=True,
         )
-
-        # 加载任务
-        self._load_tasks()
-        self._load_autostart_state()
 
         self._logger.info("ScheduledTasksPage: 页面构建完成")
         return self._container
@@ -610,6 +607,17 @@ class ScheduledTasksPage:
         )
         self._page.snack_bar.open = True
         self._page.update()
+
+    async def async_load_data(self) -> None:
+        """异步加载数据，在页面可见后调用"""
+        await asyncio.sleep(0)  # yield to UI
+        self._load_tasks()
+        self._load_autostart_state()
+        try:
+            if self._page:
+                self._page.update()
+        except Exception:
+            pass
 
     def refresh(self) -> None:
         """刷新页面"""

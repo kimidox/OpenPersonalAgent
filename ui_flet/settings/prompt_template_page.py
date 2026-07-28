@@ -5,6 +5,8 @@ Flet 系统提示词模板配置页面
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 from typing import TYPE_CHECKING, Optional
 
 import flet as ft
@@ -54,8 +56,8 @@ class PromptTemplatePage:
         self._logger.info("PromptTemplatePage: 开始构建页面")
         colors = self._theme_manager.get_color_scheme()
 
-        # 加载模板
-        self._templates = template_config.load_template_config()
+        # 模板数据（延迟加载）
+        self._templates = {}
 
         # 标题
         title = ft.Text(
@@ -115,7 +117,6 @@ class PromptTemplatePage:
 
         # 占位符说明列表
         self._placeholder_list = ft.Column([], spacing=4, scroll=ft.ScrollMode.AUTO)
-        self._load_placeholder_list()
 
         # 状态文本
         self._status_text = ft.Text(
@@ -247,9 +248,6 @@ class PromptTemplatePage:
             padding=20,
             expand=True,
         )
-
-        # 初始加载
-        self._load_current_template()
 
         self._logger.info("PromptTemplatePage: 页面构建完成")
         return self._container
@@ -438,6 +436,28 @@ class PromptTemplatePage:
         )
         self._page.snack_bar.open = True
         self._page.update()
+
+    async def async_load_data(self) -> None:
+        """异步加载数据，在页面可见后调用"""
+        await asyncio.sleep(0)  # yield to UI
+
+        # 在线程中运行磁盘 I/O
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(template_config.load_template_config)
+            self._templates = await asyncio.wrap_future(future)
+
+        # 加载占位符说明列表
+        self._load_placeholder_list()
+
+        # 加载当前模板到编辑器
+        self._load_current_template()
+
+        # 更新页面
+        try:
+            if self._page:
+                self._page.update()
+        except Exception:
+            pass
 
     def refresh(self) -> None:
         """刷新页面"""

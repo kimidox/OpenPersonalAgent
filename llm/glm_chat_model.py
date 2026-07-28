@@ -50,6 +50,9 @@ class GLMChatModel(BaseChatModel):
 
     def complete_with_tools(self, messages: list[dict], tools: list[dict]) -> Any:
         """发起一次带 tools 的补全，返回 choices[0].message。"""
+        # 最终防线：校验并修复所有 messages 中的 tool_calls
+        from llm.BaseChatModel import _sanitize_messages_for_api
+        messages = _sanitize_messages_for_api(messages)
         try:
             response = self.get_client().chat.completions.create(
                 model=self.model_name,
@@ -74,6 +77,9 @@ class GLMChatModel(BaseChatModel):
             raise RuntimeError(f"API错误: {e}")
 
     def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
+        # 最终防线：校验并修复所有 messages 中的 tool_calls
+        from llm.BaseChatModel import _sanitize_messages_for_api
+        messages = _sanitize_messages_for_api(messages)
         try:
             response = self.get_client().chat.completions.create(
                 model=self.model_name,

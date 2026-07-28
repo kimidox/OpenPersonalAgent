@@ -3,7 +3,6 @@ import re
 import base64
 from pathlib import Path
 
-import pyautogui
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessage
 
@@ -48,5 +47,6 @@ class Agent:
             executor=self.executor,
             log_callback=log_callback,
         )
-        log_callback(str(pre_actions), "response")
+        if log_callback:
+            log_callback(str(pre_actions), "response")
         return "完成"

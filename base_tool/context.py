@@ -20,3 +20,12 @@ class ToolContext:
     user_id: str = "default"
     conversation_id: str | None = None
     file_upload_controller: "FileUploadController | None" = None
+    _skip_ask_user_for_run_command: bool = False  # 标志位：跳过 run_command 的二次确认
+
+    def set_skip_ask_user_for_run_command(self, value: bool) -> None:
+        """设置是否跳过 run_command 的二次确认标志。"""
+        self._skip_ask_user_for_run_command = value
+
+    def should_skip_ask_user_for_run_command(self) -> bool:
+        """查询是否应跳过 run_command 的二次确认。"""
+        return self._skip_ask_user_for_run_command

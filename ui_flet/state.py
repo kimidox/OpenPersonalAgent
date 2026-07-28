@@ -20,6 +20,7 @@ class StreamType(Enum):
     NONE = "none"
     CONTENT = "content"
     THINK = "think"
+    TOOL_CALL = "tool_call"
 
 
 class InputState(Enum):
@@ -76,6 +77,17 @@ class ButtonStates:
     stop_enabled: bool = False
     new_conversation_enabled: bool = True
     settings_enabled: bool = True
+
+
+@dataclass
+class LLMCommunicationState:
+    """LLM通信状态（前端）"""
+    state: str = "IDLE"  # 状态名称字符串
+    timestamp: float = 0.0  # 状态转换时间戳
+    model: str | None = None  # 模型名称
+    session_id: str | None = None  # 会话ID
+    duration_ms: int = 0  # 持续时间（毫秒）
+    error_message: str | None = None  # 错误信息
 
 
 class SessionState:
@@ -656,6 +668,7 @@ class AppState:
         self.session = SessionState()
         self.stream = StreamState()
         self.ui = UIState()
+        self.llm_communication: LLMCommunicationState = LLMCommunicationState()
 
     def reset(self) -> None:
         """重置所有状态"""

@@ -16,10 +16,6 @@ from logger import get_module_logger
 logger = get_module_logger("Executor")
 
 
-pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.5
-
-
 def get_primary_monitor_info() -> dict:
     """
     兼容所有Windows版本的显示器信息获取（替换GetDpiForMonitor）
@@ -141,6 +137,10 @@ class Executor:
         self.grid_step = getattr(config, "SCREENSHOT_GRID_STEP_PX", 32)
         self._last_screenshot_size: tuple[int, int] | None = None
 
+        # 配置 pyautogui（首次使用时）
+        pyautogui.FAILSAFE = True
+        pyautogui.PAUSE = 0.5
+
     def screenshot(self) -> str:
         self.screenshot_count += 1
         filename = f"screenshot_{self.screenshot_count}.png"
@@ -245,9 +245,10 @@ class Executor:
             return self.press_key(key)
 
         elif action_type == "hotkey" or action_type == "快捷键":
-            keys = action.get("key").split("+")
-            if keys:
-                return self.hotkey(*keys)
+            key_str = str(action.get("key") or "").strip()
+            if not key_str:
+                return "错误: hotkey 缺少 key 参数"
+            return self.hotkey(*key_str.split("+"))
 
         elif action_type == "scroll" or action_type == "滚动":
             clicks = action.get("clicks", 0)

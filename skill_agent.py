@@ -43,6 +43,13 @@ from logger import get_module_logger
 logger = get_module_logger("SkillAgent")
 
 
+class ConversationState(Enum):
+    IDLE = "idle"
+    TOOL_CALLED = "tool_called"
+    TOOL_EXECUTED = "tool_executed"
+    COMPLETED = "completed"
+
+
 class PlanMode(str, Enum):
     NO_PLAN = "no_plan"
     SIMPLE_TASK = "simple_task"
@@ -87,6 +94,24 @@ def _build_system_prompt(catalog: str, constraints: str = "") -> str:
     if constraints.strip():
         dp.update_conversation_constraints(constraints.strip())
     return dp.build()
+
+
+def _ensure_valid_json_args(args: Any) -> str:
+    """确保参数是有效的 JSON 字符串。
+
+    接受 str/dict/其他类型，始终返回有效的 JSON 字符串。
+    如果输入是字符串但不是有效 JSON，返回 "{}"。
+    """
+    if isinstance(args, str):
+        try:
+            json.loads(args)
+            return args
+        except (json.JSONDecodeError, TypeError):
+            return "{}"
+    elif isinstance(args, dict):
+        return json.dumps(args, ensure_ascii=False)
+    else:
+        return "{}"
 
 
 class SkillAgent:
@@ -158,6 +183,15 @@ class SkillAgent:
         self._pending_success_criteria: str = ""
         self._pending_plan_analysis: str = ""
         self._plan_confirmed: bool = False
+        # 运行时拦截确认相关状态（新方案）
+        self._runtime_confirm_pending: bool = False  # 是否有待处理的运行时确认
+        self._runtime_confirm_fname: str = ""  # 待执行的工具名
+        self._runtime_confirm_args: dict = {}  # 待执行的参数
+        self._runtime_confirm_messages: list[dict] = []  # 当时的消息列表快照
+        # 运行时确认后继续执行的标志
+        self._from_runtime_confirm_continue: bool = False
+        # 状态机
+        self._state = ConversationState.IDLE
 
     def set_file_upload_controller(self, controller: Any) -> None:
         self._tool_ctx.file_upload_controller = controller
@@ -1184,7 +1218,13 @@ class SkillAgent:
         if arg_str is None:
             args_str = json.dumps(args, ensure_ascii=False, indent=2)
         else:
-            args_str = arg_str
+            # 验证 arg_str 是否为有效 JSON，防止非 JSON 字符串导致 API 报错
+            try:
+                json.loads(arg_str)
+                args_str = arg_str
+            except (json.JSONDecodeError, TypeError):
+                # arg_str 不是有效 JSON，使用 args 重新序列化
+                args_str = json.dumps(args, ensure_ascii=False, indent=2)
         if tool_call_id is None:
             tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
 
@@ -1206,13 +1246,19 @@ class SkillAgent:
         )
 
         # 2) 追加 assistant tool_call 到 messages（OpenAI 协议必需）
+        # 确保 arguments 是有效的 JSON 字符串
+        valid_args = args_str if args_str else "{}"
+        try:
+            json.loads(valid_args)
+        except (json.JSONDecodeError, TypeError):
+            valid_args = "{}"
         messages.append({
             "role": "assistant",
             "content": assistant_content,
             "tool_calls": [{
                 "id": tool_call_id,
                 "type": "function",
-                "function": {"name": fname, "arguments": arg_str or args_str},
+                "function": {"name": fname, "arguments": valid_args},
             }],
         })
 
@@ -1265,10 +1311,7 @@ class SkillAgent:
         """
         if tool_call_id is None:
             tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
-        if isinstance(args, str):
-            arg_str = args
-        else:
-            arg_str = json.dumps(args, ensure_ascii=False)
+        arg_str = _ensure_valid_json_args(args)
         messages.append({
             "role": "assistant",
             "content": reasoning_content or None,
@@ -1343,62 +1386,81 @@ class SkillAgent:
 
 
     def _is_reasoning_text(self, text: str, has_called_tool: bool = False) -> bool:
-        """判断文本是否为"计划/推理文本"而非最终回答。
-        
-        识别模式：包含"让我执行"、"我将"、"计划"等关键词，且没有明确的结论性回答。
-        
-        方案 A 规则增强：
-        - 若本轮已调用过工具，则禁止用纯文本结束对话（必须调 finish），
-          因此 has_called_tool=True 时直接返回 True，让上层走 continue 分支
-          给 LLM 再一轮机会调用 finish。
+        """判断文本是否为"计划/推理文本"而非最终回答（仅用于日志记录，不用于强制终止）
+
+        改进策略：
+        1. 收紧关键词列表，只检测真正表示"未来动作"的短语
+        2. 增加文本长度阈值，避免误判简短正常回复
+        3. 检查是否包含完整句子结构（正常回复通常有完整结构）
+        4. 区分thinking内容和推理文本
+
+        注意：此方法仅用于日志诊断，不影响会话流程。
         """
         if not text or not text.strip():
             return False
-        
-        # 方案 A：本轮已调用过工具，禁止纯文本直接结束
-        if has_called_tool:
-            return True
-        
+
         text_lower = text.lower()
-        
-        # 推理/计划关键词（收紧：去掉"我先"/"让我先"这类过于宽义、易误伤闲聊的词）
-        reasoning_keywords = [
-            "让我执行",
-            "让我调用",
-            "我将执行",
-            "我将调用",
-            "我将使用",
-            "我需要执行",
-            "让我来获取",
-            "让我来查询",
-            "首先让我",
-            "让我分析一下",
-            "让我查看",
-            "让我搜索",
-            "让我运行",
-            "让我尝试",
-            "我来执行",
-            "我来获取",
-            "我来调用",
+
+        # 特殊情况：包含thinking标签的文本，不算推理文本
+        # thinking内容是正常的思考过程，不应该被误判
+        if "<think>" in text_lower or "</think>" in text_lower:
+            return False
+
+        # 文本长度检查：如果文本很长（>200字符），通常是正常回复
+        # 推理文本通常是简短的、未完成的动作描述
+        if len(text) > 200:
+            return False
+
+        # 检查是否包含完整的句子结构（正常回复的特征）
+        # 如果包含句号、问号、感叹号等结束标点，通常是完整回复
+        has_complete_structure = any([
+            text.endswith('.'),
+            text.endswith('。'),
+            text.endswith('?'),
+            text.endswith('？'),
+            text.endswith('!'),
+            text.endswith('！'),
+            '\n\n' in text,  # 多段落结构
+            '。' in text and len(text) > 50,  # 包含句号且有实质内容
+        ])
+
+        if has_complete_structure:
+            return False
+
+        # 收紧的关键词列表：只检测真正表示"即将执行动作"的短语
+        # 移除容易误判的"让我执行"、"我将执行"等常见表达
+        strict_reasoning_keywords = [
+            "我将要执行以下操作",
+            "我将要调用以下工具",
+            "接下来我会",
+            "接下来我将",
+            "下一步我将",
+            "首先我将执行",
+            "首先我会执行",
+            "让我先执行",
+            "让我先调用",
         ]
-        
-        for keyword in reasoning_keywords:
+
+        for keyword in strict_reasoning_keywords:
             if keyword in text:
                 return True
-        
+
         return False
 
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None, stop_check_callback: Optional[Callable[[], bool]] = None) -> str:
         import traceback
-        logger.debug("===== run() 开始执行 =====")
-        logger.debug("user_query 长度: %s, 前50字: %s", len(user_query), user_query[:50])
-        logger.debug("conversation_id: %s", self._conversation_id)
-        
+        # 性能优化：移除高频DEBUG日志，降低I/O开销
+        # logger.debug("===== run() 开始执行 =====")
+        # logger.debug("user_query 长度: %s, 前50字: %s", len(user_query), user_query[:50])
+        # logger.debug("conversation_id: %s", self._conversation_id)
+
         self._stop_event.clear()
         self._recent_commands = []
         self._recent_tool_calls = []
         self._consecutive_repeat_count = 0
         self._token_usage = TokenUsage.empty()
+        # 状态机：方法开始时设置为 IDLE
+        self._state = ConversationState.IDLE
 
         def _check_stop() -> bool:
             if self._stop_event.is_set():
@@ -1417,64 +1479,154 @@ class SkillAgent:
             # 保存当前用户查询，用于后续更新系统提示词时的语义检索
             self._last_user_query = user_query
 
-            # 计划确认续跑检测：若上一轮在等待用户确认计划，根据用户选择决定走向
-            plan_resume = self._check_plan_confirmation_resume(user_query)
-            if plan_resume == "cancel":
-                cancel_msg = "已取消任务执行。"
-                if log_callback:
-                    log_callback(cancel_msg, "assistant")
-                if self.memory is not None:
-                    self.memory.append_message(self._conversation_id, "user", user_query.strip())
-                    self.memory.append_message(
-                        self._conversation_id, "assistant", cancel_msg,
-                        metadata={"token_usage": asdict(self._token_usage)},
-                    )
-                _emit_token_usage()
-                return cancel_msg
-            elif plan_resume == "replan":
-                replan_msg = "好的，请重新描述您的需求或补充说明，我将重新制定执行计划。"
-                if log_callback:
-                    log_callback(replan_msg, "assistant")
-                if self.memory is not None:
-                    self.memory.append_message(self._conversation_id, "user", user_query.strip())
-                    self.memory.append_message(
-                        self._conversation_id, "assistant", replan_msg,
-                        metadata={"token_usage": asdict(self._token_usage)},
-                    )
-                _emit_token_usage()
-                return replan_msg
+            # 新方案：运行时拦截确认检测
+            # 如果上一轮触发了运行时确认，根据用户回复直接处理，不发送给 LLM
+            if self._runtime_confirm_pending:
+                logger.debug("检测到运行时拦截确认待处理，用户回复: %s", user_query[:50])
+                user_choice = user_query.strip()
 
-            # 输入分类：判断是否需要规划
-            if plan_resume == "execute":
-                plan_mode = PlanMode.COMPLEX_TASK
-                logger.debug("计划确认续跑，跳过分类，直接进入复杂任务执行")
-            else:
-                plan_mode = self._classify_input(user_query)
-            logger.debug("输入分类: %s", plan_mode.value)
-            
-            if log_callback:
-                mode_labels = {
-                    PlanMode.NO_PLAN: "💬 闲聊/问答模式（无需规划，直接回复）",
-                    PlanMode.SIMPLE_TASK: "⚡ 简单任务模式（单步工具调用）",
-                    PlanMode.COMPLEX_TASK: "📋 复杂任务模式（结构化规划+分步执行）",
-                }
-                log_callback(mode_labels.get(plan_mode, plan_mode.value), "mode")
-            
-            if plan_mode == PlanMode.NO_PLAN:
-                logger.debug("无需规划模式，直接回复")
-                return self._direct_reply(user_query, log_callback)
-            
-            if plan_mode == PlanMode.COMPLEX_TASK:
-                if self._plan_confirmed:
-                    # 续跑：用户已确认计划，注入已确认计划作为约束
-                    plan_constraints = self._build_plan_constraints()
-                    existing_constraints = self._conversation_constraints
-                    if existing_constraints:
-                        self._conversation_constraints = existing_constraints + plan_constraints
-                    else:
-                        self._conversation_constraints = plan_constraints.lstrip()
+                if user_choice in ("确认执行", "确认安装"):
+                    # 用户确认：直接执行命令
+                    fname = self._runtime_confirm_fname
+                    args = self._runtime_confirm_args
+                    messages_snapshot = self._runtime_confirm_messages
+
+                    logger.debug("运行时确认：用户确认，执行命令 %s", fname)
+                    result, terminate, final = self._dispatch(fname, args, [], [])
+
+                    # 追加工具结果到消息列表（持久化 + 追加到 messages）
+                    if self.memory is not None:
+                        self._persist_after_tool_turn(
+                            fname, args, str(result), [], [], messages_snapshot, log_callback
+                        )
+
+                    # 重置运行时确认状态
+                    self._runtime_confirm_pending = False
+                    self._runtime_confirm_fname = ""
+                    self._runtime_confirm_args = {}
+                    self._runtime_confirm_messages = []
+
+                    # 设置标志：跳过后续输入分类，直接进入主循环
+                    self._from_runtime_confirm_continue = True
+
+                    # 将工具执行结果发给前端展示
+                    if log_callback:
+                        log_callback(str(result), "base_tool")
+
+                    # 不再直接 return，而是继续进入主循环让 LLM 解读结果并决定下一步
+                    logger.debug("运行时确认执行完成，继续进入主循环让 LLM 推理")
+                    # 注意：messages_snapshot 就是后面主循环使用的 messages 列表
+                    # 因为 _persist_after_tool_turn 已经追加了 assistant(tool_calls)+tool 序列
+                    # 所以主循环可以直接使用它继续推理
+                    messages = messages_snapshot
+                    active_skill_text = []
+                    active_skill_ids = []
+                    # 从数据库恢复 active skills
+                    if self.memory is not None:
+                        saved_skill_ids = self.memory.get_active_skills(self._conversation_id)
+                        if saved_skill_ids:
+                            for sid in saved_skill_ids:
+                                skill = self.registry.get(sid)
+                                if skill:
+                                    formatted_skill = format_skill_for_prompt(skill)
+                                    active_skill_text.append(formatted_skill)
+                                    active_skill_ids.append(sid)
+                    
+                    # 初始化主循环所需的工具和模型相关变量
+                    model = get_chat_model(enable_thinking=self._enable_thinking)
+                    tools = model.build_skill_agent_tools_initial()
+                    self._supplied_tool_definitions = {}
+                    
+                    # 跳过输入分类和计划阶段，直接进入主循环
+                    _skip_to_main_loop = True
                 else:
-                    planning_instruction = """
+                    _skip_to_main_loop = False
+
+                    if user_choice == "取消":
+                        # 用户取消：返回取消消息
+                        cancel_msg = "操作已取消"
+                        if log_callback:
+                            log_callback(cancel_msg, "assistant")
+
+                        # 重置运行时确认状态
+                        self._runtime_confirm_pending = False
+                        self._runtime_confirm_fname = ""
+                        self._runtime_confirm_args = {}
+                        self._runtime_confirm_messages = []
+
+                        _emit_token_usage()
+                        return cancel_msg
+
+                    else:
+                        # 用户输入了其他内容，视为新的对话输入，清除运行时确认状态
+                        logger.debug("用户输入了其他内容，清除运行时确认状态")
+                        self._runtime_confirm_pending = False
+                        self._runtime_confirm_fname = ""
+                        self._runtime_confirm_args = {}
+                        self._runtime_confirm_messages = []
+            else:
+                _skip_to_main_loop = False
+
+            # 如果从运行时确认继续，跳过计划检测和输入分类，直接进入主循环
+            if not _skip_to_main_loop:
+                # 计划确认续跑检测：若上一轮在等待用户确认计划，根据用户选择决定走向
+                plan_resume = self._check_plan_confirmation_resume(user_query)
+                if plan_resume == "cancel":
+                    cancel_msg = "已取消任务执行。"
+                    if log_callback:
+                        log_callback(cancel_msg, "assistant")
+                    if self.memory is not None:
+                        self.memory.append_message(self._conversation_id, "user", user_query.strip())
+                        self.memory.append_message(
+                            self._conversation_id, "assistant", cancel_msg,
+                            metadata={"token_usage": asdict(self._token_usage)},
+                        )
+                    _emit_token_usage()
+                    return cancel_msg
+                elif plan_resume == "replan":
+                    replan_msg = "好的，请重新描述您的需求或补充说明，我将重新制定执行计划。"
+                    if log_callback:
+                        log_callback(replan_msg, "assistant")
+                    if self.memory is not None:
+                        self.memory.append_message(self._conversation_id, "user", user_query.strip())
+                        self.memory.append_message(
+                            self._conversation_id, "assistant", replan_msg,
+                            metadata={"token_usage": asdict(self._token_usage)},
+                        )
+                    _emit_token_usage()
+                    return replan_msg
+
+                # 输入分类：判断是否需要规划
+                if plan_resume == "execute":
+                    plan_mode = PlanMode.COMPLEX_TASK
+                    logger.debug("计划确认续跑，跳过分类，直接进入复杂任务执行")
+                else:
+                    plan_mode = self._classify_input(user_query)
+                logger.debug("输入分类: %s", plan_mode.value)
+
+                if log_callback:
+                    mode_labels = {
+                        PlanMode.NO_PLAN: "💬 闲聊/问答模式（无需规划，直接回复）",
+                        PlanMode.SIMPLE_TASK: "⚡ 简单任务模式（单步工具调用）",
+                        PlanMode.COMPLEX_TASK: "📋 复杂任务模式（结构化规划+分步执行）",
+                    }
+                    log_callback(mode_labels.get(plan_mode, plan_mode.value), "mode")
+
+                if plan_mode == PlanMode.NO_PLAN:
+                    logger.debug("无需规划模式，直接回复")
+                    return self._direct_reply(user_query, log_callback)
+
+                if plan_mode == PlanMode.COMPLEX_TASK:
+                    if self._plan_confirmed:
+                        # 续跑：用户已确认计划，注入已确认计划作为约束
+                        plan_constraints = self._build_plan_constraints()
+                        existing_constraints = self._conversation_constraints
+                        if existing_constraints:
+                            self._conversation_constraints = existing_constraints + plan_constraints
+                        else:
+                            self._conversation_constraints = plan_constraints.lstrip()
+                    else:
+                        planning_instruction = """
 
 【复杂任务执行要求 - 强制执行】
 1. 你必须在执行任何工具调用前，先在思考过程中制定完整的执行计划
@@ -1483,137 +1635,138 @@ class SkillAgent:
 4. 如果某步骤失败，请分析原因并调整后续计划
 5. 所有步骤完成后，必须对照计划的 success_criteria 逐项确认任务是否成功
 6. 只有确认所有步骤完成后，才能调用 finish 结束任务"""
-                    existing_constraints = self._conversation_constraints
-                    if existing_constraints:
-                        self._conversation_constraints = existing_constraints + planning_instruction
-                    else:
-                        self._conversation_constraints = planning_instruction.lstrip()
-            
-            model = get_chat_model(enable_thinking=self._enable_thinking)
-            # 根据会话类型过滤skill目录
-            conv_type = self._get_conversation_type()
-            skills_visible = self._get_skills_for_conversation_type(conv_type)
-            catalog = build_skills_catalog_text(skills_visible)
-            
-            tool_catalog = model.build_tool_catalog()
-            tool_catalog_text = self._build_tool_catalog_text(tool_catalog)
-            system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query, tool_catalog=tool_catalog_text)
-            logger.debug("初始系统提示词：%s", system_prompt)
-            
-            # 复杂任务：制定结构化执行计划并请求用户确认
-            if plan_mode == PlanMode.COMPLEX_TASK:
-                if self._plan_confirmed:
-                    # 续跑：计划已确认，展示已有计划后直接进入执行
-                    if log_callback and self._pending_plan:
-                        plan_display = self._format_plan_display({
-                            "analysis": self._pending_plan_analysis,
-                            "plan": self._pending_plan,
-                            "total_steps": len(self._pending_plan),
-                            "success_criteria": self._pending_success_criteria,
-                        })
-                        log_callback("✅ 计划已确认，开始按计划执行：\n\n" + plan_display, "plan")
-                else:
-                    # 首次：生成计划
-                    plan_data = self._plan_steps(user_query, tool_catalog_text, log_callback)
-                    if plan_data is not None:
-                        # 启用确认环节：请求用户确认后再执行
-                        if config.PLAN_CONFIRMATION_ENABLED:
-                            return self._request_plan_confirmation(
-                                user_query,
-                                plan_data,
-                                log_callback,
-                                enable_vision=model.enable_vision,
-                            )
-                        # 未启用确认环节：展示计划后直接执行（保持原有行为）
-                        plan_display = self._format_plan_display(plan_data)
-                        if log_callback:
-                            log_callback(plan_display, "plan")
-                        if self.memory is not None:
-                            self.memory.append_message(
-                                self._conversation_id,
-                                "assistant",
-                                plan_display,
-                                metadata={"type": "plan"},
-                            )
-            
-            tools = model.build_skill_agent_tools_initial()
-            self._supplied_tool_definitions: dict[str, dict] = {}
-            
-            logger.debug("===== 目录+补发 渐进披露机制初始化 =====")
-            logger.debug("工具目录已构建，包含 %s 个工具的简要描述", len(tool_catalog))
-            logger.debug("初始工具集已准备，包含 request_tool_details + CONTROL 工具")
-            logger.debug("原子工具将按需通过 request_tool_details 获取")
-            
-            messages: list[dict[str, Any]] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_query.strip()},
-            ]
-            active_skill_text: list[str] = []
-            active_skill_ids: list[str] = []
+                        existing_constraints = self._conversation_constraints
+                        if existing_constraints:
+                            self._conversation_constraints = existing_constraints + planning_instruction
+                        else:
+                            self._conversation_constraints = planning_instruction.lstrip()
 
-            # 从数据库恢复已保存的 active skills
-            if self.memory is not None:
-                saved_skill_ids = self.memory.get_active_skills(self._conversation_id)
-                if saved_skill_ids:
-                    for sid in saved_skill_ids:
-                        skill = self.registry.get(sid)
-                        if skill:
-                            formatted_skill = format_skill_for_prompt(skill)
-                            active_skill_text.append(formatted_skill)
-                            active_skill_ids.append(sid)
-                    # 更新动态提示词
-                    if active_skill_text and active_skill_ids:
-                        active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
-                        self._dynamic_prompt.update_active_skills(active_skills_section)
-                        logger.debug("恢复 active skills: %s", active_skill_ids)
-                else:
-                    # 如果没有保存的 active skills，从全局配置动态读取该会话类型的默认技能
-                    conv = self.memory.get_conversation(self._conversation_id)
-                    if conv:
-                        from skill_agent_preferences import get_default_skills_for_type
-                        conv_type = conv.type or 'agent_conversation'
-                        skill_ids = get_default_skills_for_type(conv_type)
-                        for sid in skill_ids:
+                model = get_chat_model(enable_thinking=self._enable_thinking)
+                # 根据会话类型过滤skill目录
+                conv_type = self._get_conversation_type()
+                skills_visible = self._get_skills_for_conversation_type(conv_type)
+                catalog = build_skills_catalog_text(skills_visible)
+
+                tool_catalog = model.build_tool_catalog()
+                tool_catalog_text = self._build_tool_catalog_text(tool_catalog)
+                system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query, tool_catalog=tool_catalog_text)
+                logger.debug("初始系统提示词：%s", system_prompt)
+
+                # 复杂任务：制定结构化执行计划并请求用户确认
+                if plan_mode == PlanMode.COMPLEX_TASK:
+                    if self._plan_confirmed:
+                        # 续跑：计划已确认，展示已有计划后直接进入执行
+                        if log_callback and self._pending_plan:
+                            plan_display = self._format_plan_display({
+                                "analysis": self._pending_plan_analysis,
+                                "plan": self._pending_plan,
+                                "total_steps": len(self._pending_plan),
+                                "success_criteria": self._pending_success_criteria,
+                            })
+                            log_callback("✅ 计划已确认，开始按计划执行：\n\n" + plan_display, "plan")
+                    else:
+                        # 首次：生成计划
+                        plan_data = self._plan_steps(user_query, tool_catalog_text, log_callback)
+                        if plan_data is not None:
+                            # 启用确认环节：请求用户确认后再执行
+                            if config.PLAN_CONFIRMATION_ENABLED:
+                                return self._request_plan_confirmation(
+                                    user_query,
+                                    plan_data,
+                                    log_callback,
+                                    enable_vision=model.enable_vision,
+                                )
+                            # 未启用确认环节：展示计划后直接执行（保持原有行为）
+                            plan_display = self._format_plan_display(plan_data)
+                            if log_callback:
+                                log_callback(plan_display, "plan")
+                            if self.memory is not None:
+                                self.memory.append_message(
+                                    self._conversation_id,
+                                    plan_display,
+                                    metadata={"type": "plan"},
+                                )
+
+                tools = model.build_skill_agent_tools_initial()
+                self._supplied_tool_definitions: dict[str, dict] = {}
+
+                logger.debug("===== 目录+补发 渐进披露机制初始化 =====")
+                logger.debug("工具目录已构建，包含 %s 个工具的简要描述", len(tool_catalog))
+                logger.debug("初始工具集已准备，包含 request_tool_details + CONTROL 工具")
+                logger.debug("原子工具将按需通过 request_tool_details 获取")
+
+                messages: list[dict[str, Any]] = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_query.strip()},
+                ]
+                active_skill_text: list[str] = []
+                active_skill_ids: list[str] = []
+
+                # 从数据库恢复已保存的 active skills
+                if self.memory is not None:
+                    saved_skill_ids = self.memory.get_active_skills(self._conversation_id)
+                    if saved_skill_ids:
+                        for sid in saved_skill_ids:
                             skill = self.registry.get(sid)
                             if skill:
                                 formatted_skill = format_skill_for_prompt(skill)
                                 active_skill_text.append(formatted_skill)
                                 active_skill_ids.append(sid)
-                        # 将默认技能保存到 active_skill_ids 中
-                        if active_skill_ids:
-                            self.memory.set_active_skills(self._conversation_id, active_skill_ids)
+                        # 更新动态提示词
+                        if active_skill_text and active_skill_ids:
                             active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
                             self._dynamic_prompt.update_active_skills(active_skills_section)
-                            logger.debug("加载默认技能: %s", active_skill_ids)
+                            logger.debug("恢复 active skills: %s", active_skill_ids)
+                    else:
+                        # 如果没有保存的 active skills，从全局配置动态读取该会话类型的默认技能
+                        conv = self.memory.get_conversation(self._conversation_id)
+                        if conv:
+                            from skill_agent_preferences import get_default_skills_for_type
+                            conv_type = conv.type or 'agent_conversation'
+                            skill_ids = get_default_skills_for_type(conv_type)
+                            for sid in skill_ids:
+                                skill = self.registry.get(sid)
+                                if skill:
+                                    formatted_skill = format_skill_for_prompt(skill)
+                                    active_skill_text.append(formatted_skill)
+                                    active_skill_ids.append(sid)
+                            # 将默认技能保存到 active_skill_ids 中
+                            if active_skill_ids:
+                                self.memory.set_active_skills(self._conversation_id, active_skill_ids)
+                                active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
+                                self._dynamic_prompt.update_active_skills(active_skills_section)
+                                logger.debug("加载默认技能: %s", active_skill_ids)
 
-            if self.memory is not None:
-                self._append_model_messages(
-                    messages,
-                    system_prompt=system_prompt,
-                    user_query=user_query,
-                    enable_vision=model.enable_vision,
-                )
-                prior_messages = self.memory.get_message_records(self._conversation_id)
-                logger.debug("加载历史消息: %s 条", len(prior_messages))
-                if prior_messages and len(prior_messages) >= 2:
-                    last_msg = prior_messages[-1]
-                    prev_msg = prior_messages[-2]
-                    if last_msg.get("role") == "user" and prev_msg.get("role") == "tool":
-                        prev_meta = prev_msg.get("metadata") or {}
-                        if prev_meta.get("name") == "ask_user":
-                            user_choice = user_query.strip()
-                            logger.debug("检测到 ask_user 历史，用户选择: %s", user_choice)
-                            if user_choice == "确认执行":
-                                for record in reversed(prior_messages[:-2]):
-                                    if record.get("role") == "assistant":
-                                        meta = record.get("metadata") or {}
-                                        if meta.get("type") == "tool_call":
-                                            fname = meta.get("name")
-                                            args_str = meta.get("args", "{}")
-                                            try:
-                                                args = json.loads(args_str)
-                                            except json.JSONDecodeError:
-                                                args = {}
+                if self.memory is not None:
+                    self._append_model_messages(
+                        messages,
+                        system_prompt=system_prompt,
+                        user_query=user_query,
+                        enable_vision=model.enable_vision,
+                    )
+                    prior_messages = self.memory.get_message_records(self._conversation_id)
+                    logger.debug("加载历史消息: %s 条", len(prior_messages))
+                    if prior_messages and len(prior_messages) >= 2:
+                        last_msg = prior_messages[-1]
+                        prev_msg = prior_messages[-2]
+                        if last_msg.get("role") == "user" and prev_msg.get("role") == "tool":
+                            prev_meta = prev_msg.get("metadata") or {}
+                            if prev_meta.get("name") == "ask_user":
+                                user_choice = user_query.strip()
+                                logger.debug("检测到 ask_user 历史，用户选择: %s", user_choice)
+                                if user_choice == "确认执行":
+                                    # 设置已确认标志，跳过二次拦截
+                                    self._tool_ctx.set_skip_ask_user_for_run_command(True)
+                                    for record in reversed(prior_messages[:-2]):
+                                        if record.get("role") == "assistant":
+                                            meta = record.get("metadata") or {}
+                                            if meta.get("type") == "tool_call":
+                                                fname = meta.get("name")
+                                                args_str = meta.get("args", "{}")
+                                                try:
+                                                    args = json.loads(args_str)
+                                                except json.JSONDecodeError:
+                                                    args = {}
                                             if fname == "run_command":
                                                 command = str(args.get("command", "") or "").strip()
                                                 result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
@@ -1625,8 +1778,12 @@ class SkillAgent:
                                                 if log_callback:
                                                     log_callback(f"执行命令: {command}", "base_tool")
                                                     log_callback(str(result), "base_tool")
+                                                # 重置标志
+                                                self._tool_ctx.set_skip_ask_user_for_run_command(False)
                                                 break
                             elif user_choice == "确认安装":
+                                # 设置已确认标志，跳过二次拦截
+                                self._tool_ctx.set_skip_ask_user_for_run_command(True)
                                 for record in reversed(prior_messages[:-2]):
                                     if record.get("role") == "assistant":
                                         meta = record.get("metadata") or {}
@@ -1640,7 +1797,7 @@ class SkillAgent:
                                             if fname == "run_command":
                                                 skill_id = args.get("skill_id", "")
                                                 command = str(args.get("command", "") or "").strip()
-                                                
+
                                                 if skill_id:
                                                     success, msg = install_skill_dependencies(str(skill_id), self.registry)
                                                     if not success:
@@ -1651,6 +1808,8 @@ class SkillAgent:
                                                         self.memory.append_message(self._conversation_id, "assistant", err_msg, metadata=metadata)
                                                         _emit_token_usage()
                                                         logger.debug("返回 (依赖安装失败): %s", err_msg)
+                                                        # 重置标志
+                                                        self._tool_ctx.set_skip_ask_user_for_run_command(False)
                                                         return err_msg
                                                     if log_callback:
                                                         log_callback(f"依赖安装成功: {msg}", "base_tool")
@@ -1662,7 +1821,7 @@ class SkillAgent:
                                                         messages,
                                                         meta_type="base_tool",
                                                     )
-                                                    
+
                                                     result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
                                                     self._persist_tool_pair_only(
                                                         fname, args, str(result), messages,
@@ -1682,6 +1841,8 @@ class SkillAgent:
                                                         log_callback(str(result), "base_tool")
                                                 _emit_token_usage()
                                                 logger.debug("返回 (确认安装后执行结果): %s", str(result)[:100])
+                                                # 重置标志
+                                                self._tool_ctx.set_skip_ask_user_for_run_command(False)
                                                 return result
                             elif user_choice == "取消":
                                 cancel_msg = "操作已取消"
@@ -1694,15 +1855,15 @@ class SkillAgent:
                                 logger.debug("返回 (操作已取消)")
                                 return cancel_msg
 
-            reasoning_turn_count = 0  # 推理文本轮次计数器
             # 方案 A：记录本轮（主循环内）是否调用过任何工具，用于
-            # 在 LLM 试图用纯文本结束对话时强制其改走 finish 工具。
-            # 规则：一旦调用过工具，禁止用纯文本 return final_text 直接结束。
+            # 在 LLM 试图用纯文本结束对话时自动包装为 finish 工具调用。
+            # 规则：一旦调用过工具，自动将文本输出作为最终结果返回。
             has_called_tool_in_run = False
 
             for step in range(self.max_steps):
-                logger.debug("===== Step %s/%s 开始 =====", step, self.max_steps)
-                logger.debug("messages 数量: %s", len(messages))
+                # 性能优化：移除高频DEBUG日志，降低I/O开销
+                # logger.debug("===== Step %s/%s 开始 =====", step, self.max_steps)
+                # logger.debug("messages 数量: %s", len(messages))
                 
                 if _check_stop():
                     stop_msg = "用户已停止推理"
@@ -1721,45 +1882,69 @@ class SkillAgent:
                 show_thinking = self._enable_thinking
 
                 def _stream_callback(content: str, msg_type: str) -> None:
-                    logger.debug("[run._stream_callback] 回调被触发: type=%s, content前50字=%s",
-                                 msg_type, content[:50] if content else "(空)")
+                    # 性能优化：移除高频DEBUG日志，降低I/O开销
+                    # logger.debug("[run._stream_callback] 回调被触发: type=%s, content前50字=%s",
+                    #              msg_type, content[:50] if content else "(空)")
                     if log_callback:
                         # 只有当启用思考模式时才发送 think 类型的消息
                         if msg_type == "think" and not show_thinking:
-                            logger.debug("[run._stream_callback] think消息已禁用，跳过发送")
+                            # logger.debug("[run._stream_callback] think消息已禁用，跳过发送")
                             pass  # 不发送思考消息
                         else:
-                            # 将 'content' 映射为 'assistant'，'think' 保持不变
-                            mapped_type = msg_type if msg_type == "think" else "assistant"
-                            logger.debug("[run._stream_callback] 发送到前端: type=%s -> %s", msg_type, mapped_type)
+                            # 将 'content' 映射为 'assistant'，'think' 和 'tool_call' 保持不变
+                            if msg_type in ("think", "tool_call"):
+                                mapped_type = msg_type
+                            else:
+                                mapped_type = "assistant"
+                            # logger.debug("[run._stream_callback] 发送到前端: type=%s -> %s", msg_type, mapped_type)
                             log_callback(content, mapped_type)
-                    else:
-                        logger.debug("[run._stream_callback] log_callback 未提供，跳过发送")
+                    # else:
+                    #     logger.debug("[run._stream_callback] log_callback 未提供，跳过发送")
                     if msg_type == "think":
                         thinking_parts.append(content)
                     elif msg_type == "content":
                         content_parts.append(content)
 
-                logger.debug("准备调用 LLM, 当前消息数: %s", len(messages))
+                # 性能优化：移除高频DEBUG日志，降低I/O开销
+                # logger.debug("准备调用 LLM, 当前消息数: %s", len(messages))
                 if len(messages) > 0:
                     last_msg = messages[-1]
-                    logger.debug("最后一条消息: role=%s, content 前50字=%s", last_msg.get('role'), str(last_msg.get('content', ''))[:50])
+                    # logger.debug("最后一条消息: role=%s, content 前50字=%s", last_msg.get('role'), str(last_msg.get('content', ''))[:50])
 
                 self._update_system_message(messages)
 
+                # 设置 LLM 状态更新回调，将 IPC 状态消息传递到前端
+                def _llm_state_update_callback(state_message: dict) -> None:
+                    """将 LLM 状态更新发送到前端"""
+                    if log_callback:
+                        import json
+                        state_json = json.dumps(state_message, ensure_ascii=False)
+                        log_callback(state_json, "llm_state_update")
+
+                model.set_state_update_callback(_llm_state_update_callback)
 
                 result = model.stream_request_llm_with_tools(messages, tools, _stream_callback)
 
+                # 性能优化：移除高频DEBUG日志，降低I/O开销
                 # Debug output using StreamResult properties
-                logger.debug("LLM 返回 StreamResult:")
-                logger.debug("  - result_type: %s", result.result_type)
-                if result.tool_name:
-                    logger.debug("  - tool_name: %s", result.tool_name)
-                if result.tool_arguments:
-                    args_preview = str(result.tool_arguments)[:100]
-                    logger.debug("  - arguments 前100字: %s", args_preview)
-                if result.content:
-                    logger.debug("  - has content: True")
+                # logger.debug("LLM 返回 StreamResult:")
+                # logger.debug("  - result_type: %s", result.result_type)
+                # if result.tool_name:
+                #     logger.debug("  - tool_name: %s", result.tool_name)
+                # if result.tool_arguments:
+                #     args_str = str(result.tool_arguments)
+                #     args_len = len(args_str)
+                #     if args_len <= 500:
+                #         # 短参数：完整显示
+                #         logger.debug("  - arguments (长度=%d): %s", args_len, args_str)
+                #     else:
+                #         # 长参数：智能截断，显示前后各500字符
+                #         args_head = args_str[:500]
+                #         args_tail = args_str[-500:]
+                #         omitted_count = args_len - 1000
+                #         logger.debug("  - arguments (长度=%d): %s...(省略%d字符)...%s", args_len, args_head, omitted_count, args_tail)
+                # if result.content:
+                #     logger.debug("  - has content: True")
 
                 # Accumulate token usage
                 if result.token_usage is not None:
@@ -1800,41 +1985,31 @@ class SkillAgent:
                         _emit_token_usage()
                         return err
 
-                    # 判断是否为推理/计划文本（而非最终回答）
-                    # 方案 A：把 has_called_tool_in_run 传入，强制"调用过工具就走 continue，
-                    # 直到 LLM 调 finish 才允许结束"，避免出现"调过工具又用纯文本结束"的不一致状态。
-                    is_reasoning = self._is_reasoning_text(final_text, has_called_tool=has_called_tool_in_run)
-                    
+                    # 自动 finish：如果已调用工具，自动包装文本为 finish 调用
+                    if has_called_tool_in_run:
+                        logger.info("检测到工具调用后的文本输出，自动包装为finish工具调用")
+                        logger.debug(f"文本长度: {len(final_text)}, 工具调用历史: {len(self._recent_tool_calls)}")
+                        if log_callback:
+                            log_callback(final_text, "assistant")
+                        if self.memory is not None:
+                            metadata = {"token_usage": asdict(self._token_usage)}
+                            self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
+                        _emit_token_usage()
+                        return final_text
+
+                    # 仅用于日志诊断，不影响会话流程
+                    is_reasoning = self._is_reasoning_text(final_text, has_called_tool=False)
+                    if is_reasoning:
+                        logger.debug(f"检测到推理文本（已自动处理），内容前100字: {final_text[:100]}, 文本长度: {len(final_text)}")
+
                     if is_reasoning or is_truncated:
                         # 推理文本或被截断的响应：将文本加入上下文，给 LLM 再一轮机会
-                        logger.debug("检测到推理文本或被截断的响应 (长度: %s, truncated: %s, has_called_tool=%s)",
-                                     len(final_text), is_truncated, has_called_tool_in_run)
+                        logger.debug("检测到推理文本或被截断的响应 (长度: %s, truncated: %s)",
+                                     len(final_text), is_truncated)
                         if self.memory is not None:
                             metadata = {"token_usage": asdict(self._token_usage)}
                             self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
                         # 继续循环，让 LLM 有机会输出工具调用
-                        reasoning_turn_count += 1
-                        if reasoning_turn_count >= 2:
-                            # 超过最大推理轮次，终止并提示
-                            logger.warning("LLM 连续 %d 次输出推理文本，终止对话 (has_called_tool=%s)",
-                                          reasoning_turn_count, has_called_tool_in_run)
-                            if has_called_tool_in_run:
-                                # 方案 A：本轮调过工具但 LLM 仍不肯调 finish，
-                                # 此时直接结束会违反"调过工具必须用 finish 结束"的规则，
-                                # 给出更明确的提示告知用户本次对话未走完正常收尾流程。
-                                warning_msg = (
-                                    "本次任务已执行工具调用，但助手未能按规则调用 finish 工具完成收尾，"
-                                    "对话已被强制结束。如需完整答复，请重新提问或继续追问。"
-                                )
-                            else:
-                                warning_msg = "LLM 未能执行计划，请重新描述您的需求。"
-                            if log_callback:
-                                log_callback(warning_msg, "assistant")
-                            if self.memory is not None:
-                                metadata = {"token_usage": asdict(self._token_usage)}
-                                self.memory.append_message(self._conversation_id, "assistant", warning_msg, metadata=metadata)
-                            _emit_token_usage()
-                            return warning_msg
                         continue
                     else:
                         # 正常文本响应：结束对话
@@ -1863,8 +2038,17 @@ class SkillAgent:
                 try:
                     args = json.loads(arg_str)
                 except json.JSONDecodeError:
+                    # arg_str 不是有效 JSON，回退为空字典并重新序列化为 JSON 字符串
                     args = {}
+                    arg_str = json.dumps(args, ensure_ascii=False)
                 logger.debug("解析工具调用: fname=%s, args keys=%s", fname, list(args.keys()) if isinstance(args, dict) else type(args))
+
+                # 状态机：LLM 调用工具前设置为 TOOL_CALLED
+                try:
+                    self._state = ConversationState.TOOL_CALLED
+                    logger.debug(f"状态转换: {self._state.value}")
+                except Exception as e:
+                    logger.warning(f"状态转换异常: {e}, 当前状态: {self._state.value}")
 
                 # 关键修复：full_thinking 不再单独作为一条 assistant(think) 消息持久化，
                 # 而是作为 assistant tool_call 消息的 content 一起写入，
@@ -1938,7 +2122,7 @@ class SkillAgent:
                             "tool_calls": [{
                                 "id": _call_id,
                                 "type": "function",
-                                "function": {"name": fname, "arguments": arg_str},
+                                "function": {"name": fname, "arguments": _ensure_valid_json_args(arg_str)},
                             }],
                         })
                         messages.append({
@@ -1950,7 +2134,7 @@ class SkillAgent:
                     
                     if log_callback:
                         found_names = [d.get("name", "") for d in definitions_found]
-                        log_callback(f"获取工具定义: {', '.join(found_names)}", "tool")
+                        logger.debug("获取工具定义: %s", ", ".join(found_names))
                         log_callback(str(tool_result), "base_tool")
                     
                     continue
@@ -1960,14 +2144,15 @@ class SkillAgent:
                         args_s = json.dumps(args, ensure_ascii=False)
                     except (TypeError, ValueError):
                         args_s = str(args)
-                    pass
+
+                    # 保留调试日志，移除一次性工具调用消息（已通过流式机制发送）
                     if fname == "finish":
                         content_preview = "".join(content_parts)[:200] if content_parts else "(空)"
-                        log_callback(f"[DEBUG-finish] LLM 调用 finish，原始 args: {args_s} | content_parts 预览: {content_preview!r}", "tool")
-                    elif fname != "select_skill":
-                        log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
+                        logger.debug("[finish] LLM 调用 finish，原始 args: %s | content_parts 预览: %r", args_s, content_preview)
+                    elif fname == "select_skill":
+                        logger.debug("选择 Skill: %s", args.get('skill_id', ''))
                     else:
-                        log_callback(f"选择 Skill: {args.get('skill_id', '')}", "tool")
+                        logger.debug("调用工具 `%s` · %s", fname, args_s)
                 # 注意：此处不再单独保存 assistant(tool_call) 消息，
                 # 由下方 _persist_after_tool_turn 统一保存完整的
                 # assistant(tool_calls) + tool(result) 序列，避免重复渲染。
@@ -1975,7 +2160,13 @@ class SkillAgent:
                 if fname == "run_command":
                     command = str(args.get("command", "") or "").strip()
                     skill_id = args.get("skill_id", "")
-                    
+
+                    # 检查是否已通过历史记录确认（旧方案保留，用于兼容）
+                    skip_ask_user = self._tool_ctx.should_skip_ask_user_for_run_command()
+                    if skip_ask_user:
+                        logger.debug("跳过二次确认：命令已通过历史记录确认")
+
+                    # 新方案：运行时拦截确认（用户确认不发往 LLM）
                     if skill_id:
                         need_install, packages_to_install, err_msg = check_skill_dependencies(
                             str(skill_id), self.registry
@@ -1983,116 +2174,53 @@ class SkillAgent:
                         if err_msg:
                             _emit_token_usage()
                             return f"错误: {err_msg}"
-                        
-                        if need_install and packages_to_install:
+
+                        if need_install and packages_to_install and not skip_ask_user:
                             packages_str = ", ".join(packages_to_install)
                             ask_args = {
                                 "question": f"Skill「{skill_id}」需要安装以下依赖包：\n\n{packages_str}\n\n是否确认安装？",
                                 "choices": ["确认安装", "取消"]
                             }
-                            result, terminate, final = execute_skill_control_tool(
-                                "ask_user",
-                                ask_args,
-                                registry=self.registry,
-                                active_skill_text=active_skill_text,
-                                active_skill_ids=active_skill_ids,
-                                disabled_skill_ids=self._disabled_skill_ids_frozen(),
-                            )
-                            if str(result).startswith("错误"):
-                                _emit_token_usage()
-                                return result
-                            if self.memory is not None:
-                                self._persist_after_tool_turn(
-                                    "ask_user",
-                                    ask_args,
-                                    str(result),
-                                    active_skill_text,
-                                    active_skill_ids,
-                                    messages,
-                                    reasoning_content=full_thinking or None,
-                                    arg_str=json.dumps(ask_args, ensure_ascii=False),
-                                )
-                            else:
-                                self._append_tool_pair(
-                                    "ask_user", ask_args, str(result), messages,
-                                    reasoning_content=full_thinking or None,
-                                )
+                            # 保存待执行命令信息
+                            self._runtime_confirm_pending = True
+                            self._runtime_confirm_fname = fname
+                            self._runtime_confirm_args = args
+                            self._runtime_confirm_messages = list(messages)  # 快照
+                            # 触发确认 UI（不保存到历史，不发给 LLM）
                             if log_callback:
                                 log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
                             _emit_token_usage()
                             return SKILL_AGENT_AWAITING_USER_REPLY
                     
                     is_pkg_install, packages = self._is_package_install_command(command)
-                    if is_pkg_install:
+                    if is_pkg_install and not skip_ask_user:
                         packages_str = ", ".join(packages) if packages else "（未解析到包名）"
                         ask_args = {
                             "question": f"即将安装以下包：\n\n{packages_str}\n\n命令：{command}\n\n是否确认执行？",
                             "choices": ["确认安装", "取消"]
                         }
-                        result, terminate, final = execute_skill_control_tool(
-                            "ask_user",
-                            ask_args,
-                            registry=self.registry,
-                            active_skill_text=active_skill_text,
-                            active_skill_ids=active_skill_ids,
-                            disabled_skill_ids=self._disabled_skill_ids_frozen(),
-                        )
-                        if str(result).startswith("错误"):
-                            _emit_token_usage()
-                            return result
-                        if self.memory is not None:
-                            self._persist_after_tool_turn(
-                                "ask_user",
-                                ask_args,
-                                str(result),
-                                active_skill_text,
-                                active_skill_ids,
-                                messages,
-                                reasoning_content=full_thinking or None,
-                                arg_str=json.dumps(ask_args, ensure_ascii=False),
-                            )
-                        else:
-                            self._append_tool_pair(
-                                "ask_user", ask_args, str(result), messages,
-                                reasoning_content=full_thinking or None,
-                            )
+                        # 保存待执行命令信息
+                        self._runtime_confirm_pending = True
+                        self._runtime_confirm_fname = fname
+                        self._runtime_confirm_args = args
+                        self._runtime_confirm_messages = list(messages)  # 快照
+                        # 触发确认 UI（不保存到历史，不发给 LLM）
                         if log_callback:
                             log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
                         _emit_token_usage()
                         return SKILL_AGENT_AWAITING_USER_REPLY
                     
-                    if self._is_dangerous_command(command):
+                    if self._is_dangerous_command(command) and not skip_ask_user:
                         ask_args = {
                             "question": f"即将执行以下命令，可能会修改或删除文件：\n\n{command}\n\n是否确认执行？",
                             "choices": ["确认执行", "取消"]
                         }
-                        result, terminate, final = execute_skill_control_tool(
-                            "ask_user",
-                            ask_args,
-                            registry=self.registry,
-                            active_skill_text=active_skill_text,
-                            active_skill_ids=active_skill_ids,
-                            disabled_skill_ids=self._disabled_skill_ids_frozen(),
-                        )
-                        if str(result).startswith("错误"):
-                            _emit_token_usage()
-                            return result
-                        if self.memory is not None:
-                            self._persist_after_tool_turn(
-                                "ask_user",
-                                ask_args,
-                                str(result),
-                                active_skill_text,
-                                active_skill_ids,
-                                messages,
-                                reasoning_content=full_thinking or None,
-                                arg_str=json.dumps(ask_args, ensure_ascii=False),
-                            )
-                        else:
-                            self._append_tool_pair(
-                                "ask_user", ask_args, str(result), messages,
-                                reasoning_content=full_thinking or None,
-                            )
+                        # 保存待执行命令信息
+                        self._runtime_confirm_pending = True
+                        self._runtime_confirm_fname = fname
+                        self._runtime_confirm_args = args
+                        self._runtime_confirm_messages = list(messages)  # 快照
+                        # 触发确认 UI（不保存到历史，不发给 LLM）
                         if log_callback:
                             log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
                         _emit_token_usage()
@@ -2146,6 +2274,13 @@ class SkillAgent:
                 if not is_repeated:
                     result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
 
+                    # 状态机：工具执行完成后设置为 TOOL_EXECUTED
+                    try:
+                        self._state = ConversationState.TOOL_EXECUTED
+                        logger.debug(f"状态转换: {self._state.value}, 等待LLM调用finish工具或自动finish")
+                    except Exception as e:
+                        logger.warning(f"状态转换异常: {e}, 当前状态: {self._state.value}")
+
                     # 方案 A：标记本轮已调用过工具（含 finish/ask_user/select_skill 等控制工具），
                     # 用于下方判断是否允许 LLM 用纯文本直接结束。
                     has_called_tool_in_run = True
@@ -2175,22 +2310,32 @@ class SkillAgent:
                                 result = f"❌ 操作失败\n\n{result}"
                                 logger.debug("格式化工具结果: %s, 成功=False, 原始长度=%s, 添加失败前缀", fname, original_len)
 
-                logger.debug("工具执行完成:")
-                logger.debug("  - result 长度: %s", len(str(result)))
-                logger.debug("  - result 前100字: %s", str(result)[:100])
-                logger.debug("  - terminate: %s", terminate)
-                logger.debug("  - final: %s", final is not None)
+                # 性能优化：移除高频DEBUG日志，降低I/O开销
+                # logger.debug("工具执行完成:")
+                # result_str = str(result)
+                # result_len = len(result_str)
+                # logger.debug("  - result 长度: %s", result_len)
+                # if result_len <= 500:
+                #     # 短结果：完整显示
+                #     logger.debug("  - result: %s", result_str)
+                # else:
+                #     # 长结果：智能截断，显示前后各500字符
+                #     result_head = result_str[:500]
+                #     result_tail = result_str[-500:]
+                #     omitted_count = result_len - 1000
+                #     logger.debug("  - result: %s...(省略%d字符)...%s", result_head, omitted_count, result_tail)
+                # logger.debug("  - terminate: %s", terminate)
+                # logger.debug("  - final: %s", final is not None)
 
                 if log_callback and fname == "select_skill":
+                    # 保留调试日志，移除一次性工具调用消息（已通过流式机制发送）
                     if str(result).startswith("错误"):
-                        log_callback(f"选择 Skill 失败：{result}", "tool")
+                        logger.warning("选择 Skill 失败: %s", result)
                     else:
                         ids_join = "、".join(active_skill_ids)
                         n = len(active_skill_ids)
-                        log_callback(
-                            f"命中 Skill「{args.get('skill_id', '')}」｜本轮已累计 id：{ids_join}（共 {n} 个）",
-                            "tool",
-                        )
+                        logger.debug("命中 Skill「%s」｜本轮已累计 id：%s（共 %d 个）",
+                                   args.get('skill_id', ''), ids_join, n)
                         prefix = (
                             f"［第 {n} 次加载｜本轮已累计 {n} 份｜id 顺序：{ids_join}］\n\n"
                         )
@@ -2267,7 +2412,7 @@ class SkillAgent:
                             "tool_calls": [{
                                 "id": _call_id,
                                 "type": "function",
-                                "function": {"name": fname, "arguments": arg_str},
+                                "function": {"name": fname, "arguments": _ensure_valid_json_args(arg_str)},
                             }],
                         })
                         messages.append({
@@ -2303,7 +2448,7 @@ class SkillAgent:
                             "tool_calls": [{
                                 "id": _call_id,
                                 "type": "function",
-                                "function": {"name": fname, "arguments": arg_str},
+                                "function": {"name": fname, "arguments": _ensure_valid_json_args(arg_str)},
                             }],
                         })
                         messages.append({
@@ -2338,7 +2483,7 @@ class SkillAgent:
                         "tool_calls": [{
                             "id": _call_id,
                             "type": "function",
-                            "function": {"name": fname, "arguments": arg_str},
+                            "function": {"name": fname, "arguments": _ensure_valid_json_args(arg_str)},
                         }],
                     })
                     messages.append({
@@ -2383,6 +2528,16 @@ class SkillAgent:
             logger.debug("异常退出，返回 err_msg")
             return err_msg
         finally:
+            # 清理 LLM 状态更新回调，防止内存泄漏
+            try:
+                model.set_state_update_callback(None)
+            except (NameError, AttributeError):
+                pass  # model 未定义或没有该方法，忽略
+
+            # 状态机：会话完成时设置为 COMPLETED
+            self._state = ConversationState.COMPLETED
+            logger.debug(f"会话完成，最终状态: {self._state.value}, 总token使用: {self._token_usage}")
+
             self._uploaded_files_content = {"text_content": "", "images": []}
             # 重置计划确认标志（pending_plan 不清空，供续跑使用；下次首次规划会覆盖）
             self._plan_confirmed = False

@@ -3,8 +3,11 @@ from __future__ import annotations
 import base64
 import json
 import re
+import threading
 import time as _time
+import uuid
 from abc import ABC, abstractmethod
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Literal, Optional
@@ -18,6 +21,65 @@ logger = get_module_logger("BaseChatModel")
 from executor import Executor
 from base_tool import ATOMIC_TOOL_DEFINITIONS, CONTROL_TOOL_DEFINITIONS, REQUEST_TOOL_DETAILS_DEFINITION
 from llm.token_usage import TokenUsage
+from llm.communication_state import LLMCommunicationContext, LLMCommunicationState, transition_state, create_initial_context
+from llm.async_executor import get_executor_manager, AsyncTaskResult, TaskState
+
+
+def _sanitize_tool_arguments(arguments: Any) -> str:
+    """确保 tool_calls 中的 arguments 是有效的 JSON 字符串。
+
+    这是发送 API 请求前的最终防线，防止任何路径产生的非法 arguments 导致 API 报错。
+    """
+    if arguments is None:
+        return "{}"
+    if isinstance(arguments, str):
+        # 验证是否为有效 JSON
+        try:
+            json.loads(arguments)
+            return arguments
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.warning("[API] 检测到非 JSON 的 arguments: %s，已修复为 {}", repr(arguments[:100]))
+            return "{}"
+    elif isinstance(arguments, dict):
+        return json.dumps(arguments, ensure_ascii=False)
+    else:
+        logger.warning("[API] 检测到非预期的 arguments 类型: %s，已修复为 {}", type(arguments))
+        return "{}"
+
+
+def _sanitize_messages_for_api(messages: list[dict]) -> list[dict]:
+    """在发送 API 请求前校验并修复所有 messages 中的 tool_calls。
+
+    确保所有 assistant 消息中的 tool_calls[].function.arguments 都是有效的 JSON 字符串。
+    """
+    sanitized = []
+    for msg in messages:
+        if msg.get("role") == "assistant" and "tool_calls" in msg:
+            tool_calls = msg["tool_calls"]
+            if isinstance(tool_calls, list):
+                sanitized_tc = []
+                for tc in tool_calls:
+                    if isinstance(tc, dict) and "function" in tc:
+                        func = tc["function"]
+                        if isinstance(func, dict) and "arguments" in func:
+                            # 修复 arguments
+                            func_copy = dict(func)
+                            func_copy["arguments"] = _sanitize_tool_arguments(func["arguments"])
+                            tc_copy = dict(tc)
+                            tc_copy["function"] = func_copy
+                            sanitized_tc.append(tc_copy)
+                        else:
+                            sanitized_tc.append(tc)
+                    else:
+                        sanitized_tc.append(tc)
+                msg_copy = dict(msg)
+                msg_copy["tool_calls"] = sanitized_tc
+                sanitized.append(msg_copy)
+            else:
+                sanitized.append(msg)
+        else:
+            sanitized.append(msg)
+    return sanitized
 
 
 class StreamResultType(str, Enum):
@@ -142,6 +204,21 @@ class StreamParser:
         + [t["name"] for t in CONTROL_TOOL_DEFINITIONS]
         + [REQUEST_TOOL_DETAILS_DEFINITION["name"]]
     )
+    
+    # 【性能优化】缓存正则表达式对象，避免重复编译
+    _XML_TOOL_CALL_BLOCK_PATTERN = re.compile(
+        r"<\s*tool_call\s*>(.*?)<\s*/tool_call\s*>",
+        re.DOTALL | re.IGNORECASE
+    )
+    _XML_FUNCTION_PATTERN = re.compile(
+        r"<\s*function\s*=\s*([A-Za-z_][\w]*)\s*>(.*?)<\s*/function\s*>",
+        re.DOTALL | re.IGNORECASE
+    )
+    _XML_PARAMETER_PATTERN = re.compile(
+        r"<\s*parameter\s*=\s*([A-Za-z_][\w]*)\s*>(.*?)<\s*/parameter\s*>",
+        re.DOTALL | re.IGNORECASE
+    )
+    _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
     @staticmethod
     def _extract_tool_call_from_text(text: str) -> Optional[tuple[str, str]]:
@@ -172,28 +249,19 @@ class StreamParser:
                 block_count,
             )
 
-        # 截取第一个 <tool_call>...</tool_call> 块
-        block_match = re.search(
-            r"<\s*tool_call\s*>(.*?)<\s*/tool_call\s*>",
-            text, re.DOTALL | re.IGNORECASE,
-        )
+        # 截取第一个 <tool_call>... 演艺经历 块（使用缓存的正则）
+        block_match = StreamParser._XML_TOOL_CALL_BLOCK_PATTERN.search(text)
         if not block_match:
             return None
         block = block_match.group(1)
 
-        # 格式 A：Qwen3 原生 <function=NAME>...<parameter=KEY>VALUE</parameter>...</function>
-        func_match = re.search(
-            r"<\s*function\s*=\s*([A-Za-z_][\w]*)\s*>(.*?)<\s*/function\s*>",
-            block, re.DOTALL | re.IGNORECASE,
-        )
+        # 格式 A：Qwen3 原生 <function=NAME>...<parameter=KEY>VALUE</parameter>...</function>（使用缓存的正则）
+        func_match = StreamParser._XML_FUNCTION_PATTERN.search(block)
         if func_match:
             name = func_match.group(1)
             params_text = func_match.group(2)
             params: dict[str, Any] = {}
-            for key, value in re.findall(
-                r"<\s*parameter\s*=\s*([A-Za-z_][\w]*)\s*>(.*?)<\s*/parameter\s*>",
-                params_text, re.DOTALL | re.IGNORECASE,
-            ):
+            for key, value in StreamParser._XML_PARAMETER_PATTERN.findall(params_text):
                 value = value.strip()
                 # 仅对明确是 JSON 复合类型（array/object）的值做解析，
                 # 纯数字/布尔/字符串保持原样——避免 skill_id="8" 被误转为 int 8
@@ -214,8 +282,8 @@ class StreamParser:
                 return None
             return name, json.dumps(params, ensure_ascii=False)
 
-        # 格式 B：Hermes / OpenAI JSON 兼容
-        json_match = re.search(r"\{.*\}", block, re.DOTALL)
+        # 格式 B：Hermes / OpenAI JSON 兼容（使用缓存的正则）
+        json_match = StreamParser._JSON_OBJECT_PATTERN.search(block)
         if json_match:
             try:
                 data = json.loads(json_match.group(0))
@@ -226,9 +294,19 @@ class StreamParser:
                 if isinstance(args, dict):
                     args_str = json.dumps(args, ensure_ascii=False)
                 elif isinstance(args, str):
-                    args_str = args
+                    # 验证字符串是否为有效 JSON，如果不是则尝试解析
+                    try:
+                        parsed = json.loads(args)
+                        if isinstance(parsed, dict):
+                            args_str = json.dumps(parsed, ensure_ascii=False)
+                        else:
+                            # 如果不是 dict，包装成空对象
+                            args_str = "{}"
+                    except json.JSONDecodeError:
+                        # 无法解析为 JSON，返回空对象
+                        args_str = "{}"
                 else:
-                    args_str = str(args)
+                    args_str = json.dumps(args, ensure_ascii=False) if args else "{}"
                 if name not in StreamParser._KNOWN_TOOL_NAMES:
                     logger.warning(
                         "[StreamParser] JSON 解析到未知工具名 %r，忽略（可能是 prose 误判）",
@@ -246,16 +324,18 @@ class StreamParser:
         stream_callback: Callable[[str, str], None],
         messages: list[dict],
         estimate_tokens: Callable[[list[dict]], int],
-        callback_interval: float = 0.05,
-        min_chars_for_callback: int = 30,
+        callback_interval: float = 0.1,  # 优化：从50ms增加到100ms，降低回调频率
+        min_chars_for_callback: int = 50,  # 优化：从30增加到50，减少小批量回调
+        on_tool_call_chunk: Callable[[dict], None] | None = None,
     ) -> None:
         self._callback = stream_callback
         self._messages = messages
         self._estimate_tokens = estimate_tokens
         self._callback_interval = callback_interval
         self._min_chars = min_chars_for_callback
+        self._on_tool_call_chunk = on_tool_call_chunk
 
-        # Buffers
+        # Buffers（性能优化：预分配缓冲区大小）
         self._reasoning_buffer: list[str] = []
         self._content_buffer: list[str] = []
         self._tool_call_chunks: dict[int, dict[str, Any]] = {}
@@ -266,22 +346,109 @@ class StreamParser:
 
         # Callback timing
         self._last_callback_time = _time.time()
+        
+        # 【性能优化】性能监控指标
+        self._performance_metrics = {
+            'callback_count': 0,  # 回调次数
+            'total_callback_delay_ms': 0.0,  # 总回调延迟（毫秒）
+            'max_callback_delay_ms': 0.0,  # 最大回调延迟
+            'buffer_flush_count': 0,  # 缓冲区刷新次数
+            'total_buffered_chars': 0,  # 总缓冲字符数
+            'avg_buffered_chars': 0.0,  # 平均缓冲字符数
+        }
 
     def _flush_buffer(self) -> None:
-        """排空缓冲区并通过回调发送"""
+        """排空缓冲区并通过回调发送
+        
+        性能优化：
+        1. 移除高频DEBUG日志，降低I/O开销
+        2. 添加性能监控，记录回调延迟和缓冲区使用情况
+        """
+        flush_start_time = _time.time()
+        total_chars_flushed = 0
+        
         if self._reasoning_buffer:
+            # 【性能优化】使用 join 代替循环拼接，减少字符串拷贝
             text = "".join(self._reasoning_buffer)
+            total_chars_flushed += len(text)
             self._all_reasoning_parts.append(text)
             self._reasoning_buffer.clear()
-            logger.debug("[StreamParser._flush_buffer] 调用回调: type=think, content前50字=%s", text[:50] if text else "(空)")
             self._callback(text, "think")
         if self._content_buffer:
+            # 【性能优化】使用 join 代替循环拼接，减少字符串拷贝
             text = "".join(self._content_buffer)
+            total_chars_flushed += len(text)
             self._all_content_parts.append(text)
             self._content_buffer.clear()
-            logger.debug("[StreamParser._flush_buffer] 调用回调: type=content, content前50字=%s", text[:50] if text else "(空)")
             self._callback(text, "content")
+        
+        # 更新性能监控指标
+        callback_delay_ms = (_time.time() - flush_start_time) * 1000
+        self._performance_metrics['callback_count'] += 1
+        self._performance_metrics['total_callback_delay_ms'] += callback_delay_ms
+        self._performance_metrics['max_callback_delay_ms'] = max(
+            self._performance_metrics['max_callback_delay_ms'], 
+            callback_delay_ms
+        )
+        self._performance_metrics['buffer_flush_count'] += 1
+        self._performance_metrics['total_buffered_chars'] += total_chars_flushed
+        
+        # 计算平均缓冲字符数
+        if self._performance_metrics['buffer_flush_count'] > 0:
+            self._performance_metrics['avg_buffered_chars'] = (
+                self._performance_metrics['total_buffered_chars'] / 
+                self._performance_metrics['buffer_flush_count']
+            )
+        
         self._last_callback_time = _time.time()
+
+    def get_performance_metrics(self) -> dict:
+        """获取性能监控指标
+        
+        Returns:
+            dict: 包含性能指标的字典，包括：
+                - callback_count: 回调次数
+                - avg_callback_delay_ms: 平均回调延迟（毫秒）
+                - max_callback_delay_ms: 最大回调延迟（毫秒）
+                - buffer_flush_count: 缓冲区刷新次数
+                - avg_buffered_chars: 平均缓冲字符数
+                - total_buffered_chars: 总缓冲字符数
+        """
+        metrics = dict(self._performance_metrics)
+        # 计算平均回调延迟
+        if metrics['callback_count'] > 0:
+            metrics['avg_callback_delay_ms'] = (
+                metrics['total_callback_delay_ms'] / metrics['callback_count']
+            )
+        else:
+            metrics['avg_callback_delay_ms'] = 0.0
+        return metrics
+    
+    def log_performance_summary(self) -> None:
+        """记录性能摘要日志（在流式处理结束时调用）"""
+        metrics = self.get_performance_metrics()
+        
+        # 使用字符串格式化而不是参数传递，兼容项目的自定义logger
+        summary_msg = (
+            f"[StreamParser 性能摘要] "
+            f"回调次数: {metrics['callback_count']}, "
+            f"平均回调延迟: {metrics['avg_callback_delay_ms']:.2f}ms, "
+            f"最大回调延迟: {metrics['max_callback_delay_ms']:.2f}ms, "
+            f"缓冲区刷新次数: {metrics['buffer_flush_count']}, "
+            f"平均缓冲字符数: {metrics['avg_buffered_chars']:.1f}, "
+            f"总缓冲字符数: {metrics['total_buffered_chars']}"
+        )
+        logger.info(summary_msg)
+        
+        # 性能告警：如果平均回调延迟超过阈值，记录警告
+        PERFORMANCE_WARNING_THRESHOLD_MS = 10.0  # 平均回调延迟警告阈值（毫秒）
+        if metrics['avg_callback_delay_ms'] > PERFORMANCE_WARNING_THRESHOLD_MS:
+            warning_msg = (
+                f"[StreamParser 性能告警] "
+                f"平均回调延迟 {metrics['avg_callback_delay_ms']:.2f}ms 超过阈值 {PERFORMANCE_WARNING_THRESHOLD_MS:.2f}ms，"
+                f"可能影响流式响应性能。建议增大回调间隔或字符阈值。"
+            )
+            logger.warning(warning_msg)
 
     def _should_flush(self) -> bool:
         """判断是否应该排空缓冲区"""
@@ -294,6 +461,39 @@ class StreamParser:
             (current_time - self._last_callback_time >= self._callback_interval) or
             (total_buffered >= self._min_chars)
         )
+
+    def _emit_tool_call_chunk(
+        self,
+        tool_call_index: int,
+        name_chunk: str,
+        arguments_chunk: str,
+        accumulated_name: str,
+        accumulated_arguments: str,
+        is_complete: bool = False,
+        source: str = "streaming",
+    ) -> None:
+        """发出工具调用增量回调
+
+        Args:
+            tool_call_index: 工具调用索引
+            name_chunk: 工具名称增量片段
+            arguments_chunk: 参数增量片段
+            accumulated_name: 已累积的工具名称
+            accumulated_arguments: 已累积的参数
+            is_complete: 是否已完成（流结束）
+            source: 来源类型（"streaming" 结构化流式 / "xml_fallback" XML一次性）
+        """
+        if self._on_tool_call_chunk:
+            chunk_data = {
+                "name_chunk": name_chunk,
+                "arguments_chunk": arguments_chunk,
+                "accumulated_name": accumulated_name,
+                "accumulated_arguments": accumulated_arguments,
+                "tool_call_index": tool_call_index,
+                "is_complete": is_complete,
+                "source": source,
+            }
+            self._on_tool_call_chunk(chunk_data)
 
     def _process_delta(self, delta: Any) -> None:
         """处理单个 delta 块"""
@@ -321,10 +521,25 @@ class StreamParser:
                         "arguments": "",
                     }
                 if tc.function:
+                    name_chunk = ""
+                    arguments_chunk = ""
                     if tc.function.name:
-                        self._tool_call_chunks[idx]["name"] += tc.function.name
+                        name_chunk = tc.function.name
+                        self._tool_call_chunks[idx]["name"] += name_chunk
                     if tc.function.arguments:
-                        self._tool_call_chunks[idx]["arguments"] += tc.function.arguments
+                        arguments_chunk = tc.function.arguments
+                        self._tool_call_chunks[idx]["arguments"] += arguments_chunk
+                    
+                    # 在累积数据后调用回调
+                    if name_chunk or arguments_chunk:
+                        self._emit_tool_call_chunk(
+                            tool_call_index=idx,
+                            name_chunk=name_chunk,
+                            arguments_chunk=arguments_chunk,
+                            accumulated_name=self._tool_call_chunks[idx]["name"],
+                            accumulated_arguments=self._tool_call_chunks[idx]["arguments"],
+                            is_complete=False,
+                        )
 
     def _process_function_call(self, delta: Any) -> None:
         """处理工具调用流式拼接（function_call 旧格式，GLM 使用）"""
@@ -336,10 +551,25 @@ class StreamParser:
                     "name": "",
                     "arguments": "",
                 }
+            name_chunk = ""
+            arguments_chunk = ""
             if hasattr(function_call, 'name') and function_call.name:
-                self._tool_call_chunks[0]["name"] += function_call.name
+                name_chunk = function_call.name
+                self._tool_call_chunks[0]["name"] += name_chunk
             if hasattr(function_call, 'arguments') and function_call.arguments:
-                self._tool_call_chunks[0]["arguments"] += function_call.arguments
+                arguments_chunk = function_call.arguments
+                self._tool_call_chunks[0]["arguments"] += arguments_chunk
+            
+            # 在累积数据后调用回调
+            if name_chunk or arguments_chunk:
+                self._emit_tool_call_chunk(
+                    tool_call_index=0,
+                    name_chunk=name_chunk,
+                    arguments_chunk=arguments_chunk,
+                    accumulated_name=self._tool_call_chunks[0]["name"],
+                    accumulated_arguments=self._tool_call_chunks[0]["arguments"],
+                    is_complete=False,
+                )
 
     def _build_result(self, finish_reason: Optional[str] = None) -> StreamResult:
         """将累积数据组装为 StreamResult"""
@@ -351,6 +581,16 @@ class StreamParser:
             reasoning_text = "".join(self._all_reasoning_parts).strip()
             # 如果有部分工具调用内容，仍然返回 tool_call 类型让 agent 尝试执行
             if self._tool_call_chunks:
+                # 发出完成回调（流结束）
+                for idx, tc_data in self._tool_call_chunks.items():
+                    self._emit_tool_call_chunk(
+                        tool_call_index=idx,
+                        name_chunk="",
+                        arguments_chunk="",
+                        accumulated_name=tc_data["name"],
+                        accumulated_arguments=tc_data["arguments"],
+                        is_complete=True,
+                    )
                 first_tc = self._tool_call_chunks[min(self._tool_call_chunks.keys())]
                 name = first_tc["name"].strip()
                 arguments = first_tc["arguments"].strip()
@@ -393,6 +633,17 @@ class StreamParser:
                     "[StreamParser] 从 reasoning/content 中解析到 XML 工具调用 "
                     "(本地后端未返回结构化 tool_calls): name=%s", name,
                 )
+                # 通过回调发送完整信息（XML 解析无法流式，一次性发送）
+                if self._on_tool_call_chunk:
+                    self._emit_tool_call_chunk(
+                        tool_call_index=0,
+                        name_chunk="",
+                        arguments_chunk="",
+                        accumulated_name=name,
+                        accumulated_arguments=arguments,
+                        is_complete=True,
+                        source="xml_fallback",
+                    )
                 return StreamResult.from_tool_call(
                     name=name,
                     arguments=arguments,
@@ -427,6 +678,18 @@ class StreamParser:
             )
 
         reasoning_content = "".join(self._all_reasoning_parts)
+        
+        # 发出完成回调（流结束）
+        for idx, tc_data in self._tool_call_chunks.items():
+            self._emit_tool_call_chunk(
+                tool_call_index=idx,
+                name_chunk="",
+                arguments_chunk="",
+                accumulated_name=tc_data["name"],
+                accumulated_arguments=tc_data["arguments"],
+                is_complete=True,
+            )
+        
         return StreamResult.from_tool_call(
             name=name,
             arguments=arguments,
@@ -460,6 +723,8 @@ class StreamParser:
                 # Check finish_reason - primary end signal
                 finish_reason = getattr(chunk.choices[0], 'finish_reason', None)
                 if finish_reason:
+                    # 【性能优化】记录性能摘要日志
+                    self.log_performance_summary()
                     return self._build_result(finish_reason)
 
                 # Process tool_calls and function_call
@@ -468,9 +733,13 @@ class StreamParser:
         except Exception:
             # Flush on error, will be handled by caller
             self._flush_buffer()
+            # 【性能优化】即使异常也记录性能摘要
+            self.log_performance_summary()
             raise
 
         # Fallback: stream iterator exhausted without finish_reason
+        # 【性能优化】记录性能摘要日志
+        self.log_performance_summary()
         return self._build_result()
 
 
@@ -483,6 +752,10 @@ class BaseChatModel(ABC):
     - 图像消息如何拼装
     - 工具调用循环如何执行
     """
+
+    # 超时阈值（秒）
+    WAITING_FOR_RESPONSE_TIMEOUT = 30  # 等待响应超时30秒
+    RECEIVING_STREAM_STALL_TIMEOUT = 60  # 流数据停滞超时60秒
 
     def __init__(
         self,
@@ -513,6 +786,178 @@ class BaseChatModel(ABC):
             "chat_template_kwargs": {"enable_thinking": enable_deep_thinking},
         }
         self._client: Optional[OpenAI] = None
+
+        # LLM通信状态追踪
+        self._llm_communication_context: LLMCommunicationContext = create_initial_context(
+            model_name=self.model_name
+        )
+        self._state_update_callback: Optional[Callable[[dict], None]] = None
+
+        # 超时检测定时器
+        self._timeout_timer: Optional[threading.Timer] = None
+        self._timeout_timer_lock: threading.Lock = threading.Lock()
+
+    def set_state_update_callback(self, callback: Callable[[dict], None] | None) -> None:
+        """设置状态更新回调函数
+
+        Args:
+            callback: 回调函数，接受一个 dict 参数（状态信息）或 None 以清除回调
+        """
+        self._state_update_callback = callback
+
+    def _transition_communication_state(
+        self,
+        new_state: LLMCommunicationState,
+        **kwargs: Any,
+    ) -> None:
+        """转换LLM通信状态并发送IPC通知。
+
+        Args:
+            new_state: 新的通信状态。
+            **kwargs: 可选的关键字参数，用于更新上下文字段。
+        """
+        old_state = self._llm_communication_context.state
+        old_duration = self._llm_communication_context.duration_ms()
+
+        # 状态转换
+        self._llm_communication_context = transition_state(
+            self._llm_communication_context,
+            new_state,
+            **kwargs
+        )
+
+        # 日志记录
+        duration_info = f"耗时: {old_duration}ms" if old_duration > 0 else ""
+        logger.info(
+            "[LLM通信] 状态转换: %s -> %s (%s)",
+            old_state.value,
+            new_state.value,
+            duration_info
+        )
+
+        # 超时检测逻辑
+        # 当状态转换为 SENDING_REQUEST 时，取消之前的定时器
+        if new_state == LLMCommunicationState.SENDING_REQUEST:
+            self._cancel_timeout_timer()
+        # 当状态转换为 RECEIVING_STREAM 时，取消等待响应定时器，启动流停滞检测
+        elif new_state == LLMCommunicationState.RECEIVING_STREAM:
+            self._cancel_timeout_timer()
+            # 启动流停滞超时检测
+            self._start_timeout_timer(self.RECEIVING_STREAM_STALL_TIMEOUT, "stream_stall")
+        # 当状态转换为 COMMUNICATION_ENDED 或 IDLE 时，取消所有定时器
+        elif new_state in (LLMCommunicationState.COMMUNICATION_ENDED, LLMCommunicationState.IDLE):
+            self._cancel_timeout_timer()
+
+        # 发送IPC通知
+        if self._state_update_callback:
+            try:
+                context_dict = {
+                    "state": self._llm_communication_context.state.value,
+                    "model_name": self._llm_communication_context.model_name,
+                    "session_id": self._llm_communication_context.session_id,
+                    "duration_ms": self._llm_communication_context.duration_ms(),
+                    "time_since_last_data_ms": self._llm_communication_context.time_since_last_data_ms(),
+                }
+                self._state_update_callback(context_dict)
+            except Exception as e:
+                logger.warning("[LLM通信] 状态更新回调失败: %s", e)
+
+    def _start_timeout_timer(self, timeout_seconds: float, timeout_type: str) -> None:
+        """启动超时定时器。
+
+        Args:
+            timeout_seconds: 超时时间（秒）。
+            timeout_type: 超时类型（用于日志和告警）。
+        """
+        with self._timeout_timer_lock:
+            # 先取消现有的定时器
+            if self._timeout_timer is not None:
+                self._timeout_timer.cancel()
+
+            # 创建新定时器
+            self._timeout_timer = threading.Timer(
+                timeout_seconds,
+                self._check_and_emit_timeout,
+                args=[timeout_type]
+            )
+            self._timeout_timer.daemon = True
+            self._timeout_timer.start()
+            # 移除高频DEBUG日志：定时器启动
+
+    def _cancel_timeout_timer(self) -> None:
+        """取消超时定时器。"""
+        with self._timeout_timer_lock:
+            if self._timeout_timer is not None:
+                self._timeout_timer.cancel()
+                self._timeout_timer = None
+                # 移除高频DEBUG日志：定时器取消
+
+    def _check_and_emit_timeout(self, timeout_type: str) -> None:
+        """检查并发出超时告警。
+
+        Args:
+            timeout_type: 超时类型。
+        """
+        # 获取当前状态快照
+        current_state = self._llm_communication_context.state
+
+        # 检查是否仍处于需要检测超时的状态
+        if not self._llm_communication_context.is_active():
+            # 移除高频DEBUG日志：状态已变为非活跃
+            return
+
+        # 根据超时类型构造告警消息
+        if timeout_type == "waiting_for_response":
+            duration_ms = self._llm_communication_context.duration_ms()
+            self._emit_timeout_warning(
+                warning_type="timeout",
+                message=f"等待LLM响应超时（{self.WAITING_FOR_RESPONSE_TIMEOUT}秒）"
+            )
+        elif timeout_type == "stream_stall":
+            time_since_last_data = self._llm_communication_context.time_since_last_data_ms()
+            # 只有当确实存在停滞时才发出告警
+            if time_since_last_data >= self.RECEIVING_STREAM_STALL_TIMEOUT * 1000:
+                self._emit_timeout_warning(
+                    warning_type="stream_stall",
+                    message=f"LLM流数据停滞超时（{self.RECEIVING_STREAM_STALL_TIMEOUT}秒未收到数据）"
+                )
+            # 移除高频DEBUG日志：未达阈值
+
+    def _emit_timeout_warning(self, warning_type: str, message: str) -> None:
+        """发出超时告警。
+
+        Args:
+            warning_type: 告警类型。
+            message: 告警描述消息。
+        """
+        # 记录WARNING日志
+        logger.warning(
+            "[LLM通信] 超时告警: type=%s, state=%s, message=%s",
+            warning_type,
+            self._llm_communication_context.state.value,
+            message
+        )
+
+        # 发送IPC告警通知
+        if self._state_update_callback:
+            try:
+                # 动态导入 make_llm_state_warning_message，避免循环导入
+                from ui_flet.floating_ball_ipc import make_llm_state_warning_message
+
+                warning_msg = make_llm_state_warning_message(
+                    warning_type=warning_type,
+                    timestamp=_time.time(),
+                    state=self._llm_communication_context.state.value,
+                    duration_ms=self._llm_communication_context.duration_ms(),
+                    model=self._llm_communication_context.model_name,
+                    session_id=self._llm_communication_context.session_id,
+                    message=message
+                )
+                self._state_update_callback(warning_msg)
+            except ImportError as e:
+                logger.warning("[LLM通信] 无法导入告警消息构造函数，跳过IPC告警: %s", e)
+            except Exception as e:
+                logger.warning("[LLM通信] 发送超时告警失败: %s", e)
 
     def get_client(self) -> OpenAI:
         if self._client is None:
@@ -723,6 +1168,8 @@ class BaseChatModel(ABC):
 
     def complete(self, messages: list[dict]) -> Any:
         """发起一次不带工具的纯文本补全，返回 choices[0].message。"""
+        # 最终防线：校验并修复所有 messages 中的 tool_calls
+        messages = _sanitize_messages_for_api(messages)
         try:
             response = self.get_client().chat.completions.create(
                 model=self.model_name,
@@ -755,15 +1202,32 @@ class BaseChatModel(ABC):
         stream_callback: Callable[[str, str], None],
     ) -> StreamResult:
         """
-        流式请求带工具的补全。
+        流式请求带工具的补全（同步方法，向后兼容）。
         - stream_callback(content: str, type: str) 实时回调：
           - type="think": 推理内容（reasoning_content）
           - type="content": 普通文本内容
+          - type="tool_call": 工具调用信息
         - 返回 StreamResult，包含文本回复或工具调用信息
+
+        性能优化：移除高频DEBUG日志，降低I/O开销
+
+        注意：此方法会阻塞主线程，推荐使用异步版本 async_stream_request_llm_with_tools
         """
-        logger.debug("[stream_request_llm_with_tools] 方法入口: messages=%d 条, tools=%d 个, callback=%s",
-                     len(messages), len(tools), "已提供" if stream_callback else "未提供")
+        # 移除高频DEBUG日志：方法入口
+
+        # 创建初始通信上下文
+        self._transition_communication_state(LLMCommunicationState.IDLE)
+
+        # 最终防线：校验并修复所有 messages 中的 tool_calls
+        messages = _sanitize_messages_for_api(messages)
+
         try:
+            # 转换状态为 SENDING_REQUEST，记录开始时间
+            self._transition_communication_state(
+                LLMCommunicationState.SENDING_REQUEST,
+                start_timestamp=_time.time()
+            )
+
             stream = self.get_client().chat.completions.create(
                 model=self.model_name,
                 messages=messages,
@@ -777,45 +1241,303 @@ class BaseChatModel(ABC):
                 stream=True,
                 stream_options={"include_usage": True},
             )
+
+            # 请求已发送，启动等待响应超时检测
+            self._start_timeout_timer(self.WAITING_FOR_RESPONSE_TIMEOUT, "waiting_for_response")
         except BadRequestError as e:
             error_msg = f"请求参数错误: {e}"
             if "inappropriate content" in str(e).lower() or "data inspection" in str(e).lower():
                 error_msg = "内容审核未通过：输入内容可能包含不适当的内容，请修改后重试。"
             stream_callback(error_msg, "content")
+            # 异常时转换为 COMMUNICATION_ENDED 状态
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            # 返回前重置状态为 IDLE
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except AuthenticationError as e:
             error_msg = f"API认证失败: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except RateLimitError as e:
             error_msg = f"API请求频率超限: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except APIConnectionError as e:
             error_msg = f"API连接失败: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except APIError as e:
             error_msg = f"API错误: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except Exception as e:
             error_msg = f"未知错误: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
 
+        # 创建增强的 StreamParser，在首次收到数据时更新状态
+        first_chunk_received = False
+
+        def wrapped_stream_callback(content: str, msg_type: str) -> None:
+            nonlocal first_chunk_received
+            # 首次收到数据时转换状态为 RECEIVING_STREAM
+            if not first_chunk_received:
+                first_chunk_received = True
+                self._transition_communication_state(
+                    LLMCommunicationState.RECEIVING_STREAM
+                )
+            # 每次收到数据时更新 last_data_timestamp
+            self._transition_communication_state(
+                LLMCommunicationState.RECEIVING_STREAM,
+                last_data_timestamp=_time.time()
+            )
+            stream_callback(content, msg_type)
+
+        # 工具调用流式回调：将工具调用增量数据通过 stream_callback 发送
+        def on_tool_call_chunk_wrapper(chunk_data: dict) -> None:
+            """处理工具调用增量数据的回调函数
+
+            Args:
+                chunk_data: 包含工具调用增量信息的字典，包含：
+                    - name_chunk: 工具名称增量片段
+                    - arguments_chunk: 参数增量片段
+                    - accumulated_name: 已累积的工具名称
+                    - accumulated_arguments: 已累积的参数
+                    - tool_call_index: 工具调用索引
+                    - is_complete: 是否已完成（流结束）
+            """
+            # 只在完成时发送完整信息，避免流式过程中频繁发送
+            if chunk_data.get("is_complete"):
+                name = chunk_data.get("accumulated_name", "")
+                arguments = chunk_data.get("accumulated_arguments", "")
+                if name:
+                    # 格式：调用工具 `{name}` · {arguments}
+                    stream_callback(f"调用工具 `{name}` · {arguments}", "tool_call")
+
         parser = StreamParser(
-            stream_callback=stream_callback,
+            stream_callback=wrapped_stream_callback,
             messages=messages,
             estimate_tokens=self._estimate_tokens_from_messages,
+            on_tool_call_chunk=on_tool_call_chunk_wrapper,  # 新增：传递工具调用流式回调
         )
 
         try:
-            return parser.process_stream(stream)
+            result = parser.process_stream(stream)
+            # 流正常结束，转换状态为 COMMUNICATION_ENDED
+            self._transition_communication_state(LLMCommunicationState.COMMUNICATION_ENDED)
+            return result
         except Exception as e:
             error_msg = f"流式响应处理错误: {e}"
             stream_callback(error_msg, "content")
+            # 异常时转换状态为 COMMUNICATION_ENDED
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
             return StreamResult.from_error(error_msg)
+        finally:
+            # 方法返回前重置状态为 IDLE
+            self._transition_communication_state(LLMCommunicationState.IDLE)
+
+    def async_stream_request_llm_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        stream_callback: Callable[[str, str], None],
+        *,
+        task_id: Optional[str] = None,
+        timeout: Optional[float] = None,
+        on_complete: Optional[Callable[[AsyncTaskResult], None]] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
+    ) -> tuple[str, Future]:
+        """
+        异步流式请求带工具的补全（非阻塞主线程）。
+
+        使用 ThreadPoolExecutor 在后台线程执行 LLM 调用，避免阻塞主线程，
+        实现并发处理能力。适用于需要同时处理多个 LLM 请求的场景。
+
+        Args:
+            messages: 消息列表
+            tools: 工具定义列表
+            stream_callback: 流式回调函数，格式：callback(content: str, type: str)
+            task_id: 任务唯一标识符（可选，默认自动生成）
+            timeout: 任务超时时间（秒），None 表示不限制
+            on_complete: 任务完成回调（成功）
+            on_error: 任务错误回调（失败）
+
+        Returns:
+            tuple[str, Future]: (任务ID, Future对象)
+                - 任务ID：用于后续查询、取消任务
+                - Future对象：用于跟踪任务状态
+
+        使用示例：
+        ```python
+        # 提交异步任务
+        task_id, future = model.async_stream_request_llm_with_tools(
+            messages, tools, callback
+        )
+
+        # 等待结果（非阻塞，可以在等待期间处理其他任务）
+        try:
+            result = model.wait_for_async_task(task_id, timeout=30.0)
+            print(f"任务完成: {result}")
+        except TimeoutError:
+            print(f"任务超时")
+            model.cancel_async_task(task_id)
+        ```
+
+        注意事项：
+        1. stream_callback 会在后台线程中调用，请确保回调函数是线程安全的
+        2. 任务完成后建议调用 cleanup_async_task 清理资源
+        3. 可以使用 wait_for_async_task 等待任务结果
+        4. 可以使用 cancel_async_task 取消正在执行的任务
+        """
+        # 生成任务 ID
+        if task_id is None:
+            task_id = f"llm_async_{uuid.uuid4().hex[:12]}"
+
+        # 获取线程池管理器
+        executor = get_executor_manager()
+
+        # 提交异步任务
+        future = executor.submit(
+            task_id=task_id,
+            func=self.stream_request_llm_with_tools,
+            messages=messages,
+            tools=tools,
+            stream_callback=stream_callback,
+            timeout=timeout,
+            on_complete=on_complete,
+            on_error=on_error,
+        )
+
+        logger.debug(f"[AsyncLLM] 异步任务已提交: task_id={task_id}")
+
+        return task_id, future
+
+    def wait_for_async_task(
+        self,
+        task_id: str,
+        timeout: Optional[float] = None,
+    ) -> StreamResult:
+        """
+        等待异步任务完成并获取结果（阻塞当前线程，但不阻塞主线程）。
+
+        Args:
+            task_id: 任务 ID
+            timeout: 等待超时时间（秒），None 表示不限制
+
+        Returns:
+            StreamResult: 任务执行结果
+
+        Raises:
+            TimeoutError: 任务超时
+            KeyError: 任务不存在
+            Exception: 任务执行失败的错误
+        """
+        executor = get_executor_manager()
+        task_result = executor.get_result(task_id, timeout=timeout)
+
+        if task_result.is_success:
+            return task_result.result
+        else:
+            if task_result.error:
+                raise task_result.error
+            else:
+                raise RuntimeError(f"任务执行失败: {task_id}")
+
+    def cancel_async_task(self, task_id: str) -> bool:
+        """
+        取消异步任务。
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            bool: 是否成功取消
+        """
+        executor = get_executor_manager()
+        return executor.cancel(task_id)
+
+    def get_async_task_state(self, task_id: str) -> Optional[TaskState]:
+        """
+        获取异步任务状态。
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            TaskState: 任务状态，如果任务不存在则返回 None
+        """
+        executor = get_executor_manager()
+        return executor.get_task_state(task_id)
+
+    def is_async_task_running(self, task_id: str) -> bool:
+        """
+        检查异步任务是否正在运行。
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            bool: 任务是否正在运行
+        """
+        executor = get_executor_manager()
+        return executor.is_task_running(task_id)
+
+    def get_async_task_stats(self) -> dict:
+        """
+        获取线程池统计信息。
+
+        Returns:
+            dict: 统计信息字典，包含：
+                - total_tasks: 总任务数
+                - active_tasks: 活跃任务数
+                - max_workers: 最大线程数
+        """
+        executor = get_executor_manager()
+        return executor.get_stats()
+
+    def cleanup_async_tasks(self, max_age_seconds: float = 3600) -> int:
+        """
+        清理已完成的旧异步任务（释放内存）。
+
+        Args:
+            max_age_seconds: 最大保留时间（秒），默认 1 小时
+
+        Returns:
+            int: 清理的任务数量
+        """
+        executor = get_executor_manager()
+        return executor.cleanup_finished_tasks(max_age_seconds)
 
     def stream_complete(
         self,
@@ -828,9 +1550,24 @@ class BaseChatModel(ABC):
           - type="think": 推理内容（reasoning_content）
           - type="content": 普通文本内容
         - 返回 StreamResult，包含完整文本回复
+        
+        性能优化：移除高频DEBUG日志，降低I/O开销
         """
-        logger.debug("[stream_complete] 方法入口: messages=%d 条, callback=%s", len(messages), "已提供" if stream_callback else "未提供")
+        # 移除高频DEBUG日志：方法入口
+
+        # 创建初始通信上下文
+        self._transition_communication_state(LLMCommunicationState.IDLE)
+
+        # 最终防线：校验并修复所有 messages 中的 tool_calls
+        messages = _sanitize_messages_for_api(messages)
+
         try:
+            # 转换状态为 SENDING_REQUEST，记录开始时间
+            self._transition_communication_state(
+                LLMCommunicationState.SENDING_REQUEST,
+                start_timestamp=_time.time()
+            )
+
             stream = self.get_client().chat.completions.create(
                 model=self.model_name,
                 messages=messages,
@@ -841,45 +1578,107 @@ class BaseChatModel(ABC):
                 stream=True,
                 stream_options={"include_usage": True},
             )
+
+            # 请求已发送，启动等待响应超时检测
+            self._start_timeout_timer(self.WAITING_FOR_RESPONSE_TIMEOUT, "waiting_for_response")
         except BadRequestError as e:
             error_msg = f"请求参数错误: {e}"
             if "inappropriate content" in str(e).lower() or "data inspection" in str(e).lower():
                 error_msg = "内容审核未通过：输入内容可能包含不适当的内容，请修改后重试。"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except AuthenticationError as e:
             error_msg = f"API认证失败: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except RateLimitError as e:
             error_msg = f"API请求频率超限: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except APIConnectionError as e:
             error_msg = f"API连接失败: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except APIError as e:
             error_msg = f"API错误: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
         except Exception as e:
             error_msg = f"未知错误: {e}"
             stream_callback(error_msg, "content")
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
+            self._transition_communication_state(LLMCommunicationState.IDLE)
             return StreamResult.from_error(error_msg)
 
+        # 创建增强的 StreamParser，在首次收到数据时更新状态
+        first_chunk_received = False
+
+        def wrapped_stream_callback(content: str, msg_type: str) -> None:
+            nonlocal first_chunk_received
+            # 首次收到数据时转换状态为 RECEIVING_STREAM
+            if not first_chunk_received:
+                first_chunk_received = True
+                self._transition_communication_state(
+                    LLMCommunicationState.RECEIVING_STREAM
+                )
+            # 每次收到数据时更新 last_data_timestamp
+            self._transition_communication_state(
+                LLMCommunicationState.RECEIVING_STREAM,
+                last_data_timestamp=_time.time()
+            )
+            stream_callback(content, msg_type)
+
         parser = StreamParser(
-            stream_callback=stream_callback,
+            stream_callback=wrapped_stream_callback,
             messages=messages,
             estimate_tokens=self._estimate_tokens_from_messages,
         )
 
         try:
-            return parser.process_stream(stream)
+            result = parser.process_stream(stream)
+            # 流正常结束，转换状态为 COMMUNICATION_ENDED
+            self._transition_communication_state(LLMCommunicationState.COMMUNICATION_ENDED)
+            return result
         except Exception as e:
             error_msg = f"流式响应处理错误: {e}"
             stream_callback(error_msg, "content")
+            # 异常时转换状态为 COMMUNICATION_ENDED
+            self._transition_communication_state(
+                LLMCommunicationState.COMMUNICATION_ENDED,
+                error_message=error_msg
+            )
             return StreamResult.from_error(error_msg)
+        finally:
+            # 方法返回前重置状态为 IDLE
+            self._transition_communication_state(LLMCommunicationState.IDLE)
 
     def execute_function_call(self, fname: str, args: dict, executor: Executor) -> str:
         action = {"action": fname}
@@ -944,13 +1743,19 @@ class BaseChatModel(ABC):
             # 关键修复：追加 assistant(tool_calls) 消息，满足 OpenAI 协议
             # （tool 消息前必须有带 tool_calls 的 assistant 消息）
             _call_id = f"call_{id(args):x}"
+            # 确保 arg_str 是有效的 JSON 字符串
+            try:
+                json.loads(arg_str)
+                valid_arg_str = arg_str
+            except (json.JSONDecodeError, TypeError):
+                valid_arg_str = "{}"
             current_messages.append({
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [{
                     "id": _call_id,
                     "type": "function",
-                    "function": {"name": fname, "arguments": arg_str},
+                    "function": {"name": fname, "arguments": valid_arg_str},
                 }],
             })
 

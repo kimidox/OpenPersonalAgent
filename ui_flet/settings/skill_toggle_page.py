@@ -6,6 +6,8 @@ Flet Skill 开关管理页面
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 from typing import TYPE_CHECKING, Any, Optional
 
 import flet as ft
@@ -45,11 +47,11 @@ class SkillTogglePage:
         self._logger = get_logger()
         self._theme_manager = ThemeManager()
 
-        # Skill 注册表
-        self._registry = SkillRegistry(config.SKILLS_DIR, config.BUILTIN_SKILLS_DIR)
+        # Skill 注册表（延迟初始化）
+        self._registry = None
 
         # 禁用的 Skill ID 集合
-        self._disabled_skills: set[str] = set(load_disabled_skill_ids())
+        self._disabled_skills: set[str] = set()
 
         # UI 组件引用
         self._skill_list: Optional[ft.Column] = None
@@ -93,7 +95,20 @@ class SkillTogglePage:
         list_container = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("已加载 Skill 列表", size=12, weight=ft.FontWeight.BOLD, color=colors.text),
+                    ft.Row(
+                        [
+                            ft.Text("已加载 Skill 列表", size=12, weight=ft.FontWeight.BOLD, color=colors.text),
+                            ft.Container(expand=True),
+                            ft.IconButton(
+                                icon=ft.Icons.REFRESH,
+                                icon_color=colors.text_muted,
+                                icon_size=16,
+                                tooltip="刷新列表",
+                                on_click=self._on_refresh_click,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
                     ft.Container(height=6),
                     self._skill_list,
                 ],
@@ -143,18 +158,14 @@ class SkillTogglePage:
             expand=True,
         )
 
-        # 加载列表
-        self._load_skills()
-
         self._logger.info("SkillTogglePage: 页面构建完成")
         return self._container
 
-    def _load_skills(self) -> None:
-        """加载并显示 Skill 列表"""
-        if not self._skill_list:
-            return
-
-        self._skill_list.controls.clear()
+    def _load_skills_data(self) -> list:
+        """纯数据加载：加载 Skill 列表数据（同步磁盘 I/O）"""
+        if self._registry is None:
+            self._registry = SkillRegistry(config.SKILLS_DIR, config.BUILTIN_SKILLS_DIR)
+        self._disabled_skills = set(load_disabled_skill_ids())
 
         try:
             skills = sorted(
@@ -163,8 +174,16 @@ class SkillTogglePage:
             )
         except Exception as e:
             self._logger.exception("加载 Skill 列表失败")
-            self._show_status(f"加载 Skill 列表失败: {e}", success=False)
+            return []
+
+        return skills
+
+    def _fill_skills_ui(self, skills: list) -> None:
+        """根据数据填充 UI"""
+        if not self._skill_list:
             return
+
+        self._skill_list.controls.clear()
 
         colors = self._theme_manager.get_color_scheme()
 
@@ -261,11 +280,22 @@ class SkillTogglePage:
 
         self._update_status_text()
 
+    def _load_skills(self) -> None:
+        """加载并显示 Skill 列表"""
+        skills = self._load_skills_data()
+        self._fill_skills_ui(skills)
         try:
             if self._page:
                 self._page.update()
         except Exception:
             pass
+
+    def _on_refresh_click(self, e) -> None:
+        """刷新按钮点击事件"""
+        self._show_status("正在刷新...", success=True)
+        self._registry = None  # 强制重新创建以重新扫描
+        self._load_skills()
+        self._show_status("列表已刷新", success=True)
 
     def _on_skill_toggled(self, skill_id: str, enabled: bool) -> None:
         """
@@ -441,6 +471,23 @@ class SkillTogglePage:
             self._status_text.value = message
             self._status_text.color = colors.success if success else colors.error
             self._status_text.update()
+
+    async def async_load_data(self) -> None:
+        """异步加载数据，在页面可见后调用"""
+        await asyncio.sleep(0)  # yield to UI
+
+        # 在线程中运行磁盘 I/O
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(self._load_skills_data)
+            skills = await asyncio.wrap_future(future)
+
+        # 更新 UI
+        self._fill_skills_ui(skills)
+        try:
+            if self._page:
+                self._page.update()
+        except Exception:
+            pass
 
     def refresh(self) -> None:
         """刷新页面"""

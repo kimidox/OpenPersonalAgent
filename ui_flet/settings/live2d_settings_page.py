@@ -9,6 +9,8 @@ Flet Live2D 悬浮球配置页面
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 from typing import TYPE_CHECKING, Optional
 
 import flet as ft
@@ -129,9 +131,6 @@ class Live2DSettingsPage:
             content=content,
             padding=20,
         )
-
-        # 加载模型列表
-        self._refresh_model_list()
 
         self._logger.info("Live2DSettingsPage: 页面构建完成")
         return self._container
@@ -433,3 +432,44 @@ class Live2DSettingsPage:
             colors = self._theme_manager.get_color_scheme()
             self._status_text.value = message
             self._status_text.color = colors.success if success else colors.error
+
+    async def async_load_data(self) -> None:
+        """异步加载数据，在页面可见后调用"""
+        await asyncio.sleep(0)  # yield to UI
+
+        # 在线程中运行磁盘 I/O（scan_models 扫描目录）
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(scan_models)
+            try:
+                self._models = await asyncio.wrap_future(future)
+            except Exception as e:
+                self._logger.exception("扫描 Live2D 模型失败")
+                self._models = []
+
+        # 更新下拉框
+        options = []
+        current_model_name = config.LIVE2D_MODEL_NAME
+        selected_value = None
+
+        for model in self._models:
+            value = model.model_dir.name
+            display = f"{model.name} ({value})"
+            options.append(ft.dropdown.Option(value, display))
+            if current_model_name and (current_model_name == value or current_model_name == model.name):
+                selected_value = value
+
+        if not options:
+            options.append(ft.dropdown.Option("", "未找到可用模型"))
+
+        if self._model_dropdown:
+            self._model_dropdown.options = options
+            self._model_dropdown.value = selected_value
+
+        self._update_model_info()
+
+        # 更新页面
+        try:
+            if self._page:
+                self._page.update()
+        except Exception:
+            pass

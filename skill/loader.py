@@ -49,16 +49,26 @@ def resolve_skill_markdown_in_package(package_dir: Path) -> Path | None:
     """
     在单个 Skill 包目录（一层子文件夹）内解析要加载的 Markdown 路径。
     优先级：
-    1) 与同文件夹名一致的 `<文件夹名>.md` / `.markdown`
-    2) 该目录下按文件名的第一个 `.md` / `.markdown`（仅当前目录，不递归子目录）
+    1) SKILL.md（标准命名）
+    2) 与同文件夹名一致的 `<文件夹名>.md` / `.markdown`
+    3) 该目录下按文件名的第一个 `.md` / `.markdown`（仅当前目录，不递归子目录）
     """
     if not package_dir.is_dir():
         return None
+    
+    # 优先级1：SKILL.md
+    skill_md = package_dir / "SKILL.md"
+    if skill_md.is_file():
+        return skill_md
+    
+    # 优先级2：与文件夹名一致的 .md
     name = package_dir.name
     for ext in (".md", ".markdown"):
         preferred = package_dir / f"{name}{ext}"
         if preferred.is_file():
             return preferred
+    
+    # 优先级3：按字母顺序第一个 .md
     md_files = sorted(
         (
             p

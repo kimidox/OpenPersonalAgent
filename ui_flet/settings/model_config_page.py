@@ -8,6 +8,8 @@ Flet 模型配置页面
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 from typing import TYPE_CHECKING, Optional
 
@@ -225,9 +227,6 @@ class ModelConfigPage:
             spacing=0,
             expand=True,
         )
-
-        # 加载配置列表
-        self._load_config_list()
 
         return panel
 
@@ -819,11 +818,10 @@ class ModelConfigPage:
     def _create_auto_switch_section(self) -> ft.Container:
         """创建自动故障切换区域"""
         colors = self._theme_manager.get_color_scheme()
-        auto_switch_enabled = is_auto_switch_enabled()
 
         self._auto_switch_switch = ft.Switch(
             label="启用自动故障切换（当当前配置失败时自动切换到下一组）",
-            value=auto_switch_enabled,
+            value=True,
             on_change=self._on_auto_switch_changed,
         )
 
@@ -838,15 +836,8 @@ class ModelConfigPage:
         """创建状态栏"""
         colors = self._theme_manager.get_color_scheme()
 
-        multi_config = get_current_multi_config()
-        active_config = multi_config.get_active_config()
-        if active_config:
-            status_text = f"当前激活配置: {active_config.name} ({active_config.model_name})"
-        else:
-            status_text = "当前无激活配置"
-
         self._status_text = ft.Text(
-            status_text,
+            "加载中...",
             size=10,
             color=colors.text_muted,
         )
@@ -906,6 +897,24 @@ class ModelConfigPage:
         )
         self._page.snack_bar.open = True
         self._page.update()
+
+    async def async_load_data(self) -> None:
+        """异步加载数据，在页面可见后调用"""
+        # 加载配置列表
+        self._load_config_list()
+
+        # 读取自动切换状态
+        self._auto_switch_switch.value = is_auto_switch_enabled()
+
+        # 更新状态栏
+        self._update_status_bar()
+
+        # 更新页面
+        try:
+            if self._page:
+                self._page.update()
+        except Exception:
+            pass
 
     def get_content(self) -> ft.Control:
         """

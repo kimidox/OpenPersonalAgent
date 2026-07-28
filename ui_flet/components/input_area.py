@@ -83,6 +83,7 @@ class InputArea:
 
         # 事件回调
         self._on_send: Optional[Callable[[str, list[UploadedFileInfo]], None]] = None
+        self._on_stop: Optional[Callable[[], None]] = None
 
         # UI 控件引用
         self._input_field: Optional[ft.TextField] = None
@@ -208,6 +209,14 @@ class InputArea:
 
     def _on_send_click(self, e: ft.ControlEvent):
         """发送按钮点击"""
+        # 如果正在推理，则停止推理
+        if self._is_inference_running:
+            self._logger.info("InputArea: 检测到推理运行中，执行停止操作")
+            if self._on_stop:
+                self._on_stop()
+            return
+
+        # 否则发送消息
         self._send_message()
 
     def _on_thinking_click(self, e: ft.ControlEvent):
@@ -299,6 +308,15 @@ class InputArea:
             callback: 回调函数，接收 (text, files) 参数
         """
         self._on_send = callback
+
+    def set_on_stop(self, callback: Callable[[], None]):
+        """
+        设置停止回调函数
+
+        Args:
+            callback: 回调函数，用于停止推理
+        """
+        self._on_stop = callback
 
     def send_message(self):
         """公共方法：发送当前输入框中的消息（供快捷键调用）"""

@@ -136,6 +136,12 @@ class Message:
             args = ext.get("args") or "{}"
             if isinstance(args, (dict, list)):
                 args = __import__("json").dumps(args, ensure_ascii=False)
+            elif isinstance(args, str):
+                # 校验历史存储的 args 是否为有效 JSON，防止非 JSON 字符串导致 API 报错
+                try:
+                    __import__("json").loads(args)
+                except (ValueError, __import__("json").JSONDecodeError):
+                    args = "{}"
             call_id = str(ext.get("tool_call_id") or "call_unknown")
             tool_calls = [{
                 "id": call_id,

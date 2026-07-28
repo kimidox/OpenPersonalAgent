@@ -64,3 +64,26 @@ class Memory(ABC):
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """按时间顺序返回消息记录，每条含 `role`、`content`、可选 `name`（tool）及可选 `metadata`（来自持久化的 ext）。"""
+
+    @abstractmethod
+    def count_messages(self, conversation_id: str) -> int:
+        """返回会话的消息总数（用于分页）。"""
+
+    @abstractmethod
+    def get_messages_slice(
+        self,
+        conversation_id: str,
+        offset: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """
+        按时间顺序返回指定范围的消息（分页查询）。
+
+        Args:
+            conversation_id: 会话 ID
+            offset: 偏移量（从最新消息开始计数，0 表示最新）
+            limit: 返回数量
+
+        Returns:
+            消息记录列表（按时间正序，最旧的消息在前）
+        """

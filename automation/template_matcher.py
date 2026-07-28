@@ -14,13 +14,15 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Optional, TypedDict
-
-import cv2
-import numpy as np
-import pyautogui
+from typing import TYPE_CHECKING, Any, Literal, Optional, TypedDict
 
 from logger import get_module_logger
+
+if TYPE_CHECKING:
+    # 仅供静态分析：运行时通过方法内局部导入按需加载（重依赖懒加载）
+    import cv2
+    import numpy as np
+    import pyautogui
 
 logger = get_module_logger("template_matcher")
 
@@ -33,11 +35,20 @@ MatchMethod = Literal[
 ]
 
 
-_METHOD_MAP: dict[MatchMethod, int] = {
-    "TM_CCOEFF_NORMED": cv2.TM_CCOEFF_NORMED,
-    "TM_CCORR_NORMED": cv2.TM_CCORR_NORMED,
-    "TM_SQDIFF_NORMED": cv2.TM_SQDIFF_NORMED,
-}
+_METHOD_MAP: Optional[dict[MatchMethod, int]] = None
+
+
+def _get_method_map() -> dict[MatchMethod, int]:
+    """延迟构建 cv2 匹配方法映射（避免模块导入时加载 cv2）"""
+    global _METHOD_MAP
+    if _METHOD_MAP is None:
+        import cv2
+        _METHOD_MAP = {
+            "TM_CCOEFF_NORMED": cv2.TM_CCOEFF_NORMED,
+            "TM_CCORR_NORMED": cv2.TM_CCORR_NORMED,
+            "TM_SQDIFF_NORMED": cv2.TM_SQDIFF_NORMED,
+        }
+    return _METHOD_MAP
 
 
 class MatchResult(TypedDict):
@@ -119,6 +130,7 @@ class TemplateManager:
         shutil.copy(source_path, template_path)
 
         # 获取图片尺寸
+        import cv2
         img = cv2.imread(str(template_path))
         if img is None:
             raise ValueError(f"无法读取图片: {template_path}")
@@ -158,6 +170,7 @@ class TemplateManager:
         template_path = self._template_dir_path / f"{template_id}.png"
 
         # 截取屏幕
+        import pyautogui
         if region:
             x, y, w, h = region
             img = pyautogui.screenshot(region=(x, y, w, h))
@@ -223,6 +236,7 @@ class TemplateManager:
         metadata = self._load_metadata()
         info = metadata.get(template_id, {})
 
+        import cv2
         img = cv2.imread(str(template_path))
         if img is None:
             return None
@@ -248,6 +262,7 @@ class TemplateManager:
                 template_id = file.stem
                 info = metadata.get(template_id, {})
 
+                import cv2
                 img = cv2.imread(str(file))
                 if img is not None:
                     height, width = img.shape[:2]
@@ -291,6 +306,9 @@ class TemplateMatcher:
 
     def capture_screen(self) -> np.ndarray:
         """截取屏幕"""
+        import cv2
+        import numpy as np
+        import pyautogui
         img = pyautogui.screenshot()
         return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
@@ -299,12 +317,16 @@ class TemplateMatcher:
         region: tuple[int, int, int, int],
     ) -> np.ndarray:
         """截取屏幕指定区域"""
+        import cv2
+        import numpy as np
+        import pyautogui
         x, y, w, h = region
         img = pyautogui.screenshot(region=(x, y, w, h))
         return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
     def load_template(self, template_id: str) -> np.ndarray:
         """加载模板图片"""
+        import cv2
         template_info = self.template_manager.get_template(template_id)
         if template_info is None:
             raise FileNotFoundError(f"模板不存在: {template_id}")
@@ -339,7 +361,8 @@ class TemplateMatcher:
             offset_x, offset_y = 0, 0
 
         # 模板匹配
-        result = cv2.matchTemplate(screen, template, _METHOD_MAP[method])
+        import cv2
+        result = cv2.matchTemplate(screen, template, _get_method_map()[method])
 
         if multi_match:
             # 多模板匹配
@@ -383,6 +406,7 @@ class TemplateMatcher:
         template_width: int,
     ) -> list[dict[str, Any]]:
         """找到最佳匹配"""
+        import cv2
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
 
         if method == "TM_SQDIFF_NORMED":
@@ -405,6 +429,7 @@ class TemplateMatcher:
         template_width: int,
     ) -> list[dict[str, Any]]:
         """找到所有匹配"""
+        import cv2
         locations = []
         result_copy = result.copy()
 
@@ -437,6 +462,7 @@ class TemplateMatcher:
         screen_region: Optional[tuple[int, int, int, int]] = None,
     ) -> list[MatchResult]:
         """多尺度模板匹配"""
+        import cv2
         start_time = time.time()
 
         # 加载原始模板
@@ -471,7 +497,7 @@ class TemplateMatcher:
                 continue
 
             # 模板匹配
-            result = cv2.matchTemplate(screen, scaled_template, _METHOD_MAP[method])
+            result = cv2.matchTemplate(screen, scaled_template, _get_method_map()[method])
             min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
 
             if method == "TM_SQDIFF_NORMED":
@@ -536,6 +562,7 @@ class TemplateMatcher:
         y += offset[1]
 
         # 执行点击
+        import pyautogui
         try:
             pyautogui.click(x, y)
             logger.info(f"已点击模板 '{template_id}' 位置: ({x}, {y})")

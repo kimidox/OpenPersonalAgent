@@ -56,7 +56,11 @@ def load_skill_bindings() -> dict[str, list[str]]:
     result = {}
     for skill_id, conv_types in bindings.items():
         if isinstance(skill_id, str) and isinstance(conv_types, list):
-            result[skill_id] = [str(t) for t in conv_types]
+            sid = skill_id.strip()
+            if not sid:
+                # 过滤持久化数据中残留的空 skill_id
+                continue
+            result[sid] = [str(t) for t in conv_types]
     return result
 
 

@@ -1,3 +1,4 @@
+import functools
 from typing import Optional, List, Dict, Any
 
 import dotenv
@@ -10,12 +11,14 @@ logger = get_module_logger("config")
 
 env_file='.env'
 
-def get_config(key: str):
+
+def _resolve_env_path():
+    """解析 .env 文件路径（frozen 模式下含首启默认配置复制逻辑）"""
     import shutil
 
     if paths.is_frozen:
         # 用户配置路径
-        user_env = paths.user_data_dir /env_file
+        user_env = paths.user_data_dir / env_file
         # 默认配置路径（打包内部）
         default_env = paths.get_bundled_resource(env_file)
 
@@ -24,14 +27,27 @@ def get_config(key: str):
             shutil.copy(default_env, user_env)
 
         # 优先读取用户配置
-        env_path = user_env if user_env.exists() else default_env
-    else:
-        env_path = paths.project_root / env_file
+        return user_env if user_env.exists() else default_env
+    return paths.project_root / env_file
 
+
+@functools.lru_cache(maxsize=1)
+def _load_env() -> dict:
+    """一次性解析 .env 文件并缓存（模块级 40+ 次 get_config 调用只触发 1 次磁盘读取）。
+
+    与原实现（load_dotenv + get_key）的差异：
+    - 不再把键值写入 os.environ（项目中无代码通过 os.environ 读取这些配置，
+      OpenAI 客户端均显式传 api_key）
+    - 缺失键不再逐条打印 dotenv 的 verbose warning
+    """
+    env_path = _resolve_env_path()
     if env_path.is_file():
-        dotenv.load_dotenv(str(env_path))
-        return dotenv.get_key(dotenv_path=str(env_path), key_to_get=key)
-    return None
+        return dict(dotenv.dotenv_values(dotenv_path=str(env_path)))
+    return {}
+
+
+def get_config(key: str):
+    return _load_env().get(key)
 
 
 def set_config(key: str, value: str):
@@ -56,6 +72,8 @@ def set_config(key: str, value: str):
     
     # 使用 dotenv 设置键值
     success = dotenv.set_key(dotenv_path=str(env_path), key_to_set=key, value_to_set=str(value))
+    # 写入后清空缓存，保证后续 get_config 读到新值
+    _load_env.cache_clear()
     return success
 OPENAI_API_KEY = get_config("OPENAI_API_KEY")
 OPENAI_BASE_URL = get_config("OPENAI_BASE_URL")
@@ -409,20 +427,20 @@ LIVE2D_MODEL_NAME = _live2d_model if _live2d_model not in (None, "") else ""
 # Live2D 悬浮球宽度（像素）
 _live2d_width = get_config("LIVE2D_BALL_WIDTH")
 try:
-    LIVE2D_BALL_WIDTH = int(_live2d_width) if _live2d_width not in (None, "") else 200
+    LIVE2D_BALL_WIDTH = int(_live2d_width) if _live2d_width not in (None, "") else 400
 except (TypeError, ValueError):
-    LIVE2D_BALL_WIDTH = 200
+    LIVE2D_BALL_WIDTH = 400
 if LIVE2D_BALL_WIDTH < 50:
-    LIVE2D_BALL_WIDTH = 200
+    LIVE2D_BALL_WIDTH = 400
 
 # Live2D 悬浮球高度（像素）
 _live2d_height = get_config("LIVE2D_BALL_HEIGHT")
 try:
-    LIVE2D_BALL_HEIGHT = int(_live2d_height) if _live2d_height not in (None, "") else 200
+    LIVE2D_BALL_HEIGHT = int(_live2d_height) if _live2d_height not in (None, "") else 600
 except (TypeError, ValueError):
-    LIVE2D_BALL_HEIGHT = 200
+    LIVE2D_BALL_HEIGHT = 600
 if LIVE2D_BALL_HEIGHT < 50:
-    LIVE2D_BALL_HEIGHT = 200
+    LIVE2D_BALL_HEIGHT = 600
 
 # ===== 音频输入设备配置 =====
 
