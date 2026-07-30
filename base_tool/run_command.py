@@ -202,8 +202,10 @@ def validate_and_log_warnings(command: str, logger=None) -> Tuple[bool, List[str
     return is_valid, warnings
 
 
-# 用于测试的示例代码
 if __name__ == "__main__":
+    from logger import get_module_logger
+    _logger = get_module_logger("run_command_test")
+
     # 测试用例
     test_cases = [
         # 正常命令
@@ -218,17 +220,17 @@ if __name__ == "__main__":
         ("python " + "a" * 8200, False),
     ]
 
-    print("=" * 60)
-    print("参数完整性检查测试")
-    print("=" * 60)
+    _logger.info("=" * 60)
+    _logger.info("参数完整性检查测试")
+    _logger.info("=" * 60)
 
     for cmd, expected_valid in test_cases:
-        print(f"\n命令: {cmd[:80]}...")
+        _logger.info("命令: %s...", cmd[:80])
         is_valid, warnings = validate_command_params(cmd)
-        print(f"检查结果: {'通过' if is_valid else '失败'}")
+        _logger.info("检查结果: %s", "通过" if is_valid else "失败")
         if warnings:
-            print("警告信息:")
+            _logger.info("警告信息:")
             for warning in warnings:
-                print(f"  - {warning}")
-        print(f"预期结果: {'通过' if expected_valid else '失败'}")
-        print(f"测试结果: {'正确' if is_valid == expected_valid else '错误'}")
+                _logger.info("  - %s", warning)
+        _logger.info("预期结果: %s", "通过" if expected_valid else "失败")
+        _logger.info("测试结果: %s", "正确" if is_valid == expected_valid else "错误")

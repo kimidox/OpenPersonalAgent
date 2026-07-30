@@ -603,9 +603,12 @@ def format_validation_error(result: ValidationResult) -> str:
 
 # 测试和示例代码
 if __name__ == "__main__":
-    print("=" * 80)
-    print("结构化参数校验器测试")
-    print("=" * 80)
+    from logger import get_module_logger
+    _logger = get_module_logger("command_validator_test")
+
+    _logger.info("=" * 80)
+    _logger.info("结构化参数校验器测试")
+    _logger.info("=" * 80)
 
     validator = CommandValidator()
 
@@ -625,24 +628,24 @@ if __name__ == "__main__":
     ]
 
     for command, expected_valid, description in test_cases:
-        print(f"\n{'-' * 80}")
-        print(f"测试: {description}")
-        print(f"命令: {command}")
+        _logger.info("-" * 80)
+        _logger.info("测试: %s", description)
+        _logger.info("命令: %s", command)
 
         result = validator.validate(command)
 
         if result.is_valid:
-            print("✅ 验证通过")
+            _logger.info("✅ 验证通过")
         else:
-            print("❌ 验证失败")
-            print(format_validation_error(result))
+            _logger.info("❌ 验证失败")
+            _logger.info("%s", format_validation_error(result))
 
         # 验证预期结果
         if result.is_valid == expected_valid:
-            print(f"✅ 测试结果正确")
+            _logger.info("✅ 测试结果正确")
         else:
-            print(f"❌ 测试结果错误 (预期: {'通过' if expected_valid else '失败'})")
+            _logger.info("❌ 测试结果错误 (预期: %s)", "通过" if expected_valid else "失败")
 
-    print("\n" + "=" * 80)
-    print("测试完成")
-    print("=" * 80)
+    _logger.info("=" * 80)
+    _logger.info("测试完成")
+    _logger.info("=" * 80)

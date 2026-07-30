@@ -22,6 +22,10 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+from logger import get_module_logger
+
+logger = get_module_logger("download_models")
+
 # 模型配置
 MODEL_CONFIGS = {
     "tts_zh": {
@@ -67,7 +71,7 @@ def format_size(size_mb: float) -> str:
 
 
 def print_progress(progress: int, status: str, model_name: str = ""):
-    """打印下载进度"""
+    """打印下载进度（保留print用于终端进度条）"""
     bar_width = 40
     filled = int(bar_width * progress / 100)
     bar = "█" * filled + "░" * (bar_width - filled)
@@ -91,7 +95,7 @@ def download_model(model_key: str, model_dir: Path, show_progress: bool = True) 
         模型目录路径，如果失败则返回 None
     """
     if model_key not in MODEL_CONFIGS:
-        print(f"错误: 未知的模型类型 '{model_key}'")
+        logger.error("未知的模型类型 '%s'", model_key)
         return None
     
     config = MODEL_CONFIGS[model_key]
@@ -106,18 +110,17 @@ def download_model(model_key: str, model_dir: Path, show_progress: bool = True) 
                 missing_files.append(req_file)
         
         if not missing_files:
-            print(f"✓ {config['name']} 已存在: {target_dir}")
+            logger.info("%s 已存在: %s", config['name'], target_dir)
             return target_dir
         else:
-            print(f"⚠ {config['name']} 目录存在但缺少文件: {missing_files}")
-            print(f"  将重新下载...")
+            logger.warning("%s 目录存在但缺少文件: %s", config['name'], missing_files)
+            logger.info("将重新下载...")
     
-    print(f"\n下载 {config['name']}")
-    print(f"  描述: {config['description']}")
-    print(f"  大小: {format_size(config['size_mb'])}")
-    print(f"  URL: {config['url']}")
-    print(f"  目标: {target_dir}")
-    print()
+    logger.info("下载 %s", config['name'])
+    logger.info("  描述: %s", config['description'])
+    logger.info("  大小: %s", format_size(config['size_mb']))
+    logger.info("  URL: %s", config['url'])
+    logger.info("  目标: %s", target_dir)
     
     try:
         # 下载压缩包
@@ -152,13 +155,12 @@ def download_model(model_key: str, model_dir: Path, show_progress: bool = True) 
         if show_progress:
             print_progress(100, "完成!", config["model_id"])
         
-        print(f"\n✓ {config['name']} 下载完成!")
-        print(f"  路径: {target_dir}")
+        logger.info("%s 下载完成! 路径: %s", config['name'], target_dir)
         
         return target_dir
         
     except Exception as e:
-        print(f"\n✗ 下载失败: {e}")
+        logger.error("下载失败: %s", e)
         # 清理临时文件
         if tar_path.exists():
             try:
@@ -203,40 +205,40 @@ def check_models(model_dir: Path) -> Dict[str, Any]:
 
 def list_available_models():
     """列出可用的模型"""
-    print("\n可用的模型列表:")
-    print("=" * 60)
+    logger.info("可用的模型列表:")
+    logger.info("=" * 60)
     
     for model_key, config in MODEL_CONFIGS.items():
-        print(f"\n[{model_key}]")
-        print(f"  名称: {config['name']}")
-        print(f"  描述: {config['description']}")
-        print(f"  大小: {format_size(config['size_mb'])}")
-        print(f"  必要文件: {', '.join(config['required_files'])}")
+        logger.info("[%s]", model_key)
+        logger.info("  名称: %s", config['name'])
+        logger.info("  描述: %s", config['description'])
+        logger.info("  大小: %s", format_size(config['size_mb']))
+        logger.info("  必要文件: %s", ', '.join(config['required_files']))
     
-    print("\n" + "=" * 60)
+    logger.info("=" * 60)
 
 
 def print_model_status(model_dir: Path):
     """打印模型状态"""
     results = check_models(model_dir)
     
-    print("\n已下载的模型状态:")
-    print("=" * 60)
+    logger.info("已下载的模型状态:")
+    logger.info("=" * 60)
     
     for model_key, status in results.items():
         symbol = "✓" if status["complete"] else ("⚠" if status["exists"] else "✗")
-        print(f"\n{symbol} [{model_key}] {status['name']}")
-        print(f"  路径: {status['path']}")
+        logger.info("%s [%s] %s", symbol, model_key, status['name'])
+        logger.info("  路径: %s", status['path'])
         
         if status["exists"]:
             if status["complete"]:
-                print(f"  状态: 完整")
+                logger.info("  状态: 完整")
             else:
-                print(f"  状态: 不完整，缺少文件: {status['missing_files']}")
+                logger.warning("  状态: 不完整，缺少文件: %s", status['missing_files'])
         else:
-            print(f"  状态: 未下载")
+            logger.info("  状态: 未下载")
     
-    print("\n" + "=" * 60)
+    logger.info("=" * 60)
 
 
 def main():
@@ -290,7 +292,7 @@ def main():
     
     # 获取模型目录
     model_dir = get_model_dir()
-    print(f"模型存储目录: {model_dir}")
+    logger.info("模型存储目录: %s", model_dir)
     
     # 列出可用模型
     if args.list:
@@ -315,10 +317,10 @@ def main():
     
     # 如果没有指定任何模型，下载默认中文TTS
     if not models_to_download:
-        print("未指定具体模型，将下载默认模型（中文TTS）")
+        logger.info("未指定具体模型，将下载默认模型（中文TTS）")
         models_to_download = ["tts_zh"]
     
-    print(f"\n将下载以下模型: {', '.join(models_to_download)}")
+    logger.info("将下载以下模型: %s", ', '.join(models_to_download))
     
     # 下载模型
     success_count = 0
@@ -328,8 +330,8 @@ def main():
             success_count += 1
     
     # 打印最终状态
-    print("\n" + "=" * 60)
-    print(f"下载完成: {success_count}/{len(models_to_download)} 个模型成功")
+    logger.info("=" * 60)
+    logger.info("下载完成: %d/%d 个模型成功", success_count, len(models_to_download))
     print_model_status(model_dir)
     
     # 返回状态码

@@ -157,10 +157,13 @@ def process_file(path: Path) -> list[str]:
 
 
 if __name__ == "__main__":
+    from logger import get_module_logger
+    _logger = get_module_logger("resize_settings")
+
     for arg in sys.argv[1:]:
         file_path = Path(arg)
         if file_path.exists():
             for line in process_file(file_path):
-                print(line)
+                _logger.info(line)
         else:
-            print(f"File not found: {file_path}")
+            _logger.warning("File not found: %s", file_path)

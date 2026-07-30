@@ -240,8 +240,11 @@ class RunCommandHandler(ToolHandler):
             popen_kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
         # 设置环境变量，确保 Python 脚本输出使用 UTF-8 编码
+        # PYTHONIOENCODING: 强制 stdout/stderr 使用 UTF-8
+        # PYTHONUTF8: 强制 open() 默认使用 UTF-8 (Python 3.7+)
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
         popen_kw["env"] = env
 
         try:

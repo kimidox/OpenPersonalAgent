@@ -250,120 +250,6 @@ def run_floating_ball_process(
     except Exception as e:
         logger.error(f"应用运行异常: {e}")
 
-def test_live2d_integration() -> None:
-    """
-    测试 Live2D 集成逻辑
-
-    测试场景:
-    1. Live2D 未启用 - 应该使用默认悬浮球
-    2. Live2D 启用但路径无效 - 应该 fallback 到默认悬浮球
-    3. Live2D 启用且路径有效 - 尝试创建 Live2D 窗口(可能失败)
-    """
-    import os
-    import tempfile
-
-    logger = get_logger()
-
-    print("\n" + "=" * 60)
-    print("开始测试 Live2D 集成逻辑")
-    print("=" * 60)
-
-    # 创建测试用的 IPC 队列
-    to_main: Queue = Queue()
-    from_main: Queue = Queue()
-
-    # 测试场景 1: Live2D 未启用
-    print("\n[测试 1] Live2D 未启用")
-    print("-" * 60)
-    try:
-        # 注意: 这里不实际运行 QApplication，只是验证参数传递
-        print(f"参数: live2d_enabled=False")
-        print("预期结果: 应该创建 FloatingBallWindow")
-        print("✓ 测试通过 - 参数配置正确")
-    except Exception as e:
-        print(f"✗ 测试失败: {e}")
-
-    # 测试场景 2: Live2D 启用但路径无效
-    print("\n[测试 2] Live2D 启用但模型路径不存在")
-    print("-" * 60)
-    try:
-        invalid_path = "D:/nonexistent/model.model3.json"
-        print(f"参数: live2d_enabled=True, model_path={invalid_path}")
-        print("预期结果: 应该检测到路径无效，fallback 到 FloatingBallWindow")
-
-        # 检查路径是否存在
-        from pathlib import Path
-        if not Path(invalid_path).exists():
-            print("✓ 路径检测正确 - 文件不存在")
-        else:
-            print("✗ 测试失败 - 文件不应存在")
-    except Exception as e:
-        print(f"✗ 测试失败: {e}")
-
-    # 测试场景 3: Live2D 启用且路径有效（但模型可能不存在）
-    print("\n[测试 3] Live2D 启用且路径有效（创建临时文件测试）")
-    print("-" * 60)
-    try:
-        # 创建临时 JSON 文件
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.model3.json', delete=False) as f:
-            temp_path = f.name
-            f.write('{}')  # 写入空 JSON
-
-        print(f"参数: live2d_enabled=True, model_path={temp_path}")
-        print("预期结果: 文件存在，会尝试创建 Live2D 窗口")
-
-        # 检查文件是否存在
-        if Path(temp_path).exists():
-            print("✓ 文件创建成功")
-            print("✓ Live2D 初始化会尝试加载此文件（可能会因模型格式错误而失败）")
-        else:
-            print("✗ 测试失败 - 文件应该存在")
-
-        # 清理临时文件
-        Path(temp_path).unlink(missing_ok=True)
-
-    except Exception as e:
-        print(f"✗ 测试失败: {e}")
-
-    # 测试场景 4: 验证错误处理
-    print("\n[测试 4] 验证错误处理逻辑")
-    print("-" * 60)
-    try:
-        # 模拟 Live2D 导入错误
-        print("测试 ImportError 处理...")
-        # 这里不能实际测试导入错误，因为会影响整个进程
-        print("✓ 错误处理逻辑已正确实现（在 run_floating_ball_process 中）")
-
-        print("\n测试 FileNotFoundError 处理...")
-        print("✓ 文件路径检查在窗口创建前执行")
-
-        print("\n测试 RuntimeError 处理...")
-        print("✓ Live2D 初始化异常会被捕获并 fallback")
-
-    except Exception as e:
-        print(f"✗ 测试失败: {e}")
-
-    # 测试场景 5: 验证日志记录
-    print("\n[测试 5] 验证日志记录")
-    print("-" * 60)
-    try:
-        print("预期日志输出:")
-        print("  - 检测到 Live2D 配置")
-        print("  - Live2D 窗口创建成功/失败")
-        print("  - Fallback 到默认悬浮球窗口")
-        print("  - 窗口创建成功")
-        print("✓ 日志记录逻辑已正确实现")
-    except Exception as e:
-        print(f"✗ 测试失败: {e}")
-
-    print("\n" + "=" * 60)
-    print("所有集成逻辑测试完成")
-    print("=" * 60)
-    print("\n提示: 实际运行时，可以使用以下命令测试不同场景:")
-    print("  - 测试默认悬浮球: python -m ui_flet.floating_ball_process")
-    print("  - 测试 Live2D: 需要提供有效的模型路径和配置")
-    print("\n")
-
 
 def main() -> None:
     """命令行独立调试用入口"""
@@ -373,14 +259,15 @@ def main() -> None:
     q1: Queue = Queue()
     q2: Queue = Queue()
 
-    def printer():
+    def ipc_printer():
         while True:
             try:
-                print("IPC:", q1.get(timeout=0.5))
+                msg = q1.get(timeout=0.5)
+                logger.info("IPC: %s", msg)
             except Exception:
                 continue
 
-    t = threading.Thread(target=printer, daemon=True)
+    t = threading.Thread(target=ipc_printer, daemon=True)
     t.start()
 
     # 独立运行时，main_pid 为当前进程 PID，flet_pid 为 None

@@ -47,6 +47,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from logger import get_module_logger
+
+logger = get_module_logger("dev_run")
+
 
 def print_development_banner():
     """打印开发模式横幅"""
@@ -59,14 +63,13 @@ def print_development_banner():
 ║  按 Ctrl+C 停止应用                                             ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
-    print(banner)
+    logger.info(banner)
 
 
 def main():
     """启动开发模式"""
     print_development_banner()
-    print("正在启动 Flet 应用（开发模式）...")
-    print()
+    logger.info("正在启动 Flet 应用（开发模式）...")
 
     # 获取项目根目录
     project_root = Path(__file__).resolve().parent
@@ -75,7 +78,7 @@ def main():
     entry_point = project_root / "ui_flet" / "main.py"
 
     if not entry_point.exists():
-        print(f"错误: 入口文件不存在: {entry_point}")
+        logger.error("入口文件不存在: %s", entry_point)
         sys.exit(1)
 
     # 构建命令
@@ -102,16 +105,15 @@ def main():
             str(entry_point)
         ]
 
-    print(f"执行命令: {' '.join(cmd)}")
-    print()
+    logger.info("执行命令: %s", " ".join(cmd))
 
     try:
         # 运行 Flet 开发服务器
         subprocess.run(cmd, cwd=str(project_root))
     except KeyboardInterrupt:
-        print("\n应用已停止")
+        logger.info("应用已停止")
     except Exception as e:
-        print(f"\n启动失败: {e}")
+        logger.error("启动失败: %s", e)
         sys.exit(1)
 
 

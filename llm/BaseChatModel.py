@@ -277,24 +277,121 @@ class StreamParser:
 
     @staticmethod
     def _extract_tool_call_from_text(text: str) -> Optional[tuple[str, str]]:
-        """
-        从文本中提取 Qwen3 风格的 <tool_call> XML 工具调用。
+        """从文本中提取 Qwen3 风格的 XML 工具调用。
 
-        用于本地后端（如 llama.cpp + thinking 模式）未把 <tool_call> XML 解析
+        用于本地后端（如 llama.cpp + thinking 模式）未把 XML 解析
         为结构化 tool_calls 字段、而是原样输出到 reasoning_content / content
         的兜底场景。
 
         支持两种格式：
-        - 格式 A（Qwen3 原生）：
-            <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function></tool_call>
-        - 格式 B（Hermes JSON）：
-            <tool_call>{"name": "NAME", "arguments": {...}}</tool_call>
+        - 格式 A（Qwen3 原生）：<function=NAME><parameter=KEY>VALUE</parameter>...</function>
+        - 格式 B（Hermes JSON）：{"name": "NAME", "arguments": {...}}
 
         返回 (name, arguments_json_str) 或 None。
         函数名必须在内置工具名集合中，否则返回 None（防止 prose 误判）。
         """
-        if not text or "<tool_call>" not in text.lower():
+        if not text or "█" not in text.lower():
             return None
+
+        # 多 block 检测
+        block_count = text.lower().count("█")
+        if block_count > 1:
+            logger.warning(
+                "[StreamParser] 检测到多个 █ 块（%d 个），仅处理第一个",
+                block_count,
+            )
+
+        # 截取第一个块
+        block_match = StreamParser._XML_TOOL_CALL_BLOCK_PATTERN.search(text)
+        if not block_match:
+            return None
+        block = block_match.group(1)
+
+        # 格式 A：Qwen3 原生
+        result = StreamParser._extract_xml_tool_call(block)
+        if result is not None:
+            return result
+
+        # 格式 B：Hermes / OpenAI JSON 兼容
+        return StreamParser._extract_json_tool_call(block)
+
+    @staticmethod
+    def _extract_xml_tool_call(block: str) -> Optional[tuple[str, str]]:
+        """从 XML 块中提取 Qwen3 原生格式的工具调用。
+
+        Args:
+            block: XML 块内的内容。
+
+        Returns:
+            (name, arguments_json_str) 或 None。
+        """
+        func_match = StreamParser._XML_FUNCTION_PATTERN.search(block)
+        if not func_match:
+            return None
+
+        name = func_match.group(1)
+        params_text = func_match.group(2)
+        params: dict[str, Any] = {}
+        for key, value in StreamParser._XML_PARAMETER_PATTERN.findall(params_text):
+            value = value.strip()
+            if value[:1] in "[{":
+                try:
+                    params[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    params[key] = value
+            else:
+                params[key] = value
+        if name not in StreamParser._KNOWN_TOOL_NAMES:
+            logger.warning(
+                "[StreamParser] XML 解析到未知工具名 %r，忽略（可能是 prose 误判）",
+                name,
+            )
+            return None
+        return name, json.dumps(params, ensure_ascii=False)
+
+    @staticmethod
+    def _extract_json_tool_call(block: str) -> Optional[tuple[str, str]]:
+        """从 XML 块中提取 Hermes JSON 格式的工具调用。
+
+        Args:
+            block: XML 块内的内容。
+
+        Returns:
+            (name, arguments_json_str) 或 None。
+        """
+        json_match = StreamParser._JSON_OBJECT_PATTERN.search(block)
+        if not json_match:
+            return None
+
+        try:
+            data = json.loads(json_match.group(0))
+            name = data.get("name")
+            if not name:
+                return None
+            args = data.get("arguments", {})
+            if isinstance(args, dict):
+                args_str = json.dumps(args, ensure_ascii=False)
+            elif isinstance(args, str):
+                try:
+                    parsed = json.loads(args)
+                    if isinstance(parsed, dict):
+                        args_str = json.dumps(parsed, ensure_ascii=False)
+                    else:
+                        args_str = "{}"
+                except json.JSONDecodeError:
+                    args_str = "{}"
+            else:
+                args_str = json.dumps(args, ensure_ascii=False) if args else "{}"
+            if name not in StreamParser._KNOWN_TOOL_NAMES:
+                logger.warning(
+                    "[StreamParser] JSON 解析到未知工具名 %r，忽略（可能是 prose 误判）",
+                    name,
+                )
+                return None
+            return str(name), args_str
+        except json.JSONDecodeError:
+            return None
+
 
         # 多 block 检测：Qwen3 一般单轮只调一个工具，多个时只取第一个但记录 warning
         block_count = text.lower().count("<tool_call>")
@@ -383,6 +480,16 @@ class StreamParser:
         min_chars_for_callback: int = 50,  # 优化：从30增加到50，减少小批量回调
         on_tool_call_chunk: Callable[[dict], None] | None = None,
     ) -> None:
+        """初始化流式解析器，配置回调策略、缓冲区和性能监控。
+
+        Args:
+            stream_callback: 流式回调函数 (content, msg_type)，用于向调用方发送增量数据。
+            messages: 当前消息列表，用于 token 估算。
+            estimate_tokens: token 估算函数，接收消息列表返回估算值。
+            callback_interval: 回调最小间隔（秒），默认 0.1s，控制回调频率。
+            min_chars_for_callback: 触发回调的最小缓冲字符数，默认 50。
+            on_tool_call_chunk: 工具调用块回调，接收增量 tool_call chunk 字典。
+        """
         self._callback = stream_callback
         self._messages = messages
         self._estimate_tokens = estimate_tokens
@@ -626,43 +733,104 @@ class StreamParser:
                     is_complete=False,
                 )
 
-    def _build_result(self, finish_reason: Optional[str] = None) -> StreamResult:
-        """将累积数据组装为 StreamResult"""
-        self._flush_buffer()
+    def _build_result_truncated(self) -> StreamResult:
+        """处理被截断的响应：finish_reason="length" 时优先返回工具调用，否则返回 truncated。
 
-        # 处理被截断的情况：finish_reason="length" 表示输出被 max_tokens 截断
-        if finish_reason == "length":
-            content_text = "".join(self._all_content_parts).strip()
-            reasoning_text = "".join(self._all_reasoning_parts).strip()
-            # 如果有部分工具调用内容，仍然返回 tool_call 类型让 agent 尝试执行
-            if self._tool_call_chunks:
-                # 发出完成回调（流结束）
-                for idx, tc_data in self._tool_call_chunks.items():
-                    self._emit_tool_call_chunk(
-                        tool_call_index=idx,
-                        name_chunk="",
-                        arguments_chunk="",
-                        accumulated_name=tc_data["name"],
-                        accumulated_arguments=tc_data["arguments"],
-                        is_complete=True,
-                    )
-                first_tc = self._tool_call_chunks[min(self._tool_call_chunks.keys())]
-                name = first_tc["name"].strip()
-                arguments = first_tc["arguments"].strip()
-                if name:
-                    reasoning_content = "".join(self._all_reasoning_parts)
-                    return StreamResult.from_tool_call(
-                        name=name,
-                        arguments=arguments,
-                        reasoning_content=reasoning_content,
-                        token_usage=self._token_usage,
-                    )
-            # 否则返回 truncated 类型，让 agent 给 LLM 第二轮机会
-            return StreamResult.from_truncated(
-                content=content_text,
+        AI-BRANCH-MARKER: 截断场景分支
+        - 存在原因: max_tokens 截断可能导致工具调用不完整
+        - 适用条件: finish_reason == "length"
+        - 不能合并原因: 截断处理与正常完成逻辑差异显著
+        """
+        content_text = "".join(self._all_content_parts).strip()
+        reasoning_text = "".join(self._all_reasoning_parts).strip()
+        if self._tool_call_chunks:
+            for idx, tc_data in self._tool_call_chunks.items():
+                self._emit_tool_call_chunk(
+                    tool_call_index=idx,
+                    name_chunk="",
+                    arguments_chunk="",
+                    accumulated_name=tc_data["name"],
+                    accumulated_arguments=tc_data["arguments"],
+                    is_complete=True,
+                )
+            first_tc = self._tool_call_chunks[min(self._tool_call_chunks.keys())]
+            name = first_tc["name"].strip()
+            arguments = first_tc["arguments"].strip()
+            if name:
+                reasoning_content = "".join(self._all_reasoning_parts)
+                return StreamResult.from_tool_call(
+                    name=name,
+                    arguments=arguments,
+                    reasoning_content=reasoning_content,
+                    token_usage=self._token_usage,
+                )
+        return StreamResult.from_truncated(
+            content=content_text,
+            reasoning_content=reasoning_text,
+            token_usage=self._token_usage,
+        )
+
+    def _build_result_no_tool_calls(self) -> StreamResult:
+        """处理无工具调用的纯文本响应，含 XML 兜底解析。
+
+        AI-BRANCH-MARKER: XML 兜底解析分支
+        - 存在原因: llama.cpp + thinking 模式可能输出 XML 工具调用到 reasoning_content
+        - 适用条件: 本地后端未返回结构化 tool_calls 字段
+        - 不能合并原因: 需要从非结构化文本中解析，与正常结构化路径不同
+        """
+        content_text = "".join(self._all_content_parts).strip()
+        reasoning_text = "".join(self._all_reasoning_parts).strip()
+
+        # XML 兜底解析：本地后端可能把 XML 工具调用输出到 reasoning_content
+        # 而非结构化 tool_calls 字段，这里从文本中提取并转交 agent 执行。
+        parsed = self._extract_tool_call_from_text(reasoning_text) \
+            or self._extract_tool_call_from_text(content_text)
+        if parsed:
+            name, arguments = parsed
+            logger.warning(
+                "[StreamParser] 从 reasoning/content 中解析到 XML 工具调用 "
+                "(本地后端未返回结构化 tool_calls): name=%s", name,
+            )
+            if self._on_tool_call_chunk:
+                self._emit_tool_call_chunk(
+                    tool_call_index=0,
+                    name_chunk="",
+                    arguments_chunk="",
+                    accumulated_name=name,
+                    accumulated_arguments=arguments,
+                    is_complete=True,
+                    source="xml_fallback",
+                )
+            return StreamResult.from_tool_call(
+                name=name,
+                arguments=arguments,
                 reasoning_content=reasoning_text,
                 token_usage=self._token_usage,
             )
+
+        if not content_text and not reasoning_text:
+            return StreamResult(
+                result_type="text",
+                content="",
+                reasoning_content="",
+                token_usage=self._token_usage,
+            )
+        return StreamResult.from_text(
+            content=content_text,
+            reasoning_content=reasoning_text,
+            token_usage=self._token_usage,
+        )
+
+    def _build_result(self, finish_reason: Optional[str] = None) -> StreamResult:
+        """将累积数据组装为 StreamResult。
+
+        拆分为 _build_result_truncated / _build_result_no_tool_calls 子方法，
+        降低单个方法复杂度。
+        """
+        self._flush_buffer()
+
+        if finish_reason == "length":
+            return self._build_result_truncated()
 
         if self._token_usage is None:
             estimated_prompt = self._estimate_tokens(self._messages)
@@ -674,50 +842,7 @@ class StreamParser:
             )
 
         if not self._tool_call_chunks:
-            content_text = "".join(self._all_content_parts).strip()
-            reasoning_text = "".join(self._all_reasoning_parts).strip()
-
-            # XML 兜底解析：本地后端（如 llama.cpp + thinking 模式）可能把
-            # <tool_call> XML 输出到 reasoning_content 而非结构化 tool_calls 字段。
-            # 这里从 reasoning / content 中提取 XML 工具调用，转交 agent 执行。
-            parsed = self._extract_tool_call_from_text(reasoning_text) \
-                or self._extract_tool_call_from_text(content_text)
-            if parsed:
-                name, arguments = parsed
-                logger.warning(
-                    "[StreamParser] 从 reasoning/content 中解析到 XML 工具调用 "
-                    "(本地后端未返回结构化 tool_calls): name=%s", name,
-                )
-                # 通过回调发送完整信息（XML 解析无法流式，一次性发送）
-                if self._on_tool_call_chunk:
-                    self._emit_tool_call_chunk(
-                        tool_call_index=0,
-                        name_chunk="",
-                        arguments_chunk="",
-                        accumulated_name=name,
-                        accumulated_arguments=arguments,
-                        is_complete=True,
-                        source="xml_fallback",
-                    )
-                return StreamResult.from_tool_call(
-                    name=name,
-                    arguments=arguments,
-                    reasoning_content=reasoning_text,
-                    token_usage=self._token_usage,
-                )
-
-            if not content_text and not reasoning_text:
-                return StreamResult(
-                    result_type="text",
-                    content="",
-                    reasoning_content="",
-                    token_usage=self._token_usage,
-                )
-            return StreamResult.from_text(
-                content=content_text,
-                reasoning_content=reasoning_text,
-                token_usage=self._token_usage,
-            )
+            return self._build_result_no_tool_calls()
 
         first_tc = self._tool_call_chunks[min(self._tool_call_chunks.keys())]
         name = first_tc["name"].strip()
@@ -733,8 +858,7 @@ class StreamParser:
             )
 
         reasoning_content = "".join(self._all_reasoning_parts)
-        
-        # 发出完成回调（流结束）
+
         for idx, tc_data in self._tool_call_chunks.items():
             self._emit_tool_call_chunk(
                 tool_call_index=idx,
@@ -744,7 +868,7 @@ class StreamParser:
                 accumulated_arguments=tc_data["arguments"],
                 is_complete=True,
             )
-        
+
         return StreamResult.from_tool_call(
             name=name,
             arguments=arguments,
@@ -825,6 +949,23 @@ class BaseChatModel(ABC):
         enable_deep_thinking: bool = True,
         enable_tool_call: bool = True,
     ) -> None:
+        """初始化聊天模型，配置 API 参数、通信状态追踪和超时检测。
+
+        extra_body 默认同时包含 DashScope 和 llama.cpp 两个后端的兼容字段，
+        使 enable_thinking 在云端和本地都能生效。
+
+        Args:
+            model_name: 模型名称，默认使用 config.MODEL_NAME。
+            api_key: OpenAI API 密钥，默认使用 config.OPENAI_API_KEY。
+            base_url: API 基础 URL，默认使用 config.OPENAI_BASE_URL。
+            temperature: 生成温度，默认 0.7。
+            top_p: 核采样参数，默认 0.95。
+            frequency_penalty: 频率惩罚，默认 0.6。
+            extra_body: 额外请求体字段，默认包含 enable_thinking 双端兼容字段。
+            enable_vision: 是否启用视觉/图片能力，默认 True。
+            enable_deep_thinking: 是否启用深度思考，默认 True。
+            enable_tool_call: 是否启用工具调用，默认 True。
+        """
         self.model_name = model_name or config.MODEL_NAME
         self.api_key = api_key or config.OPENAI_API_KEY
         self.base_url = base_url or config.OPENAI_BASE_URL
@@ -1241,6 +1382,16 @@ class BaseChatModel(ABC):
         return None
 
     def _estimate_tokens_from_messages(self, messages: list[dict]) -> int:
+        """通过字符数估算消息的 token 数量，用于流式回调策略。
+
+        采用简单的 4 字符 ≈ 1 token 估算，支持纯文本和多模态消息格式。
+
+        Args:
+            messages: OpenAI 格式的消息列表。
+
+        Returns:
+            估算的 token 数量，最小值为 1。
+        """
         total_chars = 0
         for msg in messages:
             content = msg.get("content", "")
@@ -1284,6 +1435,46 @@ class BaseChatModel(ABC):
     @abstractmethod
     def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
         """请求带工具的补全，返回函数调用信息或 None。"""
+
+    def _handle_api_error(
+        self,
+        error: Exception,
+        stream_callback: Callable[[str, str], None],
+    ) -> StreamResult:
+        """处理 API 调用异常，统一返回 StreamResult.from_error。
+
+        将 stream_request_llm_with_tools / stream_complete 中重复的
+        except 分支统一为单个方法，减少约 80 行重复代码。
+
+        Args:
+            error: 捕获的异常对象
+            stream_callback: 流式回调，用于发送错误消息
+
+        Returns:
+            StreamResult: 错误类型的 StreamResult
+        """
+        if isinstance(error, BadRequestError):
+            error_msg = f"请求参数错误: {error}"
+            if "inappropriate content" in str(error).lower() or "data inspection" in str(error).lower():
+                error_msg = "内容审核未通过：输入内容可能包含不适当的内容，请修改后重试。"
+        elif isinstance(error, AuthenticationError):
+            error_msg = f"API认证失败: {error}"
+        elif isinstance(error, RateLimitError):
+            error_msg = f"API请求频率超限: {error}"
+        elif isinstance(error, APIConnectionError):
+            error_msg = f"API连接失败: {error}"
+        elif isinstance(error, APIError):
+            error_msg = f"API错误: {error}"
+        else:
+            error_msg = f"未知错误: {error}"
+
+        stream_callback(error_msg, "content")
+        self._transition_communication_state(
+            LLMCommunicationState.COMMUNICATION_ENDED,
+            error_message=error_msg
+        )
+        self._transition_communication_state(LLMCommunicationState.IDLE)
+        return StreamResult.from_error(error_msg)
 
     def stream_request_llm_with_tools(
         self,
@@ -1334,82 +1525,13 @@ class BaseChatModel(ABC):
 
             # 请求已发送，启动等待响应超时检测
             self._start_timeout_timer(self.WAITING_FOR_RESPONSE_TIMEOUT, "waiting_for_response")
-        except BadRequestError as e:
-            error_msg = f"请求参数错误: {e}"
-            if "inappropriate content" in str(e).lower() or "data inspection" in str(e).lower():
-                error_msg = "内容审核未通过：输入内容可能包含不适当的内容，请修改后重试。"
-            stream_callback(error_msg, "content")
-            # 异常时转换为 COMMUNICATION_ENDED 状态
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            # 返回前重置状态为 IDLE
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
-        except AuthenticationError as e:
-            error_msg = f"API认证失败: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
-        except RateLimitError as e:
-            error_msg = f"API请求频率超限: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
-        except APIConnectionError as e:
-            error_msg = f"API连接失败: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
-        except APIError as e:
-            error_msg = f"API错误: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
+        except (BadRequestError, AuthenticationError, RateLimitError, APIConnectionError, APIError) as e:
+            return self._handle_api_error(e, stream_callback)
         except Exception as e:
-            error_msg = f"未知错误: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
+            return self._handle_api_error(e, stream_callback)
 
-        # 创建增强的 StreamParser，在首次收到数据时更新状态
-        first_chunk_received = False
-
-        def wrapped_stream_callback(content: str, msg_type: str) -> None:
-            nonlocal first_chunk_received
-            # 首次收到数据时转换状态为 RECEIVING_STREAM
-            if not first_chunk_received:
-                first_chunk_received = True
-                self._transition_communication_state(
-                    LLMCommunicationState.RECEIVING_STREAM
-                )
-            # 每次收到数据时更新 last_data_timestamp
-            self._transition_communication_state(
-                LLMCommunicationState.RECEIVING_STREAM,
-                last_data_timestamp=_time.time()
-            )
-            stream_callback(content, msg_type)
+        # 创建带状态转换的流式回调包装函数
+        wrapped_stream_callback = self._create_streaming_wrapped_callback(stream_callback)
 
         # 工具调用流式回调：将工具调用增量数据通过 stream_callback 发送
         def on_tool_call_chunk_wrapper(chunk_data: dict) -> None:
@@ -1439,23 +1561,7 @@ class BaseChatModel(ABC):
             on_tool_call_chunk=on_tool_call_chunk_wrapper,  # 新增：传递工具调用流式回调
         )
 
-        try:
-            result = parser.process_stream(stream)
-            # 流正常结束，转换状态为 COMMUNICATION_ENDED
-            self._transition_communication_state(LLMCommunicationState.COMMUNICATION_ENDED)
-            return result
-        except Exception as e:
-            error_msg = f"流式响应处理错误: {e}"
-            stream_callback(error_msg, "content")
-            # 异常时转换状态为 COMMUNICATION_ENDED
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            return StreamResult.from_error(error_msg)
-        finally:
-            # 方法返回前重置状态为 IDLE
-            self._transition_communication_state(LLMCommunicationState.IDLE)
+        return self._process_stream_result(parser, stream, stream_callback)
 
     def async_stream_request_llm_with_tools(
         self,
@@ -1671,71 +1777,43 @@ class BaseChatModel(ABC):
 
             # 请求已发送，启动等待响应超时检测
             self._start_timeout_timer(self.WAITING_FOR_RESPONSE_TIMEOUT, "waiting_for_response")
-        except BadRequestError as e:
-            error_msg = f"请求参数错误: {e}"
-            if "inappropriate content" in str(e).lower() or "data inspection" in str(e).lower():
-                error_msg = "内容审核未通过：输入内容可能包含不适当的内容，请修改后重试。"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
-        except AuthenticationError as e:
-            error_msg = f"API认证失败: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
-        except RateLimitError as e:
-            error_msg = f"API请求频率超限: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
-        except APIConnectionError as e:
-            error_msg = f"API连接失败: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
-        except APIError as e:
-            error_msg = f"API错误: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
+        except (BadRequestError, AuthenticationError, RateLimitError, APIConnectionError, APIError) as e:
+            return self._handle_api_error(e, stream_callback)
         except Exception as e:
-            error_msg = f"未知错误: {e}"
-            stream_callback(error_msg, "content")
-            self._transition_communication_state(
-                LLMCommunicationState.COMMUNICATION_ENDED,
-                error_message=error_msg
-            )
-            self._transition_communication_state(LLMCommunicationState.IDLE)
-            return StreamResult.from_error(error_msg)
+            return self._handle_api_error(e, stream_callback)
 
-        # 创建增强的 StreamParser，在首次收到数据时更新状态
-        first_chunk_received = False
+        # 创建带状态转换的流式回调包装函数
+        wrapped_stream_callback = self._create_streaming_wrapped_callback(stream_callback)
+
+        parser = StreamParser(
+            stream_callback=wrapped_stream_callback,
+            messages=messages,
+            estimate_tokens=self._estimate_tokens_from_messages,
+        )
+
+        return self._process_stream_result(parser, stream, stream_callback)
+
+    def _create_streaming_wrapped_callback(
+        self,
+        stream_callback: Callable[[str, str], None],
+    ) -> Callable[[str, str], None]:
+        """创建带状态转换的流式回调包装函数。
+
+        在首次收到数据时将状态转换为 RECEIVING_STREAM，
+        并在每次收到数据时更新 last_data_timestamp。
+
+        Args:
+            stream_callback: 原始流式回调函数。
+
+        Returns:
+            包装后的流式回调函数。
+        """
+        first_chunk_received = [False]
 
         def wrapped_stream_callback(content: str, msg_type: str) -> None:
-            nonlocal first_chunk_received
             # 首次收到数据时转换状态为 RECEIVING_STREAM
-            if not first_chunk_received:
-                first_chunk_received = True
+            if not first_chunk_received[0]:
+                first_chunk_received[0] = True
                 self._transition_communication_state(
                     LLMCommunicationState.RECEIVING_STREAM
                 )
@@ -1746,12 +1824,24 @@ class BaseChatModel(ABC):
             )
             stream_callback(content, msg_type)
 
-        parser = StreamParser(
-            stream_callback=wrapped_stream_callback,
-            messages=messages,
-            estimate_tokens=self._estimate_tokens_from_messages,
-        )
+        return wrapped_stream_callback
 
+    def _process_stream_result(
+        self,
+        parser: StreamParser,
+        stream,
+        stream_callback: Callable[[str, str], None],
+    ) -> StreamResult:
+        """处理流式响应结果，包含状态转换和异常处理。
+
+        Args:
+            parser: StreamParser 实例。
+            stream: 流式响应对象。
+            stream_callback: 流式回调函数，用于发送错误信息。
+
+        Returns:
+            StreamResult: 流式响应处理结果。
+        """
         try:
             result = parser.process_stream(stream)
             # 流正常结束，转换状态为 COMMUNICATION_ENDED
@@ -1786,22 +1876,26 @@ class BaseChatModel(ABC):
             action.update(args)
         return executor.execute_action(action)
 
-    def analyze_with_image(
+    def _build_image_analysis_messages(
         self,
         system_prompt: str,
         user_prompt: str,
-        image_path: str | None = None,
-        conversation_history: list[dict] | None = None,
-        executor: Executor | None = None,
-        log_callback: Optional[Callable[[str, str], Any]] = None,
-    ) -> str:
-        """
-        负责：
-        1) 拼装系统+用户(含图像) messages
-        2) 循环请求模型 -> 解析 tool_call -> 执行本地动作 -> 将动作结果回填给模型
-        3) 遇到 "任务完成" 时返回
-        """
+        image_path: str | None,
+        conversation_history: list[dict] | None,
+    ) -> list[dict]:
+        """构建图像分析的消息列表。
 
+        拼装系统提示、对话历史和用户消息（含图像）为完整的消息列表。
+
+        Args:
+            system_prompt: 系统提示文本。
+            user_prompt: 用户提示文本。
+            image_path: 图像文件路径，可为 None。
+            conversation_history: 对话历史消息列表，可为 None。
+
+        Returns:
+            list[dict]: 构建好的消息列表。
+        """
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
 
         if conversation_history:
@@ -1821,74 +1915,127 @@ class BaseChatModel(ABC):
         if user_content:
             messages.append({"role": "user", "content": user_content})
 
+        return messages
+
+    def _process_tool_call_iteration(
+        self,
+        current_messages: list[dict],
+        tools: list[dict],
+        executor: Executor,
+        log_callback: Optional[Callable[[str, str], Any]] = None,
+    ) -> tuple[list[dict], bool, str]:
+        """处理单次工具调用迭代。
+
+        执行一次工具调用：请求模型、解析 tool_call、执行本地动作、
+        将动作结果回填给模型。
+
+        Args:
+            current_messages: 当前消息列表。
+            tools: 工具定义列表。
+            executor: Executor 实例，用于执行本地动作。
+            log_callback: 日志回调函数，可为 None。
+
+        Returns:
+            tuple[list[dict], bool, str]: (更新后的消息列表, 是否应提前返回, 返回值)。
+                当 should_return 为 True 时，return_value 为最终结果；
+                当 should_return 为 False 时，return_value 无意义，继续迭代。
+        """
+        function_call = self.request_llm_with_tools(current_messages, tools)
+        if not function_call:
+            raise Exception("未知的响应类型（未发现 tool_calls）")
+
+        fname = function_call.get("name")
+        arg_str = function_call.get("arguments") or "{}"
+        try:
+            args = json.loads(arg_str)
+        except Exception:
+            args = {}
+
+        if log_callback:
+            log_callback(str({fname: {"args": args}}), "response")
+
+        # 关键修复：追加 assistant(tool_calls) 消息，满足 OpenAI 协议
+        # （tool 消息前必须有带 tool_calls 的 assistant 消息）
+        _call_id = f"call_{id(args):x}"
+        # 确保 arg_str 是有效的 JSON 字符串
+        try:
+            json.loads(arg_str)
+            valid_arg_str = arg_str
+        except (json.JSONDecodeError, TypeError):
+            valid_arg_str = "{}"
+        current_messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": _call_id,
+                "type": "function",
+                "function": {"name": fname, "arguments": valid_arg_str},
+            }],
+        })
+
+        result = self.execute_function_call(fname, args, executor)
+
+        if log_callback:
+            log_callback(str({fname: {"result": result}}), "response")
+
+        if result == "任务完成":
+            if log_callback:
+                log_callback("任务完成", "response")
+            return current_messages, True, "任务完成"
+
+        current_messages.append({
+            "role": "tool",
+            "name": fname,
+            "tool_call_id": _call_id,
+            "content": str(result),
+        })
+        current_screenshot = executor.screenshot()
+        current_messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{self.encode_image(current_screenshot)}"
+                        },
+                    }
+                ],
+            }
+        )
+
+        return current_messages, False, ""
+
+    def analyze_with_image(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        image_path: str | None = None,
+        conversation_history: list[dict] | None = None,
+        executor: Executor | None = None,
+        log_callback: Optional[Callable[[str, str], Any]] = None,
+    ) -> str:
+        """
+        负责：
+        1) 拼装系统+用户(含图像) messages
+        2) 循环请求模型 -> 解析 tool_call -> 执行本地动作 -> 将动作结果回填给模型
+        3) 遇到 "任务完成" 时返回
+        """
+
+        messages = self._build_image_analysis_messages(
+            system_prompt, user_prompt, image_path, conversation_history
+        )
+
         tools = self.build_tools()
         current_messages = list(messages)
         executor = executor or Executor(".")
 
         for _ in range(getattr(config, "MAX_ITERATIONS", 20)):
-            function_call = self.request_llm_with_tools(current_messages, tools)
-            if not function_call:
-                raise Exception("未知的响应类型（未发现 tool_calls）")
-
-            fname = function_call.get("name")
-            arg_str = function_call.get("arguments") or "{}"
-            try:
-                args = json.loads(arg_str)
-            except Exception:
-                args = {}
-
-            if log_callback:
-                log_callback(str({fname: {"args": args}}), "response")
-
-            # 关键修复：追加 assistant(tool_calls) 消息，满足 OpenAI 协议
-            # （tool 消息前必须有带 tool_calls 的 assistant 消息）
-            _call_id = f"call_{id(args):x}"
-            # 确保 arg_str 是有效的 JSON 字符串
-            try:
-                json.loads(arg_str)
-                valid_arg_str = arg_str
-            except (json.JSONDecodeError, TypeError):
-                valid_arg_str = "{}"
-            current_messages.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [{
-                    "id": _call_id,
-                    "type": "function",
-                    "function": {"name": fname, "arguments": valid_arg_str},
-                }],
-            })
-
-            result = self.execute_function_call(fname, args, executor)
-
-            if log_callback:
-                log_callback(str({fname: {"result": result}}), "response")
-
-            if result == "任务完成":
-                if log_callback:
-                    log_callback("任务完成", "response")
-                return "任务完成"
-
-            current_messages.append({
-                "role": "tool",
-                "name": fname,
-                "tool_call_id": _call_id,
-                "content": str(result),
-            })
-            current_screenshot = executor.screenshot()
-            current_messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{self.encode_image(current_screenshot)}"
-                            },
-                        }
-                    ],
-                }
+            current_messages, should_return, return_value = self._process_tool_call_iteration(
+                current_messages, tools, executor, log_callback
             )
+            if should_return:
+                return return_value
 
         if log_callback:
             log_callback("任务异常", "response")

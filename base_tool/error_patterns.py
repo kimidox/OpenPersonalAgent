@@ -379,28 +379,31 @@ def get_auto_fixable_patterns() -> list:
 # =============================================================================
 
 if __name__ == "__main__":
-    print("=" * 80)
-    print("基础错误模式库测试")
-    print("=" * 80)
+    from logger import get_module_logger
+    _logger = get_module_logger("error_patterns_test")
+
+    _logger.info("=" * 80)
+    _logger.info("基础错误模式库测试")
+    _logger.info("=" * 80)
     
     # 测试 1: 获取所有模式名称
-    print("\n所有错误模式名称:")
+    _logger.info("所有错误模式名称:")
     for name in get_all_pattern_names():
-        print(f"  - {name}")
+        _logger.info("  - %s", name)
     
     # 测试 2: 获取自动可修复模式
-    print("\n自动可修复的错误模式:")
+    _logger.info("自动可修复的错误模式:")
     for name in get_auto_fixable_patterns():
-        print(f"  - {name} (策略: {get_fix_strategy(name)})")
+        _logger.info("  - %s (策略: %s)", name, get_fix_strategy(name))
     
     # 测试 3: 按修复策略查询
-    print("\n按修复策略查询:")
+    _logger.info("按修复策略查询:")
     for strategy in ["pair_quotes", "complete_parameter", "suggest_alternative"]:
         patterns = get_patterns_by_fix_strategy(strategy)
-        print(f"  {strategy}: {patterns}")
+        _logger.info("  %s: %s", strategy, patterns)
     
     # 测试 4: 模式匹配
-    print("\n模式匹配测试:")
+    _logger.info("模式匹配测试:")
     test_messages = [
         '引号不匹配: 在位置 10 检测到双引号未正确配对',
         '参数截断: 参数标志 "--input" 后缺少值',
@@ -413,20 +416,20 @@ if __name__ == "__main__":
         if pattern_name:
             can_fix = can_auto_fix(pattern_name)
             strategy = get_fix_strategy(pattern_name)
-            print(f"  消息: {msg[:30]}...")
-            print(f"    -> 模式: {pattern_name}, 可自动修复: {can_fix}, 策略: {strategy}")
+            _logger.info("  消息: %s...", msg[:30])
+            _logger.info("    -> 模式: %s, 可自动修复: %s, 策略: %s", pattern_name, can_fix, strategy)
         else:
-            print(f"  消息: {msg[:30]}... -> 未匹配到模式")
+            _logger.info("  消息: %s... -> 未匹配到模式", msg[:30])
     
     # 测试 5: 格式化错误消息
-    print("\n格式化错误消息测试:")
+    _logger.info("格式化错误消息测试:")
     formatted_msg = format_error_message(
         "QUOTE_MISMATCH",
         position=15,
         quote_type="双引号"
     )
-    print(f"  {formatted_msg}")
+    _logger.info("  %s", formatted_msg)
     
-    print("\n" + "=" * 80)
-    print("测试完成")
-    print("=" * 80)
+    _logger.info("=" * 80)
+    _logger.info("测试完成")
+    _logger.info("=" * 80)

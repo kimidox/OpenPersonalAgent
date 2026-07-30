@@ -10,4 +10,3 @@ class Test(TestCase):
         skills=[skill,skill_2]
         res=build_skills_catalog_text(skills)
         print(res)
-

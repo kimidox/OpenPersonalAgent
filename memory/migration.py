@@ -24,4 +24,4 @@ def mark_migration_completed() -> None:
 
 
 if __name__ == "__main__":
-    print("Migration module loaded. Use is_migration_completed() to check status.")
+    logger.info("Migration module loaded. Use is_migration_completed() to check status.")

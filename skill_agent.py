@@ -60,6 +60,14 @@ SKILL_AGENT_AWAITING_USER_REPLY = "__SKILL_AGENT_AWAITING_USER_REPLY__"
 
 
 def _ask_user_ui_log_payload(args: dict[str, Any]) -> str:
+    """将 ask_user 工具参数格式化为 JSON 负载，用于 UI 日志展示。
+
+    Args:
+        args: ask_user 工具的参数字典，包含 question、context、choices 字段。
+
+    Returns:
+        格式化后的 JSON 字符串，包含清理过的 question、context 和 choices。
+    """
     choices_raw = args.get("choices")
     choices: list[str] = []
     if isinstance(choices_raw, list):
@@ -78,6 +86,14 @@ def _ask_user_ui_log_payload(args: dict[str, Any]) -> str:
 
 
 def _message_text(message: Any) -> str:
+    """安全提取消息对象的 content 文本，处理空值和空白。
+
+    Args:
+        message: 消息对象，需有 content 属性。
+
+    Returns:
+        去除首尾空白后的文本内容；如果 content 不存在、非字符串或为空则返回空字符串。
+    """
     c = getattr(message, "content", None)
     if isinstance(c, str) and c.strip():
         return c.strip()
@@ -85,10 +101,27 @@ def _message_text(message: Any) -> str:
 
 
 def _history_without_system(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """过滤掉 system 角色的消息，返回纯对话历史。
+
+    Args:
+        messages: 完整的消息列表（含 system 消息）。
+
+    Returns:
+        不包含 role="system" 的消息列表。
+    """
     return [m for m in messages if m.get("role") != "system"]
 
 
 def _build_system_prompt(catalog: str, constraints: str = "") -> str:
+    """构建系统提示词，包含技能目录和对话约束。
+
+    Args:
+        catalog: 技能目录文本，填充到系统提示词的 TOOL_CATALOG 占位符。
+        constraints: 对话约束文本，可选，填充到 CONSTRAINTS 占位符。
+
+    Returns:
+        完整的系统提示词字符串。
+    """
     dp = DynamicSystemPrompt()
     dp.update_skill_catalog(catalog)
     if constraints.strip():
@@ -144,6 +177,21 @@ class SkillAgent:
         username: str ,
         file_upload_controller: Any = None,
     ) -> None:
+        """初始化 SkillAgent，配置工作目录、技能注册表、工具上下文和状态机。
+
+        Args:
+            work_dir: 工作目录的绝对路径，用于工具执行和文件操作。
+            skills_dir: 技能定义目录，默认使用 config.SKILLS_DIR。
+            max_steps: 工具调用最大步数，默认使用 config.SKILL_AGENT_MAX_STEPS。
+            executor: 命令执行器实例，用于执行 run_command 等需要子进程的工具。
+            memory: 对话记忆管理器，用于持久化消息和技能状态。
+            conversation_id: 会话唯一标识，用于关联对话历史。
+            username: 用户名，注入系统提示词中供 LLM 个性化回复。
+            file_upload_controller: 文件上传控制器，处理用户上传文件。
+
+        Side effects:
+            初始化技能注册表、工具上下文、状态机和重复检测相关字段。
+        """
         self.work_dir = str(Path(work_dir).resolve())
         sd = skills_dir if skills_dir is not None else config.SKILLS_DIR
         builtin_sd = config.BUILTIN_SKILLS_DIR
@@ -319,6 +367,11 @@ class SkillAgent:
 
 
     def _disabled_skill_ids_frozen(self) -> frozenset[str]:
+        """获取已禁用技能 ID 的不可变集合，用于技能过滤。
+
+        Returns:
+            包含所有已禁用技能 ID 的 frozenset，每次调用重新从配置加载。
+        """
         return frozenset(load_disabled_skill_ids())
 
     def _get_conversation_type(self) -> str:
@@ -391,6 +444,15 @@ class SkillAgent:
             messages.insert(0, {"role": "system", "content": new_system_prompt})
 
     def _build_active_skills_text(self, active_skill_text: list[str], active_skill_ids: list[str]) -> str:
+        """将已加载技能列表格式化为系统提示词中的技能段落。
+
+        Args:
+            active_skill_text: 已格式化的技能文本列表，每个元素对应一个技能的提示词。
+            active_skill_ids: 与 active_skill_text 一一对应的技能 ID 列表。
+
+        Returns:
+            格式化后的 ACTIVE_SKILLS_SECTION 文本；如果 active_skill_text 为空则返回空字符串。
+        """
         if not active_skill_text:
             return ""
         parts = [
@@ -409,6 +471,14 @@ class SkillAgent:
         return ""
 
     def _build_tool_catalog_text(self, tool_catalog: list[dict]) -> str:
+        """将工具目录列表格式化为 Markdown 简要描述文本。
+
+        Args:
+            tool_catalog: 工具定义列表，每项包含 name 和 brief 字段。
+
+        Returns:
+            Markdown 格式的工具目录文本；如果 tool_catalog 为空则返回空字符串。
+        """
         if not tool_catalog:
             return ""
         lines = ["## 可用工具目录（简要描述）\n"]
@@ -438,6 +508,21 @@ class SkillAgent:
         user_query: str | None = None,
         tool_catalog: str | None = None,
     ) -> str:
+        """组装完整的动态系统提示词，填充所有占位符。
+
+        按会话类型选择模板，依次填入基础信息、技能目录、工具目录、
+        已加载技能、用户记忆、近期摘要和对话约束。
+
+        Args:
+            catalog: 技能目录文本。
+            active_skill_text: 已加载技能的提示词文本列表，可选。
+            active_skill_ids: 已加载技能的 ID 列表，可选。
+            user_query: 最近用户查询，用于语义检索，可选。
+            tool_catalog: 工具目录文本，可选。
+
+        Returns:
+            完整组装的系统提示词字符串。
+        """
         # 根据会话类型设置模板
         conv_type = self._get_conversation_type()
         self._dynamic_prompt.set_template_for_conversation_type(conv_type)
@@ -581,6 +666,7 @@ class SkillAgent:
         Returns:
             PlanMode: 分类结果
         """
+        # AI-BRANCH-MARKER: 输入分类开关分支 — INPUT_CLASSIFICATION_ENABLED=False时直接返回SIMPLE_TASK，跳过LLM分类调用
         if not config.INPUT_CLASSIFICATION_ENABLED:
             return PlanMode.SIMPLE_TASK
         
@@ -995,6 +1081,17 @@ class SkillAgent:
         return True
 
     def _is_dangerous_command(self, command: str) -> bool:
+        """检测命令是否匹配危险命令模式，支持前缀和包含两种匹配。
+
+        危险命令检查开关由 config.DANGEROUS_COMMAND_CHECK_ENABLED 控制，
+        关闭时直接返回 False，跳过所有匹配逻辑。
+
+        Args:
+            command: 待检测的命令字符串。
+
+        Returns:
+            True 表示命令匹配危险模式，应触发用户确认；False 表示安全。
+        """
         if not config.DANGEROUS_COMMAND_CHECK_ENABLED:
             return False
         
@@ -1011,6 +1108,16 @@ class SkillAgent:
         return False
 
     def _is_write_operation(self, command: str) -> bool:
+        """检测命令是否为文件写入操作，用于写入确认拦截。
+
+        通过匹配重定向符号和写入类命令关键字来判断。
+
+        Args:
+            command: 待检测的命令字符串。
+
+        Returns:
+            True 表示命令包含写入操作指示符；False 表示只读或无关操作。
+        """
         cmd_lower = command.lower().strip()
         write_indicators = [
             ">", ">>", "set-content", "write-host", "write-output",
@@ -1121,6 +1228,7 @@ class SkillAgent:
         import hashlib
         import json
 
+        # AI-BRANCH-MARKER: 重复检测分级响应分支 — 第1-2次返回警告，≥3次自动终止，防止工具调用死循环
         max_repeats = config.MAX_CONSECUTIVE_REPEATS
         logger.debug(f"配置信息: 去重启用={config.TOOL_CALL_DEDUPLICATION_ENABLED}, 最大重复次数={max_repeats}, 历史窗口大小={config.REPEAT_DETECTION_WINDOW_SIZE}")
 
@@ -1206,6 +1314,16 @@ class SkillAgent:
             return result
 
     def _extract_file_path(self, command: str) -> Optional[str]:
+        """从命令文本中提取输出文件路径，支持多种重定向语法。
+
+        支持的语法：-Path 'file'、>> 'file'、> 'file'、>> file、> file。
+
+        Args:
+            command: 包含文件路径的命令字符串。
+
+        Returns:
+            提取到的文件路径字符串；如果未匹配到任何模式则返回 None。
+        """
         import re
         patterns = [
             r"[-/]Path\s+['\"]([^'\"]+)['\"]",
@@ -1221,6 +1339,15 @@ class SkillAgent:
         return None
 
     def _verify_file_exists(self, file_path: str, cwd: str) -> str:
+        """验证文件是否存在于指定路径，返回验证结果消息。
+
+        Args:
+            file_path: 相对文件路径。
+            cwd: 当前工作目录，"." 表示使用 work_dir。
+
+        Returns:
+            包含 ✓ 或 ✗ 的验证结果消息，附带文件大小或不存在说明。
+        """
         from pathlib import Path
         
         if cwd == ".":
@@ -1246,6 +1373,23 @@ class SkillAgent:
         active_skill_text: list[str],
         active_skill_ids: list[str],
     ) -> tuple[str, bool, Optional[str]]:
+        """分发工具调用到控制工具或原子工具执行器。
+
+        控制工具（select_skill、finish、ask_user）走 execute_skill_control_tool，
+        其余走 execute_atomic_tool。
+
+        Args:
+            name: 工具名称。
+            args: 工具调用参数字典。
+            active_skill_text: 已加载技能的提示词文本列表。
+            active_skill_ids: 已加载技能的 ID 列表。
+
+        Returns:
+            (result_text, is_ask_user, ask_user_payload) 三元组：
+            - result_text: 工具执行结果文本
+            - is_ask_user: 是否触发了 ask_user 等待用户回复
+            - ask_user_payload: ask_user 的 JSON 负载，否则为 None
+        """
         if name in ("select_skill", "finish", "ask_user"):
             return execute_skill_control_tool(
                 name,
@@ -1265,6 +1409,21 @@ class SkillAgent:
         user_query: str,
         enable_vision: bool = True,
     ) -> None:
+        """重建消息列表，拼接系统提示词 + 历史对话 + 当前用户消息。
+
+        从 memory 加载历史消息（过滤 system），清空 messages 后重新拼接，
+        并将上传文件内容一次性消费到用户消息中。
+
+        Args:
+            messages: 待重建的消息列表（会被清空并重新填充）。
+            system_prompt: 系统提示词文本。
+            user_query: 当前用户输入文本。
+            enable_vision: 是否启用图片处理，默认 True。
+
+        Side effects:
+            清空并重建 messages 列表；消费 _uploaded_files_content 缓存；
+            将用户消息追加到 memory。
+        """
         assert self.memory is not None
         cid = self._conversation_id
         prior = _history_without_system(self.memory.get_messages(cid))
@@ -1685,6 +1844,7 @@ class SkillAgent:
             emit_token_usage()
             return ("return", err)
 
+        # AI-BRANCH-MARKER: 自动finish分支 — 已调用工具后的文本输出自动包装为finish返回，避免LLM在工具调用后输出无意义文本
         # 自动 finish：如果已调用工具，自动包装文本为 finish 调用
         if has_called_tool_in_run:
             logger.info("检测到工具调用后的文本输出，自动包装为finish工具调用")
@@ -1716,7 +1876,1020 @@ class SkillAgent:
             logger.debug("返回文本内容 (长度: %s)", len(final_text))
             return ("return", final_text)
 
+    def _classify_and_prepare_context(
+        self,
+        user_query: str,
+        log_callback: Optional[Callable[[str, str], Any]],
+        emit_token_usage: Callable[[], None],
+    ) -> dict:
+        """输入分类与主循环上下文准备。
+
+        处理计划确认续跑、输入分类、复杂任务计划生成、模型/工具/消息初始化。
+
+        Returns:
+            dict: 包含 action 键的结果字典：
+                - {"action": "return", "value": str}: 应立即返回
+                - {"action": "continue", "model": ..., "tools": ..., "messages": ...,
+                   "active_skill_text": ..., "active_skill_ids": ...}: 继续主循环
+        """
+        # AI-BRANCH-MARKER: 计划续跑分支 — 计划确认后续跑时跳过输入分类，直接进入工具循环
+        # 计划确认续跑检测：若上一轮在等待用户确认计划，根据用户选择决定走向
+        plan_resume = self._check_plan_confirmation_resume(user_query)
+        if plan_resume == "cancel":
+            cancel_msg = "已取消任务执行。"
+            if log_callback:
+                log_callback(cancel_msg, "assistant")
+            if self.memory is not None:
+                self.memory.append_message(self._conversation_id, "user", user_query.strip())
+                self.memory.append_message(
+                    self._conversation_id, "assistant", cancel_msg,
+                    metadata={"token_usage": asdict(self._token_usage)},
+                )
+            emit_token_usage()
+            return {"action": "return", "value": cancel_msg}
+        if plan_resume == "replan":
+            replan_msg = "好的，请重新描述您的需求或补充说明，我将重新制定执行计划。"
+            if log_callback:
+                log_callback(replan_msg, "assistant")
+            if self.memory is not None:
+                self.memory.append_message(self._conversation_id, "user", user_query.strip())
+                self.memory.append_message(
+                    self._conversation_id, "assistant", replan_msg,
+                    metadata={"token_usage": asdict(self._token_usage)},
+                )
+            emit_token_usage()
+            return {"action": "return", "value": replan_msg}
+
+        # 输入分类：判断是否需要规划
+        if plan_resume == "execute":
+            plan_mode = PlanMode.COMPLEX_TASK
+            logger.debug("计划确认续跑，跳过分类，直接进入复杂任务执行")
+        else:
+            plan_mode = self._classify_input(user_query)
+        logger.debug("输入分类: %s", plan_mode.value)
+
+        if log_callback:
+            mode_labels = {
+                PlanMode.NO_PLAN: "💬 闲聊/问答模式（无需规划，直接回复）",
+                PlanMode.SIMPLE_TASK: "⚡ 简单任务模式（单步工具调用）",
+                PlanMode.COMPLEX_TASK: "📋 复杂任务模式（结构化规划+分步执行）",
+            }
+            log_callback(mode_labels.get(plan_mode, plan_mode.value), "mode")
+
+        if plan_mode == PlanMode.NO_PLAN:
+            logger.debug("无需规划模式，直接回复")
+            return {"action": "return", "value": self._direct_reply(user_query, log_callback)}
+
+        # 复杂任务：注入执行约束
+        if plan_mode == PlanMode.COMPLEX_TASK:
+            if self._plan_confirmed:
+                plan_constraints = self._build_plan_constraints()
+                existing_constraints = self._conversation_constraints
+                if existing_constraints:
+                    self._conversation_constraints = existing_constraints + plan_constraints
+                else:
+                    self._conversation_constraints = plan_constraints.lstrip()
+            else:
+                planning_instruction = """
+
+【复杂任务执行要求 - 强制执行】
+1. 你必须在执行任何工具调用前，先在思考过程中制定完整的执行计划
+2. 计划必须包含：具体步骤列表、每步使用的工具、期望结果、验证方式
+3. 每执行完一个步骤，必须对照计划检查是否达到预期结果
+4. 如果某步骤失败，请分析原因并调整后续计划
+5. 所有步骤完成后，必须对照计划的 success_criteria 逐项确认任务是否成功
+6. 只有确认所有步骤完成后，才能调用 finish 结束任务"""
+                existing_constraints = self._conversation_constraints
+                if existing_constraints:
+                    self._conversation_constraints = existing_constraints + planning_instruction
+                else:
+                    self._conversation_constraints = planning_instruction.lstrip()
+
+        model = get_chat_model(enable_thinking=self._enable_thinking)
+        conv_type = self._get_conversation_type()
+        skills_visible = self._get_skills_for_conversation_type(conv_type)
+        catalog = build_skills_catalog_text(skills_visible)
+        tool_catalog = model.build_tool_catalog()
+        tool_catalog_text = self._build_tool_catalog_text(tool_catalog)
+        system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query, tool_catalog=tool_catalog_text)
+        logger.debug("初始系统提示词：%s", system_prompt)
+
+        # 复杂任务：制定结构化执行计划并请求用户确认
+        if plan_mode == PlanMode.COMPLEX_TASK:
+            early_return = self._handle_complex_task_planning(
+                user_query, tool_catalog_text, log_callback, model.enable_vision,
+            )
+            if early_return is not None:
+                return {"action": "return", "value": early_return}
+
+        tools = model.build_skill_agent_tools_initial()
+        self._supplied_tool_definitions: dict[str, dict] = {}
+        logger.debug("===== 目录+补发 渐进披露机制初始化 =====")
+        logger.debug("工具目录已构建，包含 %s 个工具的简要描述", len(tool_catalog))
+        logger.debug("初始工具集已准备，包含 request_tool_details + CONTROL 工具")
+        logger.debug("原子工具将按需通过 request_tool_details 获取")
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_query.strip()},
+        ]
+        active_skill_text, active_skill_ids = self._recover_active_skills()
+
+        return {
+            "action": "continue",
+            "model": model,
+            "tools": tools,
+            "messages": messages,
+            "active_skill_text": active_skill_text,
+            "active_skill_ids": active_skill_ids,
+        }
+
+    def _handle_complex_task_planning(
+        self,
+        user_query: str,
+        tool_catalog_text: str,
+        log_callback: Optional[Callable[[str, str], Any]],
+        enable_vision: bool,
+    ) -> Optional[str]:
+        """处理复杂任务的计划生成与确认流程。
+
+        Returns:
+            若需要提前返回（如等待用户确认计划），返回应返回的值；
+            若 None，表示继续执行。
+        """
+        if self._plan_confirmed:
+            # 续跑：计划已确认，展示已有计划后直接进入执行
+            if log_callback and self._pending_plan:
+                plan_display = self._format_plan_display({
+                    "analysis": self._pending_plan_analysis,
+                    "plan": self._pending_plan,
+                    "total_steps": len(self._pending_plan),
+                    "success_criteria": self._pending_success_criteria,
+                })
+                log_callback("✅ 计划已确认，开始按计划执行：\n\n" + plan_display, "plan")
+            return None
+
+        # 首次：生成计划
+        plan_data = self._plan_steps(user_query, tool_catalog_text, log_callback)
+        if plan_data is None:
+            return None
+
+        # 启用确认环节：请求用户确认后再执行
+        if config.PLAN_CONFIRMATION_ENABLED:
+            return self._request_plan_confirmation(
+                user_query,
+                plan_data,
+                log_callback,
+                enable_vision=enable_vision,
+            )
+
+        # 未启用确认环节：展示计划后直接执行（保持原有行为）
+        plan_display = self._format_plan_display(plan_data)
+        if log_callback:
+            log_callback(plan_display, "plan")
+        if self.memory is not None:
+            self.memory.append_message(
+                self._conversation_id,
+                plan_display,
+                metadata={"type": "plan"},
+            )
+        return None
+
+    def _handle_ask_user_history(
+        self,
+        user_query: str,
+        messages: list[dict[str, Any]],
+        model,
+        system_prompt: str,
+        log_callback: Optional[Callable[[str, str], Any]],
+        emit_token_usage: Callable[[], None],
+    ) -> Optional[str]:
+        """处理 ask_user 历史消息中的用户确认/安装/取消操作。
+
+        当上一轮 ask_user 等待用户回复时，根据用户选择执行对应操作。
+
+        Returns:
+            若需要提前返回，返回应返回的值；若 None，表示继续执行。
+        """
+        if self.memory is None:
+            return None
+
+        self._append_model_messages(
+            messages,
+            system_prompt=system_prompt,
+            user_query=user_query,
+            enable_vision=model.enable_vision,
+        )
+        prior_messages = self.memory.get_message_records(self._conversation_id)
+        logger.debug("加载历史消息: %s 条", len(prior_messages))
+
+        if not prior_messages or len(prior_messages) < 2:
+            return None
+
+        last_msg = prior_messages[-1]
+        prev_msg = prior_messages[-2]
+        if not (last_msg.get("role") == "user" and prev_msg.get("role") == "tool"):
+            return None
+
+        prev_meta = prev_msg.get("metadata") or {}
+        if prev_meta.get("name") != "ask_user":
+            return None
+
+        user_choice = user_query.strip()
+        logger.debug("检测到 ask_user 历史，用户选择: %s", user_choice)
+
+        if user_choice == "确认执行":
+            return self._process_ask_user_confirm_execute(prior_messages, messages, log_callback)
+        elif user_choice == "确认安装":
+            return self._process_ask_user_confirm_install(
+                prior_messages, messages, log_callback, emit_token_usage,
+            )
+        elif user_choice == "取消":
+            cancel_msg = "操作已取消"
+            if log_callback:
+                log_callback(cancel_msg, "assistant")
+            if self.memory is not None:
+                metadata = {"token_usage": asdict(self._token_usage)}
+                self.memory.append_message(self._conversation_id, "assistant", cancel_msg, metadata=metadata)
+            emit_token_usage()
+            logger.debug("返回 (操作已取消)")
+            return cancel_msg
+
+        return None
+
+    def _process_ask_user_confirm_execute(
+        self,
+        prior_messages: list[dict],
+        messages: list[dict[str, Any]],
+        log_callback: Optional[Callable[[str, str], Any]],
+    ) -> Optional[str]:
+        """处理 ask_user 确认执行操作。"""
+        self._tool_ctx.set_skip_ask_user_for_run_command(True)
+        for record in reversed(prior_messages[:-2]):
+            if record.get("role") == "assistant":
+                meta = record.get("metadata") or {}
+                if meta.get("type") == "tool_call":
+                    fname = meta.get("name")
+                    args_str = meta.get("args", "{}")
+                    try:
+                        args = json.loads(args_str)
+                    except json.JSONDecodeError:
+                        args = {}
+                    if fname == "run_command":
+                        command = str(args.get("command", "") or "").strip()
+                        result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
+                        self._persist_tool_pair_only(
+                            fname, args, str(result), messages,
+                            meta_type="base_tool",
+                        )
+                        if log_callback:
+                            log_callback(f"执行命令: {command}", "base_tool")
+                            log_callback(str(result), "base_tool")
+                        self._tool_ctx.set_skip_ask_user_for_run_command(False)
+                        break
+        return None
+
+    def _process_ask_user_confirm_install(
+        self,
+        prior_messages: list[dict],
+        messages: list[dict[str, Any]],
+        log_callback: Optional[Callable[[str, str], Any]],
+        emit_token_usage: Callable[[], None],
+    ) -> Optional[str]:
+        """处理 ask_user 确认安装操作。"""
+        self._tool_ctx.set_skip_ask_user_for_run_command(True)
+        for record in reversed(prior_messages[:-2]):
+            if record.get("role") == "assistant":
+                meta = record.get("metadata") or {}
+                if meta.get("type") == "tool_call":
+                    fname = meta.get("name")
+                    args_str = meta.get("args", "{}")
+                    try:
+                        args = json.loads(args_str)
+                    except json.JSONDecodeError:
+                        args = {}
+                    if fname == "run_command":
+                        skill_id = args.get("skill_id", "")
+                        command = str(args.get("command", "") or "").strip()
+
+                        if skill_id:
+                            success, msg = install_skill_dependencies(str(skill_id), self.registry)
+                            if not success:
+                                err_msg = f"依赖安装失败: {msg}"
+                                if log_callback:
+                                    log_callback(err_msg, "assistant")
+                                metadata = {"token_usage": asdict(self._token_usage)}
+                                self.memory.append_message(self._conversation_id, "assistant", err_msg, metadata=metadata)
+                                emit_token_usage()
+                                logger.debug("返回 (依赖安装失败): %s", err_msg)
+                                self._tool_ctx.set_skip_ask_user_for_run_command(False)
+                                return err_msg
+                            if log_callback:
+                                log_callback(f"依赖安装成功: {msg}", "base_tool")
+                            self._persist_tool_pair_only(
+                                "install_dependencies",
+                                {"msg": msg},
+                                f"依赖安装成功: {msg}",
+                                messages,
+                                meta_type="base_tool",
+                            )
+
+                            result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
+                            self._persist_tool_pair_only(
+                                fname, args, str(result), messages,
+                                meta_type="base_tool",
+                            )
+                            if log_callback:
+                                log_callback(f"执行命令: {command}", "base_tool")
+                                log_callback(str(result), "base_tool")
+                        else:
+                            result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
+                            self._persist_tool_pair_only(
+                                fname, args, str(result), messages,
+                                meta_type="base_tool",
+                            )
+                            if log_callback:
+                                log_callback(f"执行命令: {command}", "base_tool")
+                                log_callback(str(result), "base_tool")
+                        emit_token_usage()
+                        logger.debug("返回 (确认安装后执行结果): %s", str(result)[:100])
+                        self._tool_ctx.set_skip_ask_user_for_run_command(False)
+                        return result
+        return None
+
+    def _recover_active_skills(self):
+        """从数据库恢复已保存的 active skills，若无则加载默认技能。
+
+        Returns:
+            tuple[list[str], list[str]]: (active_skill_text, active_skill_ids)
+        """
+        active_skill_text: list[str] = []
+        active_skill_ids: list[str] = []
+
+        if self.memory is None:
+            return active_skill_text, active_skill_ids
+
+        saved_skill_ids = self.memory.get_active_skills(self._conversation_id)
+        if saved_skill_ids:
+            for sid in saved_skill_ids:
+                skill = self.registry.get(sid)
+                if skill:
+                    formatted_skill = format_skill_for_prompt(skill)
+                    active_skill_text.append(formatted_skill)
+                    active_skill_ids.append(sid)
+            # 更新动态提示词
+            if active_skill_text and active_skill_ids:
+                active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
+                self._dynamic_prompt.update_active_skills(active_skills_section)
+                logger.debug("恢复 active skills: %s", active_skill_ids)
+        else:
+            # 如果没有保存的 active skills，从全局配置动态读取该会话类型的默认技能
+            conv = self.memory.get_conversation(self._conversation_id)
+            if conv:
+                from skill_agent_preferences import get_default_skills_for_type
+                conv_type = conv.type or 'agent_conversation'
+                skill_ids = get_default_skills_for_type(conv_type)
+                for sid in skill_ids:
+                    skill = self.registry.get(sid)
+                    if skill:
+                        formatted_skill = format_skill_for_prompt(skill)
+                        active_skill_text.append(formatted_skill)
+                        active_skill_ids.append(sid)
+                # 将默认技能保存到 active_skill_ids 中
+                if active_skill_ids:
+                    self.memory.set_active_skills(self._conversation_id, active_skill_ids)
+                    active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
+                    self._dynamic_prompt.update_active_skills(active_skills_section)
+                    logger.debug("加载默认技能: %s", active_skill_ids)
+
+        return active_skill_text, active_skill_ids
+
+    def _reset_runtime_confirm_state(self):
+        """重置运行时确认相关状态。"""
+        self._runtime_confirm_pending = False
+        self._runtime_confirm_fname = ""
+        self._runtime_confirm_args = {}
+        self._runtime_confirm_messages = []
+
+    def _handle_runtime_confirmation(self, user_query, log_callback, emit_token_usage_fn):
+        """Handle pending runtime confirmation from previous turn.
+
+        When a previous turn triggered a runtime confirmation (dangerous command,
+        package install, etc.), this method processes the user's response without
+        sending it to the LLM.
+
+        Args:
+            user_query: The user's response (e.g. "确认执行", "确认安装", "取消", or other input)
+            log_callback: Frontend logging callback
+            emit_token_usage_fn: Callable to emit token usage to frontend
+
+        Returns:
+            dict: Result dict with key "action" indicating what the caller should do:
+                - {"action": "no_pending"}: No pending confirmation, proceed normally
+                - {"action": "skip_to_main_loop", "messages": ..., "active_skill_text": ...,
+                   "active_skill_ids": ..., "model": ..., "tools": ...}:
+                   User confirmed, skip to main loop with pre-configured context
+                - {"action": "return", "value": "操作已取消"}: User cancelled, return early
+                - {"action": "clear"}: User entered other content, clear state and proceed normally
+        """
+        # AI-BRANCH-MARKER: 运行时确认状态分支 — _runtime_confirm_pending控制是否进入确认处理流程
+        if not self._runtime_confirm_pending:
+            return {"action": "no_pending"}
+
+        logger.debug("检测到运行时拦截确认待处理，用户回复: %s", user_query[:50])
+        user_choice = user_query.strip()
+
+        if user_choice in ("确认执行", "确认安装"):
+            # 用户确认：直接执行命令
+            fname = self._runtime_confirm_fname
+            args = self._runtime_confirm_args
+            messages_snapshot = self._runtime_confirm_messages
+
+            logger.debug("运行时确认：用户确认，执行命令 %s", fname)
+            result, terminate, final = self._dispatch(fname, args, [], [])
+
+            # 追加工具结果到消息列表（持久化 + 追加到 messages）
+            if self.memory is not None:
+                self._persist_after_tool_turn(
+                    fname, args, str(result), [], [], messages_snapshot, log_callback
+                )
+
+            # 重置运行时确认状态
+            self._reset_runtime_confirm_state()
+
+            # 设置标志：跳过后续输入分类，直接进入主循环
+            self._from_runtime_confirm_continue = True
+
+            # 将工具执行结果发给前端展示
+            if log_callback:
+                log_callback(str(result), "base_tool")
+
+            # 不再直接 return，而是继续进入主循环让 LLM 解读结果并决定下一步
+            logger.debug("运行时确认执行完成，继续进入主循环让 LLM 推理")
+            # 注意：messages_snapshot 就是后面主循环使用的 messages 列表
+            # 因为 _persist_after_tool_turn 已经追加了 assistant(tool_calls)+tool 序列
+            # 所以主循环可以直接使用它继续推理
+            messages = messages_snapshot
+            active_skill_text, active_skill_ids = self._recover_active_skills()
+
+            # 初始化主循环所需的工具和模型相关变量
+            model = get_chat_model(enable_thinking=self._enable_thinking)
+            tools = model.build_skill_agent_tools_initial()
+            self._supplied_tool_definitions = {}
+
+            return {
+                "action": "skip_to_main_loop",
+                "messages": messages,
+                "active_skill_text": active_skill_text,
+                "active_skill_ids": active_skill_ids,
+                "model": model,
+                "tools": tools,
+            }
+
+        if user_choice == "取消":
+            # 用户取消：返回取消消息
+            cancel_msg = "操作已取消"
+            if log_callback:
+                log_callback(cancel_msg, "assistant")
+
+            # 重置运行时确认状态
+            self._reset_runtime_confirm_state()
+
+            emit_token_usage_fn()
+            return {"action": "return", "value": cancel_msg}
+
+        # 用户输入了其他内容，视为新的对话输入，清除运行时确认状态
+        logger.debug("用户输入了其他内容，清除运行时确认状态")
+        self._reset_runtime_confirm_state()
+        return {"action": "clear"}
+
+    def _format_and_send_tool_result(self, fname, args, result, log_callback, emit_token_usage_fn):
+        """Format tool execution result and send to frontend via log_callback.
+
+        Handles result truncation, run_command special formatting (command prefix,
+        write operation verification), and repeated write detection.
+
+        Args:
+            fname: Tool function name
+            args: Tool arguments dict
+            result: Tool execution result (may be modified for run_command)
+            log_callback: Frontend logging callback
+            emit_token_usage_fn: Callable to emit token usage to frontend
+
+        Returns:
+            tuple: (result, early_return_value) where result may be modified
+                   for run_command formatting, and early_return_value is a string
+                   if repeated write was detected (caller should return this value),
+                   or None otherwise.
+        """
+        try:
+            r = str(result)
+            if len(r) > config.TOOL_OUTPUT_MAX_LENGTH:
+                if config.TOOL_TRUNCATE_SHOW_DETAILS:
+                    r = r[:config.TOOL_OUTPUT_MAX_LENGTH] + f"\n\n…（内容已截断：原始长度 {len(r)} 字符，显示 {config.TOOL_OUTPUT_MAX_LENGTH} 字符）"
+                else:
+                    r = r[:config.TOOL_OUTPUT_MAX_LENGTH] + "\n\n…（内容已截断）"
+            if fname == "run_command":
+                command = str(args.get("command", "") or "").strip()
+
+                if "exit_code: 0" in r:
+                    stdout_match = r.split("--- stdout ---")
+                    stdout = ""
+                    if len(stdout_match) >= 2:
+                        stdout = stdout_match[1].split("--- stderr ---")[0].strip()
+
+                    if not stdout and self._is_write_operation(command):
+                        logger.debug("检测到写入操作: %s...", command[:80])
+                        file_path = self._extract_file_path(command)
+                        if file_path:
+                            logger.debug("提取到文件路径: %s", file_path)
+                            check_result = self._verify_file_exists(file_path, args.get("cwd", "."))
+                            # 将命令信息和检查结果合并到结果中，一次性发送
+                            r = f"执行命令: {command}\n\n{r}\n\n{check_result}"
+                            result = r
+                            logger.debug("验证结果已合并到工具结果")
+                        else:
+                            logger.debug("无法提取文件路径，跳过验证")
+                            r = f"执行命令: {command}\n\n{r}"
+                    else:
+                        r = f"执行命令: {command}\n\n{r}"
+                else:
+                    r = f"执行命令: {command}\n\n{r}"
+
+                # 写入操作特例检测（保留原有逻辑）
+                # 此检测与通用重复检测协同工作，专门针对写入操作提供更严格的保护
+                auto_end_msg = self._check_repeated_write_success(command, str(result))
+                if auto_end_msg:
+                    logger.debug(f"检测到重复写入，自动结束: {auto_end_msg}")
+                    if log_callback:
+                        try:
+                            log_callback(auto_end_msg, "assistant")
+                        except Exception as e:
+                            logger.warning("log_callback 调用失败: %s", e)
+                    metadata = {"token_usage": asdict(self._token_usage)}
+                    if self.memory is not None:
+                        self.memory.append_message(self._conversation_id, "assistant", auto_end_msg, metadata=metadata)
+                    emit_token_usage_fn()
+                    return (result, auto_end_msg)
+            if log_callback:
+                try:
+                    log_callback(r, "base_tool")
+                except Exception as e:
+                    logger.warning("log_callback 调用失败: %s", e)
+            return (result, None)
+        except Exception as e:
+            logger.exception("_format_and_send_tool_result 异常: %s", e)
+            return (result, None)
+
+    def _handle_run_command_confirmation(self, fname, args, log_callback, emit_token_usage_fn, messages):
+        """Check if run_command needs user confirmation before execution.
+
+        Handles three confirmation scenarios:
+        1. Skill dependency installation - when a skill requires packages to be installed
+        2. Package install command - when the command itself installs packages
+        3. Dangerous command - when the command may modify or delete files
+
+        Args:
+            fname: Tool function name (should be "run_command")
+            args: Tool arguments dict containing "command" and optionally "skill_id"
+            log_callback: Frontend logging callback
+            emit_token_usage_fn: Callable to emit token usage to frontend
+            messages: Conversation messages list (used for snapshot on confirmation)
+
+        Returns:
+            tuple or None: (action, value) where action is "return" and value is the
+                           return value for run(), or None if no confirmation is needed
+                           and tool execution should proceed.
+        """
+        # AI-BRANCH-MARKER: 命令确认三路分支 — 用户可确认执行、修改或取消，不同选择走不同执行路径
+        command = str(args.get("command", "") or "").strip()
+        skill_id = args.get("skill_id", "")
+
+        # 检查是否已通过历史记录确认（旧方案保留，用于兼容）
+        skip_ask_user = self._tool_ctx.should_skip_ask_user_for_run_command()
+        if skip_ask_user:
+            logger.debug("跳过二次确认：命令已通过历史记录确认")
+
+        # 新方案：运行时拦截确认（用户确认不发往 LLM）
+        if skill_id:
+            need_install, packages_to_install, err_msg = check_skill_dependencies(
+                str(skill_id), self.registry
+            )
+            if err_msg:
+                emit_token_usage_fn()
+                return ("return", f"错误: {err_msg}")
+
+            if need_install and packages_to_install and not skip_ask_user:
+                packages_str = ", ".join(packages_to_install)
+                ask_args = {
+                    "question": f"Skill「{skill_id}」需要安装以下依赖包：\n\n{packages_str}\n\n是否确认安装？",
+                    "choices": ["确认安装", "取消"]
+                }
+                # 保存待执行命令信息
+                self._runtime_confirm_pending = True
+                self._runtime_confirm_fname = fname
+                self._runtime_confirm_args = args
+                self._runtime_confirm_messages = list(messages)  # 快照
+                # 触发确认 UI（不保存到历史，不发给 LLM）
+                if log_callback:
+                    log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+                emit_token_usage_fn()
+                return ("return", SKILL_AGENT_AWAITING_USER_REPLY)
+
+        is_pkg_install, packages = self._is_package_install_command(command)
+        if is_pkg_install and not skip_ask_user:
+            packages_str = ", ".join(packages) if packages else "（未解析到包名）"
+            ask_args = {
+                "question": f"即将安装以下包：\n\n{packages_str}\n\n命令：{command}\n\n是否确认执行？",
+                "choices": ["确认安装", "取消"]
+            }
+            # 保存待执行命令信息
+            self._runtime_confirm_pending = True
+            self._runtime_confirm_fname = fname
+            self._runtime_confirm_args = args
+            self._runtime_confirm_messages = list(messages)  # 快照
+            # 触发确认 UI（不保存到历史，不发给 LLM）
+            if log_callback:
+                log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+            emit_token_usage_fn()
+            return ("return", SKILL_AGENT_AWAITING_USER_REPLY)
+
+        if self._is_dangerous_command(command) and not skip_ask_user:
+            ask_args = {
+                "question": f"即将执行以下命令，可能会修改或删除文件：\n\n{command}\n\n是否确认执行？",
+                "choices": ["确认执行", "取消"]
+            }
+            # 保存待执行命令信息
+            self._runtime_confirm_pending = True
+            self._runtime_confirm_fname = fname
+            self._runtime_confirm_args = args
+            self._runtime_confirm_messages = list(messages)  # 快照
+            # 触发确认 UI（不保存到历史，不发给 LLM）
+            if log_callback:
+                log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+            emit_token_usage_fn()
+            return ("return", SKILL_AGENT_AWAITING_USER_REPLY)
+
+        return None
+
+    def _handle_request_tool_details_step(self, fname, args, model, tools, full_thinking, arg_str, messages, active_skill_text, active_skill_ids, log_callback):
+        """Handle request_tool_details: progressive disclosure of tool definitions.
+
+        When LLM requests full tool definitions via request_tool_details, this method:
+        1. Looks up requested tool definitions from the model
+        2. Caches found definitions in _supplied_tool_definitions
+        3. Dynamically adds missing tool schemas to the tools list
+        4. Persists the tool result to messages and memory
+        5. Sends the result to the frontend via log_callback
+
+        Args:
+            fname: Tool function name (should be "request_tool_details")
+            args: Tool arguments dict containing "tool_names" list
+            model: Chat model instance for tool definition lookup
+            tools: List of tool schemas (mutable - may be appended with new tools)
+            full_thinking: Thinking content string from LLM
+            arg_str: Raw JSON arguments string
+            messages: Conversation messages list
+            active_skill_text: List of active skill text blocks
+            active_skill_ids: List of active skill IDs
+            log_callback: Frontend logging callback
+
+        Returns:
+            bool: True, indicating the caller should continue the loop
+        """
+        tool_names = args.get("tool_names", [])
+        if not isinstance(tool_names, list):
+            tool_names = [str(tool_names)]
+
+        logger.debug("request_tool_details: 请求工具定义 %s", tool_names)
+        logger.debug("===== 目录+补发 渐进披露机制 - 补发阶段 =====")
+        logger.debug("LLM 请求获取工具的完整定义: %s", tool_names)
+
+        definitions_found = []
+        definitions_missing = []
+
+        for tool_name in tool_names:
+            tool_def = model.get_tool_full_definition(tool_name)
+            if tool_def:
+                definitions_found.append(tool_def)
+                self._supplied_tool_definitions[tool_name] = tool_def
+                logger.debug("  ✓ 找到工具定义: %s", tool_name)
+                logger.debug("  工具定义已缓存到 _supplied_tool_definitions")
+            else:
+                definitions_missing.append(tool_name)
+                logger.debug("  ✗ 未找到工具定义: %s", tool_name)
+
+        result_parts = []
+        if definitions_found:
+            result_parts.append("以下工具的完整定义已获取：\n")
+            for def_item in definitions_found:
+                def_json = json.dumps(def_item, ensure_ascii=False, indent=2)
+                result_parts.append(f"### {def_item.get('name', 'unknown')}\n```json\n{def_json}\n```\n")
+
+        if definitions_missing:
+            result_parts.append(f"\n⚠️ 以下工具未找到定义：{', '.join(definitions_missing)}")
+
+        tool_result = "\n".join(result_parts)
+
+        for tool_name, tool_def in self._supplied_tool_definitions.items():
+            tool_schema = model.format_tool_for_request(tool_def)
+            already_in_tools = any(
+                model.get_tool_name_from_formatted(t) == tool_name
+                for t in tools
+            )
+            if not already_in_tools:
+                tools.append(tool_schema)
+                logger.debug("添加工具到 tools 列表: %s", tool_name)
+                logger.debug("  工具 [%s] 已动态添加到可用工具集", tool_name)
+                logger.debug("  当前 tools 列表大小: %s", len(tools))
+
+        # 持久化工具结果到 messages 和 memory
+        self._append_tool_result_to_messages(
+            fname, args, tool_result, full_thinking, arg_str,
+            messages, active_skill_text, active_skill_ids, log_callback,
+        )
+
+        if log_callback:
+            found_names = [d.get("name", "") for d in definitions_found]
+            logger.debug("获取工具定义: %s", ", ".join(found_names))
+            log_callback(str(tool_result), "base_tool")
+
+        return True
+
+    def _process_tool_call_in_loop(
+        self,
+        result: StreamResult,
+        full_thinking: str,
+        content_parts: list[str],
+        messages: list[dict[str, Any]],
+        active_skill_text: list[str],
+        active_skill_ids: list[str],
+        model,
+        tools: list[dict],
+        log_callback,
+        _emit_token_usage: Callable[[], None],
+    ) -> dict:
+        """处理主循环中的工具调用。
+
+        Args:
+            result: StreamResult 对象，包含工具调用信息。
+            full_thinking: 本轮推理内容。
+            content_parts: 本轮文本内容片段列表。
+            messages: 当前消息列表。
+            active_skill_text: 当前激活的技能文本列表。
+            active_skill_ids: 当前激活的技能ID列表。
+            model: 当前使用的模型实例。
+            tools: 当前工具定义列表。
+            log_callback: 日志回调函数。
+            _emit_token_usage: Token 使用量发送函数。
+
+        Returns:
+            dict: 包含 action 键的结果字典：
+                - {"action": "continue", "tool_called": bool}: 继续主循环
+                - {"action": "return", "value": str}: 应立即返回该值
+        """
+        # AI-BRANCH-MARKER: 工具类型分发分支 — 控制工具(select_skill/finish/ask_user)与原子工具走不同执行路径
+        # Handle tool call response
+        fname = result.tool_name
+        arg_str = result.tool_arguments or "{}"
+        try:
+            args = json.loads(arg_str)
+        except json.JSONDecodeError:
+            # arg_str 不是有效 JSON，回退为空字典并重新序列化为 JSON 字符串
+            args = {}
+            arg_str = json.dumps(args, ensure_ascii=False)
+        logger.debug("解析工具调用: fname=%s, args keys=%s", fname, list(args.keys()) if isinstance(args, dict) else type(args))
+
+        # 状态机：LLM 调用工具前设置为 TOOL_CALLED
+        try:
+            self._state = ConversationState.TOOL_CALLED
+            logger.debug(f"状态转换: {self._state.value}")
+        except Exception as e:
+            logger.warning(f"状态转换异常: {e}, 当前状态: {self._state.value}")
+
+        # 关键修复：full_thinking 不再单独作为一条 assistant(think) 消息持久化，
+        # 而是作为 assistant tool_call 消息的 content 一起写入，
+        # 避免出现 tool 前面只有 think assistant 而无 tool_calls 的断裂结构。
+
+        if fname == "request_tool_details":
+            if self._handle_request_tool_details_step(
+                fname, args, model, tools, full_thinking, arg_str,
+                messages, active_skill_text, active_skill_ids, log_callback,
+            ):
+                return {"action": "continue", "tool_called": False}
+
+        if log_callback:
+            try:
+                args_s = json.dumps(args, ensure_ascii=False)
+            except (TypeError, ValueError):
+                args_s = str(args)
+
+            # 保留调试日志，移除一次性工具调用消息（已通过流式机制发送）
+            if fname == "finish":
+                content_preview = "".join(content_parts)[:200] if content_parts else "(空)"
+                logger.debug("[finish] LLM 调用 finish，原始 args: %s | content_parts 预览: %r", args_s, content_preview)
+            elif fname == "select_skill":
+                logger.debug("选择 Skill: %s", args.get('skill_id', ''))
+            else:
+                logger.debug("调用工具 `%s` · %s", fname, args_s)
+        # 注意：此处不再单独保存 assistant(tool_call) 消息，
+        # 由下方 _persist_after_tool_turn 统一保存完整的
+        # assistant(tool_calls) + tool(result) 序列，避免重复渲染。
+
+        if fname == "run_command":
+            confirm_result = self._handle_run_command_confirmation(
+                fname, args, log_callback, _emit_token_usage, messages,
+            )
+            if confirm_result is not None:
+                action, value = confirm_result
+                if action == "return":
+                    return {"action": "return", "value": value}
+
+        logger.debug("准备执行工具: %s", fname)
+        if fname == "run_command":
+            cmd = str(args.get("command", ""))[:80]
+            logger.debug("  命令: %s...", cmd)
+
+        # 检测重复工具调用（可通过配置禁用）
+        _control_tools = ("select_skill", "finish", "ask_user")
+        is_repeated = False
+        repeat_warning = None
+        last_result = None
+        tool_called = False
+
+        if config.TOOL_CALL_DEDUPLICATION_ENABLED and fname not in _control_tools:
+            is_repeated, repeat_warning, last_result = self._check_repeated_tool_call(fname, args)
+            if is_repeated:
+                logger.warning("检测到重复工具调用: %s", fname)
+                logger.debug("连续重复次数: %s", self._consecutive_repeat_count)
+
+                result = repeat_warning or f"检测到重复的 {fname} 调用"
+                terminate = False
+                final = None
+
+                max_repeats = config.MAX_CONSECUTIVE_REPEATS
+                if self._consecutive_repeat_count >= max_repeats:
+                    auto_finish_msg = (
+                        f"检测到连续 {self._consecutive_repeat_count} 次重复执行工具 [{fname}]，已自动结束任务。\n\n"
+                        f"最后一次执行结果摘要：\n{(last_result or '')[:200]}"
+                    )
+                    logger.warning("触发自动终止: %s", auto_finish_msg)
+
+                    if log_callback:
+                        log_callback(auto_finish_msg, "assistant")
+                    if self.memory is not None:
+                        metadata = {"token_usage": asdict(self._token_usage)}
+                        self.memory.append_message(self._conversation_id, "assistant", auto_finish_msg, metadata=metadata)
+                    _emit_token_usage()
+                    return {"action": "return", "value": auto_finish_msg}
+        else:
+            is_repeated = False
+
+        # 工具执行流程：
+        # 1. 通用重复检测（适用于所有工具）→ 已在前面实现
+        # 2. 执行工具 → self._dispatch()
+        # 3. 结果格式化 → 已实现
+        # 4. 写入操作特例检测（仅限 run_command + 写入操作）→ 原有逻辑
+
+        if not is_repeated:
+            try:
+                result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
+            except Exception as e:
+                # 双重保护：捕获所有未预期的异常，防止主进程崩溃
+                logger.exception(f"工具 [{fname}] 调度异常: {e}")
+                result = f"错误: 工具 {fname} 调度异常: {e}"
+                terminate = False
+                final = None
+
+            # 状态机：工具执行完成后设置为 TOOL_EXECUTED
+            try:
+                self._state = ConversationState.TOOL_EXECUTED
+                logger.debug(f"状态转换: {self._state.value}, 等待LLM调用finish工具或自动finish")
+            except Exception as e:
+                logger.warning(f"状态转换异常: {e}, 当前状态: {self._state.value}")
+
+            # 方案 A：标记本轮已调用过工具（含 finish/ask_user/select_skill 等控制工具），
+            # 用于下方判断是否允许 LLM 用纯文本直接结束。
+            tool_called = True
+
+            if fname not in _control_tools:
+                self._record_tool_call(fname, args, str(result))
+
+        # 标准化工具返回结果格式（排除控制类工具和已经是标准格式的结果）
+        if fname not in ("select_skill", "finish", "ask_user"):
+            result_str = str(result)
+            # 保护结构化返回格式（如 run_command 的【执行结果】... 格式）
+            if result_str.startswith("【执行结果】"):
+                pass  # 保持原有结构化格式不变
+            elif not result_str.startswith(("✅", "❌", "⚠️")):
+                # 判断是否为成功结果（简单启发式规则）
+                is_success = (
+                    "exit_code: 0" in result_str or  # 命令执行成功
+                    (len(result_str) > 10 and "error" not in result_str.lower()[:100])  # 有实质内容且无明显错误
+                )
+                original_len = len(result_str)
+                if is_success and len(result_str.strip()) > 0:
+                    result = self._format_tool_result(True, result_str)
+                    logger.debug("格式化工具结果: %s, 成功=True, 原始长度=%s, 格式化后长度=%s", fname, original_len, len(str(result)))
+                elif not is_success:
+                    # 保持原始错误信息，但添加前缀
+                    if not result_str.startswith("错误"):
+                        result = f"❌ 操作失败\n\n{result}"
+                        logger.debug("格式化工具结果: %s, 成功=False, 原始长度=%s, 添加失败前缀", fname, original_len)
+
+        # 性能优化：移除高频DEBUG日志，降低I/O开销
+        # logger.debug("工具执行完成:")
+        # result_str = str(result)
+        # result_len = len(result_str)
+        # logger.debug("  - result 长度: %s", result_len)
+        # if result_len <= 500:
+        #     # 短结果：完整显示
+        #     logger.debug("  - result: %s", result_str)
+        # else:
+        #     # 长结果：智能截断，显示前后各500字符
+        #     result_head = result_str[:500]
+        #     result_tail = result_str[-500:]
+        #     omitted_count = result_len - 1000
+        #     logger.debug("  - result: %s...(省略%d字符)...%s", result_head, omitted_count, result_tail)
+        # logger.debug("  - terminate: %s", terminate)
+        # logger.debug("  - final: %s", final is not None)
+
+        if log_callback and fname == "select_skill":
+            # 保留调试日志，移除一次性工具调用消息（已通过流式机制发送）
+            if str(result).startswith("错误"):
+                logger.warning("选择 Skill 失败: %s", result)
+            else:
+                ids_join = "、".join(active_skill_ids)
+                n = len(active_skill_ids)
+                logger.debug("命中 Skill「%s」｜本轮已累计 id：%s（共 %d 个）",
+                           args.get('skill_id', ''), ids_join, n)
+                prefix = (
+                    f"［第 {n} 次加载｜本轮已累计 {n} 份｜id 顺序：{ids_join}］\n\n"
+                )
+                log_callback(prefix + str(result), "doc")
+
+        if log_callback and fname not in ("finish", "select_skill", "ask_user"):
+            result, auto_end_msg = self._format_and_send_tool_result(
+                fname, args, result, log_callback, _emit_token_usage,
+            )
+            if auto_end_msg is not None:
+                return {"action": "return", "value": auto_end_msg}
+
+        if terminate and final is not None:
+            # 关键修复：终止型工具（如 finish）也要先追加 assistant(tool_calls)+tool 完整序列
+            self._append_tool_result_to_messages(
+                fname, args, str(result), full_thinking, arg_str,
+                messages, active_skill_text, active_skill_ids, log_callback,
+            )
+            if self.memory is not None:
+                cid = self._conversation_id
+                metadata = {"token_usage": asdict(self._token_usage)}
+                self.memory.append_message(cid, "assistant", str(final), metadata=metadata)
+            if log_callback:
+                log_callback(str(final), "assistant")
+            _emit_token_usage()
+            logger.debug(f"工具要求终止 (terminate=True), 返回 final (长度: {len(str(final))})")
+            return {"action": "return", "value": final}
+
+        if fname == "ask_user" and not str(result).startswith("错误"):
+            self._append_tool_result_to_messages(
+                fname, args, str(result), full_thinking, arg_str,
+                messages, active_skill_text, active_skill_ids, log_callback,
+            )
+            if log_callback:
+                log_callback(_ask_user_ui_log_payload(args), "await_user")
+            _emit_token_usage()
+            logger.debug("等待用户回复 (ask_user)")
+            return {"action": "return", "value": SKILL_AGENT_AWAITING_USER_REPLY}
+
+        self._append_tool_result_to_messages(
+            fname, args, str(result), full_thinking, arg_str,
+            messages, active_skill_text, active_skill_ids, log_callback,
+        )
+        return {"action": "continue", "tool_called": tool_called}
+
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None, stop_check_callback: Optional[Callable[[], bool]] = None) -> str:
+        """SkillAgent 主运行方法，执行输入分类、工具循环和结果返回。
+
+        核心流程：
+        1. 处理运行时确认续跑（如用户确认/取消/修改危险命令）
+        2. 分类用户输入（简单任务 / 复杂任务 / 直接回复）
+        3. 进入工具调用主循环，最多 max_steps 步
+        4. 每步调用 LLM，根据返回结果分发到文本处理或工具执行
+        5. 工具执行结果追加到消息列表，继续循环直到结束
+
+        Args:
+            user_query: 用户输入文本。
+            log_callback: 前端回调函数 (content, msg_type)，用于流式发送消息。
+            stop_check_callback: 停止检测回调，返回 True 时终止循环。
+
+        Returns:
+            最终的回复文本字符串。
+
+        Side effects:
+            修改 memory（追加消息）、更新状态机、消费上传文件缓存、
+            重置重复检测计数器和计划确认标志。
+        """
         import traceback
         # 性能优化：移除高频DEBUG日志，降低I/O开销
         # logger.debug("===== run() 开始执行 =====")
@@ -1750,379 +2923,38 @@ class SkillAgent:
 
             # 新方案：运行时拦截确认检测
             # 如果上一轮触发了运行时确认，根据用户回复直接处理，不发送给 LLM
-            if self._runtime_confirm_pending:
-                logger.debug("检测到运行时拦截确认待处理，用户回复: %s", user_query[:50])
-                user_choice = user_query.strip()
-
-                if user_choice in ("确认执行", "确认安装"):
-                    # 用户确认：直接执行命令
-                    fname = self._runtime_confirm_fname
-                    args = self._runtime_confirm_args
-                    messages_snapshot = self._runtime_confirm_messages
-
-                    logger.debug("运行时确认：用户确认，执行命令 %s", fname)
-                    result, terminate, final = self._dispatch(fname, args, [], [])
-
-                    # 追加工具结果到消息列表（持久化 + 追加到 messages）
-                    if self.memory is not None:
-                        self._persist_after_tool_turn(
-                            fname, args, str(result), [], [], messages_snapshot, log_callback
-                        )
-
-                    # 重置运行时确认状态
-                    self._runtime_confirm_pending = False
-                    self._runtime_confirm_fname = ""
-                    self._runtime_confirm_args = {}
-                    self._runtime_confirm_messages = []
-
-                    # 设置标志：跳过后续输入分类，直接进入主循环
-                    self._from_runtime_confirm_continue = True
-
-                    # 将工具执行结果发给前端展示
-                    if log_callback:
-                        log_callback(str(result), "base_tool")
-
-                    # 不再直接 return，而是继续进入主循环让 LLM 解读结果并决定下一步
-                    logger.debug("运行时确认执行完成，继续进入主循环让 LLM 推理")
-                    # 注意：messages_snapshot 就是后面主循环使用的 messages 列表
-                    # 因为 _persist_after_tool_turn 已经追加了 assistant(tool_calls)+tool 序列
-                    # 所以主循环可以直接使用它继续推理
-                    messages = messages_snapshot
-                    active_skill_text = []
-                    active_skill_ids = []
-                    # 从数据库恢复 active skills
-                    if self.memory is not None:
-                        saved_skill_ids = self.memory.get_active_skills(self._conversation_id)
-                        if saved_skill_ids:
-                            for sid in saved_skill_ids:
-                                skill = self.registry.get(sid)
-                                if skill:
-                                    formatted_skill = format_skill_for_prompt(skill)
-                                    active_skill_text.append(formatted_skill)
-                                    active_skill_ids.append(sid)
-                    
-                    # 初始化主循环所需的工具和模型相关变量
-                    model = get_chat_model(enable_thinking=self._enable_thinking)
-                    tools = model.build_skill_agent_tools_initial()
-                    self._supplied_tool_definitions = {}
-                    
-                    # 跳过输入分类和计划阶段，直接进入主循环
-                    _skip_to_main_loop = True
-                else:
-                    _skip_to_main_loop = False
-
-                    if user_choice == "取消":
-                        # 用户取消：返回取消消息
-                        cancel_msg = "操作已取消"
-                        if log_callback:
-                            log_callback(cancel_msg, "assistant")
-
-                        # 重置运行时确认状态
-                        self._runtime_confirm_pending = False
-                        self._runtime_confirm_fname = ""
-                        self._runtime_confirm_args = {}
-                        self._runtime_confirm_messages = []
-
-                        _emit_token_usage()
-                        return cancel_msg
-
-                    else:
-                        # 用户输入了其他内容，视为新的对话输入，清除运行时确认状态
-                        logger.debug("用户输入了其他内容，清除运行时确认状态")
-                        self._runtime_confirm_pending = False
-                        self._runtime_confirm_fname = ""
-                        self._runtime_confirm_args = {}
-                        self._runtime_confirm_messages = []
+            _rt_confirm_result = self._handle_runtime_confirmation(user_query, log_callback, _emit_token_usage)
+            if _rt_confirm_result["action"] == "return":
+                return _rt_confirm_result["value"]
+            elif _rt_confirm_result["action"] == "skip_to_main_loop":
+                messages = _rt_confirm_result["messages"]
+                active_skill_text = _rt_confirm_result["active_skill_text"]
+                active_skill_ids = _rt_confirm_result["active_skill_ids"]
+                model = _rt_confirm_result["model"]
+                tools = _rt_confirm_result["tools"]
+                _skip_to_main_loop = True
             else:
+                # "no_pending" or "clear"
                 _skip_to_main_loop = False
 
             # 如果从运行时确认继续，跳过计划检测和输入分类，直接进入主循环
             if not _skip_to_main_loop:
-                # 计划确认续跑检测：若上一轮在等待用户确认计划，根据用户选择决定走向
-                plan_resume = self._check_plan_confirmation_resume(user_query)
-                if plan_resume == "cancel":
-                    cancel_msg = "已取消任务执行。"
-                    if log_callback:
-                        log_callback(cancel_msg, "assistant")
-                    if self.memory is not None:
-                        self.memory.append_message(self._conversation_id, "user", user_query.strip())
-                        self.memory.append_message(
-                            self._conversation_id, "assistant", cancel_msg,
-                            metadata={"token_usage": asdict(self._token_usage)},
-                        )
-                    _emit_token_usage()
-                    return cancel_msg
-                elif plan_resume == "replan":
-                    replan_msg = "好的，请重新描述您的需求或补充说明，我将重新制定执行计划。"
-                    if log_callback:
-                        log_callback(replan_msg, "assistant")
-                    if self.memory is not None:
-                        self.memory.append_message(self._conversation_id, "user", user_query.strip())
-                        self.memory.append_message(
-                            self._conversation_id, "assistant", replan_msg,
-                            metadata={"token_usage": asdict(self._token_usage)},
-                        )
-                    _emit_token_usage()
-                    return replan_msg
+                ctx_result = self._classify_and_prepare_context(user_query, log_callback, _emit_token_usage)
+                if ctx_result["action"] == "return":
+                    return ctx_result["value"]
+                model = ctx_result["model"]
+                tools = ctx_result["tools"]
+                messages = ctx_result["messages"]
+                active_skill_text = ctx_result["active_skill_text"]
+                active_skill_ids = ctx_result["active_skill_ids"]
 
-                # 输入分类：判断是否需要规划
-                if plan_resume == "execute":
-                    plan_mode = PlanMode.COMPLEX_TASK
-                    logger.debug("计划确认续跑，跳过分类，直接进入复杂任务执行")
-                else:
-                    plan_mode = self._classify_input(user_query)
-                logger.debug("输入分类: %s", plan_mode.value)
-
-                if log_callback:
-                    mode_labels = {
-                        PlanMode.NO_PLAN: "💬 闲聊/问答模式（无需规划，直接回复）",
-                        PlanMode.SIMPLE_TASK: "⚡ 简单任务模式（单步工具调用）",
-                        PlanMode.COMPLEX_TASK: "📋 复杂任务模式（结构化规划+分步执行）",
-                    }
-                    log_callback(mode_labels.get(plan_mode, plan_mode.value), "mode")
-
-                if plan_mode == PlanMode.NO_PLAN:
-                    logger.debug("无需规划模式，直接回复")
-                    return self._direct_reply(user_query, log_callback)
-
-                if plan_mode == PlanMode.COMPLEX_TASK:
-                    if self._plan_confirmed:
-                        # 续跑：用户已确认计划，注入已确认计划作为约束
-                        plan_constraints = self._build_plan_constraints()
-                        existing_constraints = self._conversation_constraints
-                        if existing_constraints:
-                            self._conversation_constraints = existing_constraints + plan_constraints
-                        else:
-                            self._conversation_constraints = plan_constraints.lstrip()
-                    else:
-                        planning_instruction = """
-
-【复杂任务执行要求 - 强制执行】
-1. 你必须在执行任何工具调用前，先在思考过程中制定完整的执行计划
-2. 计划必须包含：具体步骤列表、每步使用的工具、期望结果、验证方式
-3. 每执行完一个步骤，必须对照计划检查是否达到预期结果
-4. 如果某步骤失败，请分析原因并调整后续计划
-5. 所有步骤完成后，必须对照计划的 success_criteria 逐项确认任务是否成功
-6. 只有确认所有步骤完成后，才能调用 finish 结束任务"""
-                        existing_constraints = self._conversation_constraints
-                        if existing_constraints:
-                            self._conversation_constraints = existing_constraints + planning_instruction
-                        else:
-                            self._conversation_constraints = planning_instruction.lstrip()
-
-                model = get_chat_model(enable_thinking=self._enable_thinking)
-                # 根据会话类型过滤skill目录
-                conv_type = self._get_conversation_type()
-                skills_visible = self._get_skills_for_conversation_type(conv_type)
-                catalog = build_skills_catalog_text(skills_visible)
-
-                tool_catalog = model.build_tool_catalog()
-                tool_catalog_text = self._build_tool_catalog_text(tool_catalog)
-                system_prompt = self._build_dynamic_system_prompt(catalog, user_query=user_query, tool_catalog=tool_catalog_text)
-                logger.debug("初始系统提示词：%s", system_prompt)
-
-                # 复杂任务：制定结构化执行计划并请求用户确认
-                if plan_mode == PlanMode.COMPLEX_TASK:
-                    if self._plan_confirmed:
-                        # 续跑：计划已确认，展示已有计划后直接进入执行
-                        if log_callback and self._pending_plan:
-                            plan_display = self._format_plan_display({
-                                "analysis": self._pending_plan_analysis,
-                                "plan": self._pending_plan,
-                                "total_steps": len(self._pending_plan),
-                                "success_criteria": self._pending_success_criteria,
-                            })
-                            log_callback("✅ 计划已确认，开始按计划执行：\n\n" + plan_display, "plan")
-                    else:
-                        # 首次：生成计划
-                        plan_data = self._plan_steps(user_query, tool_catalog_text, log_callback)
-                        if plan_data is not None:
-                            # 启用确认环节：请求用户确认后再执行
-                            if config.PLAN_CONFIRMATION_ENABLED:
-                                return self._request_plan_confirmation(
-                                    user_query,
-                                    plan_data,
-                                    log_callback,
-                                    enable_vision=model.enable_vision,
-                                )
-                            # 未启用确认环节：展示计划后直接执行（保持原有行为）
-                            plan_display = self._format_plan_display(plan_data)
-                            if log_callback:
-                                log_callback(plan_display, "plan")
-                            if self.memory is not None:
-                                self.memory.append_message(
-                                    self._conversation_id,
-                                    plan_display,
-                                    metadata={"type": "plan"},
-                                )
-
-                tools = model.build_skill_agent_tools_initial()
-                self._supplied_tool_definitions: dict[str, dict] = {}
-
-                logger.debug("===== 目录+补发 渐进披露机制初始化 =====")
-                logger.debug("工具目录已构建，包含 %s 个工具的简要描述", len(tool_catalog))
-                logger.debug("初始工具集已准备，包含 request_tool_details + CONTROL 工具")
-                logger.debug("原子工具将按需通过 request_tool_details 获取")
-
-                messages: list[dict[str, Any]] = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_query.strip()},
-                ]
-                active_skill_text: list[str] = []
-                active_skill_ids: list[str] = []
-
-                # 从数据库恢复已保存的 active skills
-                if self.memory is not None:
-                    saved_skill_ids = self.memory.get_active_skills(self._conversation_id)
-                    if saved_skill_ids:
-                        for sid in saved_skill_ids:
-                            skill = self.registry.get(sid)
-                            if skill:
-                                formatted_skill = format_skill_for_prompt(skill)
-                                active_skill_text.append(formatted_skill)
-                                active_skill_ids.append(sid)
-                        # 更新动态提示词
-                        if active_skill_text and active_skill_ids:
-                            active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
-                            self._dynamic_prompt.update_active_skills(active_skills_section)
-                            logger.debug("恢复 active skills: %s", active_skill_ids)
-                    else:
-                        # 如果没有保存的 active skills，从全局配置动态读取该会话类型的默认技能
-                        conv = self.memory.get_conversation(self._conversation_id)
-                        if conv:
-                            from skill_agent_preferences import get_default_skills_for_type
-                            conv_type = conv.type or 'agent_conversation'
-                            skill_ids = get_default_skills_for_type(conv_type)
-                            for sid in skill_ids:
-                                skill = self.registry.get(sid)
-                                if skill:
-                                    formatted_skill = format_skill_for_prompt(skill)
-                                    active_skill_text.append(formatted_skill)
-                                    active_skill_ids.append(sid)
-                            # 将默认技能保存到 active_skill_ids 中
-                            if active_skill_ids:
-                                self.memory.set_active_skills(self._conversation_id, active_skill_ids)
-                                active_skills_section = self._build_active_skills_text(active_skill_text, active_skill_ids)
-                                self._dynamic_prompt.update_active_skills(active_skills_section)
-                                logger.debug("加载默认技能: %s", active_skill_ids)
-
-                if self.memory is not None:
-                    self._append_model_messages(
-                        messages,
-                        system_prompt=system_prompt,
-                        user_query=user_query,
-                        enable_vision=model.enable_vision,
-                    )
-                    prior_messages = self.memory.get_message_records(self._conversation_id)
-                    logger.debug("加载历史消息: %s 条", len(prior_messages))
-                    if prior_messages and len(prior_messages) >= 2:
-                        last_msg = prior_messages[-1]
-                        prev_msg = prior_messages[-2]
-                        if last_msg.get("role") == "user" and prev_msg.get("role") == "tool":
-                            prev_meta = prev_msg.get("metadata") or {}
-                            if prev_meta.get("name") == "ask_user":
-                                user_choice = user_query.strip()
-                                logger.debug("检测到 ask_user 历史，用户选择: %s", user_choice)
-                                if user_choice == "确认执行":
-                                    # 设置已确认标志，跳过二次拦截
-                                    self._tool_ctx.set_skip_ask_user_for_run_command(True)
-                                    for record in reversed(prior_messages[:-2]):
-                                        if record.get("role") == "assistant":
-                                            meta = record.get("metadata") or {}
-                                            if meta.get("type") == "tool_call":
-                                                fname = meta.get("name")
-                                                args_str = meta.get("args", "{}")
-                                                try:
-                                                    args = json.loads(args_str)
-                                                except json.JSONDecodeError:
-                                                    args = {}
-                                            if fname == "run_command":
-                                                command = str(args.get("command", "") or "").strip()
-                                                result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
-                                                # 关键修复：追加完整 assistant(tool_calls)+tool 序列
-                                                self._persist_tool_pair_only(
-                                                    fname, args, str(result), messages,
-                                                    meta_type="base_tool",
-                                                )
-                                                if log_callback:
-                                                    log_callback(f"执行命令: {command}", "base_tool")
-                                                    log_callback(str(result), "base_tool")
-                                                # 重置标志
-                                                self._tool_ctx.set_skip_ask_user_for_run_command(False)
-                                                break
-                            elif user_choice == "确认安装":
-                                # 设置已确认标志，跳过二次拦截
-                                self._tool_ctx.set_skip_ask_user_for_run_command(True)
-                                for record in reversed(prior_messages[:-2]):
-                                    if record.get("role") == "assistant":
-                                        meta = record.get("metadata") or {}
-                                        if meta.get("type") == "tool_call":
-                                            fname = meta.get("name")
-                                            args_str = meta.get("args", "{}")
-                                            try:
-                                                args = json.loads(args_str)
-                                            except json.JSONDecodeError:
-                                                args = {}
-                                            if fname == "run_command":
-                                                skill_id = args.get("skill_id", "")
-                                                command = str(args.get("command", "") or "").strip()
-
-                                                if skill_id:
-                                                    success, msg = install_skill_dependencies(str(skill_id), self.registry)
-                                                    if not success:
-                                                        err_msg = f"依赖安装失败: {msg}"
-                                                        if log_callback:
-                                                            log_callback(err_msg, "assistant")
-                                                        metadata = {"token_usage": asdict(self._token_usage)}
-                                                        self.memory.append_message(self._conversation_id, "assistant", err_msg, metadata=metadata)
-                                                        _emit_token_usage()
-                                                        logger.debug("返回 (依赖安装失败): %s", err_msg)
-                                                        # 重置标志
-                                                        self._tool_ctx.set_skip_ask_user_for_run_command(False)
-                                                        return err_msg
-                                                    if log_callback:
-                                                        log_callback(f"依赖安装成功: {msg}", "base_tool")
-                                                    # 关键修复：依赖安装结果也作为完整 tool pair 追加
-                                                    self._persist_tool_pair_only(
-                                                        "install_dependencies",
-                                                        {"msg": msg},
-                                                        f"依赖安装成功: {msg}",
-                                                        messages,
-                                                        meta_type="base_tool",
-                                                    )
-
-                                                    result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
-                                                    self._persist_tool_pair_only(
-                                                        fname, args, str(result), messages,
-                                                        meta_type="base_tool",
-                                                    )
-                                                    if log_callback:
-                                                        log_callback(f"执行命令: {command}", "base_tool")
-                                                        log_callback(str(result), "base_tool")
-                                                else:
-                                                    result = execute_atomic_tool(fname, args, self._tool_ctx, self.registry)
-                                                    self._persist_tool_pair_only(
-                                                        fname, args, str(result), messages,
-                                                        meta_type="base_tool",
-                                                    )
-                                                    if log_callback:
-                                                        log_callback(f"执行命令: {command}", "base_tool")
-                                                        log_callback(str(result), "base_tool")
-                                                _emit_token_usage()
-                                                logger.debug("返回 (确认安装后执行结果): %s", str(result)[:100])
-                                                # 重置标志
-                                                self._tool_ctx.set_skip_ask_user_for_run_command(False)
-                                                return result
-                            elif user_choice == "取消":
-                                cancel_msg = "操作已取消"
-                                if log_callback:
-                                    log_callback(cancel_msg, "assistant")
-                                if self.memory is not None:
-                                    metadata = {"token_usage": asdict(self._token_usage)}
-                                    self.memory.append_message(self._conversation_id, "assistant", cancel_msg, metadata=metadata)
-                                _emit_token_usage()
-                                logger.debug("返回 (操作已取消)")
-                                return cancel_msg
+                # 处理 ask_user 历史消息中的用户确认/安装/取消
+                system_prompt = messages[0]["content"] if messages else ""
+                ask_user_result = self._handle_ask_user_history(
+                    user_query, messages, model, system_prompt, log_callback, _emit_token_usage,
+                )
+                if ask_user_result is not None:
+                    return ask_user_result
 
             # 方案 A：记录本轮（主循环内）是否调用过任何工具，用于
             # 在 LLM 试图用纯文本结束对话时自动包装为 finish 工具调用。
@@ -2248,366 +3080,15 @@ class SkillAgent:
                     return err
 
                 # Handle tool call response
-                fname = result.tool_name
-                arg_str = result.tool_arguments or "{}"
-                try:
-                    args = json.loads(arg_str)
-                except json.JSONDecodeError:
-                    # arg_str 不是有效 JSON，回退为空字典并重新序列化为 JSON 字符串
-                    args = {}
-                    arg_str = json.dumps(args, ensure_ascii=False)
-                logger.debug("解析工具调用: fname=%s, args keys=%s", fname, list(args.keys()) if isinstance(args, dict) else type(args))
-
-                # 状态机：LLM 调用工具前设置为 TOOL_CALLED
-                try:
-                    self._state = ConversationState.TOOL_CALLED
-                    logger.debug(f"状态转换: {self._state.value}")
-                except Exception as e:
-                    logger.warning(f"状态转换异常: {e}, 当前状态: {self._state.value}")
-
-                # 关键修复：full_thinking 不再单独作为一条 assistant(think) 消息持久化，
-                # 而是作为 assistant tool_call 消息的 content 一起写入，
-                # 避免出现 tool 前面只有 think assistant 而无 tool_calls 的断裂结构。
-
-                if fname == "request_tool_details":
-                    tool_names = args.get("tool_names", [])
-                    if not isinstance(tool_names, list):
-                        tool_names = [str(tool_names)]
-                    
-                    logger.debug("request_tool_details: 请求工具定义 %s", tool_names)
-                    logger.debug("===== 目录+补发 渐进披露机制 - 补发阶段 =====")
-                    logger.debug("LLM 请求获取工具的完整定义: %s", tool_names)
-                    
-                    definitions_found = []
-                    definitions_missing = []
-                    
-                    for tool_name in tool_names:
-                        tool_def = model.get_tool_full_definition(tool_name)
-                        if tool_def:
-                            definitions_found.append(tool_def)
-                            self._supplied_tool_definitions[tool_name] = tool_def
-                            logger.debug("  ✓ 找到工具定义: %s", tool_name)
-                            logger.debug("  工具定义已缓存到 _supplied_tool_definitions")
-                        else:
-                            definitions_missing.append(tool_name)
-                            logger.debug("  ✗ 未找到工具定义: %s", tool_name)
-                    
-                    result_parts = []
-                    if definitions_found:
-                        result_parts.append("以下工具的完整定义已获取：\n")
-                        for def_item in definitions_found:
-                            def_json = json.dumps(def_item, ensure_ascii=False, indent=2)
-                            result_parts.append(f"### {def_item.get('name', 'unknown')}\n```json\n{def_json}\n```\n")
-                    
-                    if definitions_missing:
-                        result_parts.append(f"\n⚠️ 以下工具未找到定义：{', '.join(definitions_missing)}")
-                    
-                    tool_result = "\n".join(result_parts)
-                    
-                    for tool_name, tool_def in self._supplied_tool_definitions.items():
-                        tool_schema = model.format_tool_for_request(tool_def)
-                        already_in_tools = any(
-                            model.get_tool_name_from_formatted(t) == tool_name
-                            for t in tools
-                        )
-                        if not already_in_tools:
-                            tools.append(tool_schema)
-                            logger.debug("添加工具到 tools 列表: %s", tool_name)
-                            logger.debug("  工具 [%s] 已动态添加到可用工具集", tool_name)
-                            logger.debug("  当前 tools 列表大小: %s", len(tools))
-                    
-                    # 持久化工具结果到 messages 和 memory
-                    self._append_tool_result_to_messages(
-                        fname, args, tool_result, full_thinking, arg_str,
-                        messages, active_skill_text, active_skill_ids, log_callback,
-                    )
-                    
-                    if log_callback:
-                        found_names = [d.get("name", "") for d in definitions_found]
-                        logger.debug("获取工具定义: %s", ", ".join(found_names))
-                        log_callback(str(tool_result), "base_tool")
-                    
-                    continue
-
-                if log_callback:
-                    try:
-                        args_s = json.dumps(args, ensure_ascii=False)
-                    except (TypeError, ValueError):
-                        args_s = str(args)
-
-                    # 保留调试日志，移除一次性工具调用消息（已通过流式机制发送）
-                    if fname == "finish":
-                        content_preview = "".join(content_parts)[:200] if content_parts else "(空)"
-                        logger.debug("[finish] LLM 调用 finish，原始 args: %s | content_parts 预览: %r", args_s, content_preview)
-                    elif fname == "select_skill":
-                        logger.debug("选择 Skill: %s", args.get('skill_id', ''))
-                    else:
-                        logger.debug("调用工具 `%s` · %s", fname, args_s)
-                # 注意：此处不再单独保存 assistant(tool_call) 消息，
-                # 由下方 _persist_after_tool_turn 统一保存完整的
-                # assistant(tool_calls) + tool(result) 序列，避免重复渲染。
-            
-                if fname == "run_command":
-                    command = str(args.get("command", "") or "").strip()
-                    skill_id = args.get("skill_id", "")
-
-                    # 检查是否已通过历史记录确认（旧方案保留，用于兼容）
-                    skip_ask_user = self._tool_ctx.should_skip_ask_user_for_run_command()
-                    if skip_ask_user:
-                        logger.debug("跳过二次确认：命令已通过历史记录确认")
-
-                    # 新方案：运行时拦截确认（用户确认不发往 LLM）
-                    if skill_id:
-                        need_install, packages_to_install, err_msg = check_skill_dependencies(
-                            str(skill_id), self.registry
-                        )
-                        if err_msg:
-                            _emit_token_usage()
-                            return f"错误: {err_msg}"
-
-                        if need_install and packages_to_install and not skip_ask_user:
-                            packages_str = ", ".join(packages_to_install)
-                            ask_args = {
-                                "question": f"Skill「{skill_id}」需要安装以下依赖包：\n\n{packages_str}\n\n是否确认安装？",
-                                "choices": ["确认安装", "取消"]
-                            }
-                            # 保存待执行命令信息
-                            self._runtime_confirm_pending = True
-                            self._runtime_confirm_fname = fname
-                            self._runtime_confirm_args = args
-                            self._runtime_confirm_messages = list(messages)  # 快照
-                            # 触发确认 UI（不保存到历史，不发给 LLM）
-                            if log_callback:
-                                log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
-                            _emit_token_usage()
-                            return SKILL_AGENT_AWAITING_USER_REPLY
-                    
-                    is_pkg_install, packages = self._is_package_install_command(command)
-                    if is_pkg_install and not skip_ask_user:
-                        packages_str = ", ".join(packages) if packages else "（未解析到包名）"
-                        ask_args = {
-                            "question": f"即将安装以下包：\n\n{packages_str}\n\n命令：{command}\n\n是否确认执行？",
-                            "choices": ["确认安装", "取消"]
-                        }
-                        # 保存待执行命令信息
-                        self._runtime_confirm_pending = True
-                        self._runtime_confirm_fname = fname
-                        self._runtime_confirm_args = args
-                        self._runtime_confirm_messages = list(messages)  # 快照
-                        # 触发确认 UI（不保存到历史，不发给 LLM）
-                        if log_callback:
-                            log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
-                        _emit_token_usage()
-                        return SKILL_AGENT_AWAITING_USER_REPLY
-                    
-                    if self._is_dangerous_command(command) and not skip_ask_user:
-                        ask_args = {
-                            "question": f"即将执行以下命令，可能会修改或删除文件：\n\n{command}\n\n是否确认执行？",
-                            "choices": ["确认执行", "取消"]
-                        }
-                        # 保存待执行命令信息
-                        self._runtime_confirm_pending = True
-                        self._runtime_confirm_fname = fname
-                        self._runtime_confirm_args = args
-                        self._runtime_confirm_messages = list(messages)  # 快照
-                        # 触发确认 UI（不保存到历史，不发给 LLM）
-                        if log_callback:
-                            log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
-                        _emit_token_usage()
-                        return SKILL_AGENT_AWAITING_USER_REPLY
-                
-                logger.debug("准备执行工具: %s", fname)
-                if fname == "run_command":
-                    cmd = str(args.get("command", ""))[:80]
-                    logger.debug("  命令: %s...", cmd)
-
-                # 检测重复工具调用（可通过配置禁用）
-                _control_tools = ("select_skill", "finish", "ask_user")
-                is_repeated = False
-                repeat_warning = None
-                last_result = None
-
-                if config.TOOL_CALL_DEDUPLICATION_ENABLED and fname not in _control_tools:
-                    is_repeated, repeat_warning, last_result = self._check_repeated_tool_call(fname, args)
-                    if is_repeated:
-                        logger.warning("检测到重复工具调用: %s", fname)
-                        logger.debug("连续重复次数: %s", self._consecutive_repeat_count)
-
-                        result = repeat_warning or f"检测到重复的 {fname} 调用"
-                        terminate = False
-                        final = None
-
-                        max_repeats = config.MAX_CONSECUTIVE_REPEATS
-                        if self._consecutive_repeat_count >= max_repeats:
-                            auto_finish_msg = (
-                                f"检测到连续 {self._consecutive_repeat_count} 次重复执行工具 [{fname}]，已自动结束任务。\n\n"
-                                f"最后一次执行结果摘要：\n{(last_result or '')[:200]}"
-                            )
-                            logger.warning("触发自动终止: %s", auto_finish_msg)
-
-                            if log_callback:
-                                log_callback(auto_finish_msg, "assistant")
-                            if self.memory is not None:
-                                metadata = {"token_usage": asdict(self._token_usage)}
-                                self.memory.append_message(self._conversation_id, "assistant", auto_finish_msg, metadata=metadata)
-                            _emit_token_usage()
-                            return auto_finish_msg
-                else:
-                    is_repeated = False
-
-                # 工具执行流程：
-                # 1. 通用重复检测（适用于所有工具）→ 已在前面实现
-                # 2. 执行工具 → self._dispatch()
-                # 3. 结果格式化 → 已实现
-                # 4. 写入操作特例检测（仅限 run_command + 写入操作）→ 原有逻辑
-
-                if not is_repeated:
-                    result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
-
-                    # 状态机：工具执行完成后设置为 TOOL_EXECUTED
-                    try:
-                        self._state = ConversationState.TOOL_EXECUTED
-                        logger.debug(f"状态转换: {self._state.value}, 等待LLM调用finish工具或自动finish")
-                    except Exception as e:
-                        logger.warning(f"状态转换异常: {e}, 当前状态: {self._state.value}")
-
-                    # 方案 A：标记本轮已调用过工具（含 finish/ask_user/select_skill 等控制工具），
-                    # 用于下方判断是否允许 LLM 用纯文本直接结束。
-                    has_called_tool_in_run = True
-
-                    if fname not in _control_tools:
-                        self._record_tool_call(fname, args, str(result))
-
-                # 标准化工具返回结果格式（排除控制类工具和已经是标准格式的结果）
-                if fname not in ("select_skill", "finish", "ask_user"):
-                    result_str = str(result)
-                    # 保护结构化返回格式（如 run_command 的【执行结果】... 格式）
-                    if result_str.startswith("【执行结果】"):
-                        pass  # 保持原有结构化格式不变
-                    elif not result_str.startswith(("✅", "❌", "⚠️")):
-                        # 判断是否为成功结果（简单启发式规则）
-                        is_success = (
-                            "exit_code: 0" in result_str or  # 命令执行成功
-                            (len(result_str) > 10 and "error" not in result_str.lower()[:100])  # 有实质内容且无明显错误
-                        )
-                        original_len = len(result_str)
-                        if is_success and len(result_str.strip()) > 0:
-                            result = self._format_tool_result(True, result_str)
-                            logger.debug("格式化工具结果: %s, 成功=True, 原始长度=%s, 格式化后长度=%s", fname, original_len, len(str(result)))
-                        elif not is_success:
-                            # 保持原始错误信息，但添加前缀
-                            if not result_str.startswith("错误"):
-                                result = f"❌ 操作失败\n\n{result}"
-                                logger.debug("格式化工具结果: %s, 成功=False, 原始长度=%s, 添加失败前缀", fname, original_len)
-
-                # 性能优化：移除高频DEBUG日志，降低I/O开销
-                # logger.debug("工具执行完成:")
-                # result_str = str(result)
-                # result_len = len(result_str)
-                # logger.debug("  - result 长度: %s", result_len)
-                # if result_len <= 500:
-                #     # 短结果：完整显示
-                #     logger.debug("  - result: %s", result_str)
-                # else:
-                #     # 长结果：智能截断，显示前后各500字符
-                #     result_head = result_str[:500]
-                #     result_tail = result_str[-500:]
-                #     omitted_count = result_len - 1000
-                #     logger.debug("  - result: %s...(省略%d字符)...%s", result_head, omitted_count, result_tail)
-                # logger.debug("  - terminate: %s", terminate)
-                # logger.debug("  - final: %s", final is not None)
-
-                if log_callback and fname == "select_skill":
-                    # 保留调试日志，移除一次性工具调用消息（已通过流式机制发送）
-                    if str(result).startswith("错误"):
-                        logger.warning("选择 Skill 失败: %s", result)
-                    else:
-                        ids_join = "、".join(active_skill_ids)
-                        n = len(active_skill_ids)
-                        logger.debug("命中 Skill「%s」｜本轮已累计 id：%s（共 %d 个）",
-                                   args.get('skill_id', ''), ids_join, n)
-                        prefix = (
-                            f"［第 {n} 次加载｜本轮已累计 {n} 份｜id 顺序：{ids_join}］\n\n"
-                        )
-                        log_callback(prefix + str(result), "doc")
-
-                if log_callback and fname not in ("finish", "select_skill", "ask_user"):
-                    r = str(result)
-                    if len(r) > config.TOOL_OUTPUT_MAX_LENGTH:
-                        if config.TOOL_TRUNCATE_SHOW_DETAILS:
-                            r = r[:config.TOOL_OUTPUT_MAX_LENGTH] + f"\n\n…（内容已截断：原始长度 {len(r)} 字符，显示 {config.TOOL_OUTPUT_MAX_LENGTH} 字符）"
-                        else:
-                            r = r[:config.TOOL_OUTPUT_MAX_LENGTH] + "\n\n…（内容已截断）"
-                    if fname == "run_command":
-                        command = str(args.get("command", "") or "").strip()
-                        
-                        if "exit_code: 0" in r:
-                            stdout_match = r.split("--- stdout ---")
-                            stdout = ""
-                            if len(stdout_match) >= 2:
-                                stdout = stdout_match[1].split("--- stderr ---")[0].strip()
-                            
-                            if not stdout and self._is_write_operation(command):
-                                logger.debug("检测到写入操作: %s...", command[:80])
-                                file_path = self._extract_file_path(command)
-                                if file_path:
-                                    logger.debug("提取到文件路径: %s", file_path)
-                                    check_result = self._verify_file_exists(file_path, args.get("cwd", "."))
-                                    # 将命令信息和检查结果合并到结果中，一次性发送
-                                    r = f"执行命令: {command}\n\n{r}\n\n{check_result}"
-                                    result = r
-                                    logger.debug("验证结果已合并到工具结果")
-                                else:
-                                    logger.debug("无法提取文件路径，跳过验证")
-                                    r = f"执行命令: {command}\n\n{r}"
-                            else:
-                                r = f"执行命令: {command}\n\n{r}"
-                        else:
-                            r = f"执行命令: {command}\n\n{r}"
-                        
-                        # 写入操作特例检测（保留原有逻辑）
-                        # 此检测与通用重复检测协同工作，专门针对写入操作提供更严格的保护
-                        auto_end_msg = self._check_repeated_write_success(command, str(result))
-                        if auto_end_msg:
-                            logger.debug(f"检测到重复写入，自动结束: {auto_end_msg}")
-                            log_callback(auto_end_msg, "assistant")
-                            metadata = {"token_usage": asdict(self._token_usage)}
-                            self.memory.append_message(self._conversation_id, "assistant", auto_end_msg, metadata=metadata)
-                            _emit_token_usage()
-                            return auto_end_msg
-                    log_callback(r, "base_tool")
-
-                if terminate and final is not None:
-                    # 关键修复：终止型工具（如 finish）也要先追加 assistant(tool_calls)+tool 完整序列
-                    self._append_tool_result_to_messages(
-                        fname, args, str(result), full_thinking, arg_str,
-                        messages, active_skill_text, active_skill_ids, log_callback,
-                    )
-                    if self.memory is not None:
-                        cid = self._conversation_id
-                        metadata = {"token_usage": asdict(self._token_usage)}
-                        self.memory.append_message(cid, "assistant", str(final), metadata=metadata)
-                    if log_callback:
-                        log_callback(str(final), "assistant")
-                    _emit_token_usage()
-                    logger.debug(f"工具要求终止 (terminate=True), 返回 final (长度: {len(str(final))})")
-                    return final
-
-                if fname == "ask_user" and not str(result).startswith("错误"):
-                    self._append_tool_result_to_messages(
-                        fname, args, str(result), full_thinking, arg_str,
-                        messages, active_skill_text, active_skill_ids, log_callback,
-                    )
-                    if log_callback:
-                        log_callback(_ask_user_ui_log_payload(args), "await_user")
-                    _emit_token_usage()
-                    logger.debug("等待用户回复 (ask_user)")
-                    return SKILL_AGENT_AWAITING_USER_REPLY
-
-                self._append_tool_result_to_messages(
-                    fname, args, str(result), full_thinking, arg_str,
-                    messages, active_skill_text, active_skill_ids, log_callback,
+                _tool_call_result = self._process_tool_call_in_loop(
+                    result, full_thinking, content_parts, messages,
+                    active_skill_text, active_skill_ids, model, tools,
+                    log_callback, _emit_token_usage,
                 )
+                if _tool_call_result["action"] == "return":
+                    return _tool_call_result["value"]
+                if _tool_call_result.get("tool_called", False):
+                    has_called_tool_in_run = True
 
             logger.debug(f"达到最大步数限制 ({self.max_steps})，退出循环")
             tail = f"已达到最大执行步数限制（{self.max_steps}），已停止。"

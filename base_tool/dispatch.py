@@ -1180,7 +1180,12 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
     ensure_registered()
     handler = get_handler(name)
     if handler is not None:
-        return handler.execute(args, ctx, registry)
+        try:
+            return handler.execute(args, ctx, registry)
+        except Exception as e:
+            # 捕获所有未预期的异常，防止主进程崩溃
+            logger.exception(f"工具 [{name}] 执行异常: {e}")
+            return f"错误: 工具 {name} 执行异常: {e}"
     return f"未知原子工具: {name}"
 
 
