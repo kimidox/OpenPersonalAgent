@@ -129,7 +129,18 @@ def translate_grid_xy_to_screen_coord(
     return (screen_x, screen_y)
 
 class Executor:
+    """桌面自动化执行器，提供截屏、点击、输入等 GUI 操作能力。
+
+    基于截屏网格坐标系，将网格坐标转换为屏幕像素坐标后执行操作，
+    是整个桌面自动化流程的核心执行单元。
+    """
+
     def __init__(self, work_dir: str):
+        """初始化执行器。
+
+        Args:
+            work_dir: 工作目录路径，截屏文件将保存于其下的 screenshots 子目录中。
+        """
         self.work_dir = work_dir
         self.screenshot_dir = os.path.join(work_dir, "screenshots")
         os.makedirs(self.screenshot_dir, exist_ok=True)
@@ -142,6 +153,11 @@ class Executor:
         pyautogui.PAUSE = 0.5
 
     def screenshot(self) -> str:
+        """截屏并绘制网格，保存到截屏目录。
+
+        Returns:
+            保存的截屏文件绝对路径。
+        """
         self.screenshot_count += 1
         filename = f"screenshot_{self.screenshot_count}.png"
         filepath = os.path.join(self.screenshot_dir, filename)
@@ -153,6 +169,7 @@ class Executor:
         return filepath
 
     def _grid_to_screen(self, grid_x, grid_y) -> tuple[int, int]:
+        """将网格坐标 (gx, gy) 转换为屏幕像素坐标。"""
         w, h = self._last_screenshot_size or pyautogui.size()
         pw, ph = pyautogui.size()
         if self._last_screenshot_size and (w, h) != (pw, ph):
@@ -165,33 +182,105 @@ class Executor:
         )
 
     def click(self, x: int, y: int, button: str = "left") -> str:
+        """点击指定屏幕位置。
+
+        Args:
+            x: 屏幕 X 像素坐标。
+            y: 屏幕 Y 像素坐标。
+            button: 鼠标按键，"left" 或 "right"，默认 "left"。
+
+        Returns:
+            操作结果描述字符串。
+        """
         pyautogui.click(x, y, button=button)
         return f"Clicked at ({x}, {y}) with {button} button"
 
     def double_click(self, x: int, y: int, button: str = "left") -> str:
+        """双击指定屏幕位置。
+
+        Args:
+            x: 屏幕 X 像素坐标。
+            y: 屏幕 Y 像素坐标。
+            button: 鼠标按键，"left" 或 "right"，默认 "left"。
+
+        Returns:
+            操作结果描述字符串。
+        """
         pyautogui.doubleClick(x, y, button=button)
         return f"Double-clicked at ({x}, {y}) with {button} button"
 
     def right_click(self, x: int, y: int) -> str:
+        """右键点击指定屏幕位置。
+
+        Args:
+            x: 屏幕 X 像素坐标。
+            y: 屏幕 Y 像素坐标。
+
+        Returns:
+            操作结果描述字符串。
+        """
         return self.click(x, y, button="right")
 
     def move_to(self, x: int, y: int) -> str:
+        """移动鼠标到指定屏幕位置。
+
+        Args:
+            x: 屏幕 X 像素坐标。
+            y: 屏幕 Y 像素坐标。
+
+        Returns:
+            操作结果描述字符串。
+        """
         pyautogui.moveTo(x, y)
         return f"Moved to ({x}, {y})"
 
     def type_text(self, text: str) -> str:
+        """输入文本内容。
+
+        Args:
+            text: 要输入的文本字符串。
+
+        Returns:
+            操作结果描述字符串。
+        """
         pyautogui.write(text, interval=0.05)
         return f"Typed text: {text}"
 
     def press_key(self, key: str) -> str:
+        """按下单个按键。
+
+        Args:
+            key: 按键名称，如 "enter"、"tab"、"escape" 等。
+
+        Returns:
+            操作结果描述字符串。
+        """
         pyautogui.press(key)
         return f"Pressed key: {key}"
 
     def hotkey(self, *keys) -> str:
+        """同时按下多个组合键（如 Ctrl+C）。
+
+        Args:
+            *keys: 按键名称序列，如 "ctrl"、"c"。
+
+        Returns:
+            操作结果描述字符串。
+        """
         pyautogui.hotkey(*keys)
         return f"Pressed hotkey: {'+'.join(keys)}"
 
     def scroll(self, clicks: int, x: int = None, y: int = None) -> str:
+        """滚动鼠标滚轮。
+
+        Args:
+            clicks: 滚动次数，正数向上、负数向下。
+            x: 滚动位置的 X 坐标，None 表示在当前位置滚动。
+            y: 滚动位置的 Y 坐标，None 表示在当前位置滚动。
+
+        Returns:
+            操作结果描述字符串。
+        """
         if x is not None and y is not None:
             pyautogui.scroll(clicks, x, y)
         else:
@@ -199,13 +288,35 @@ class Executor:
         return f"Scrolled {clicks} clicks"
 
     def get_screen_size(self) -> tuple:
+        """获取屏幕尺寸。
+
+        Returns:
+            屏幕宽高元组 (width, height)。
+        """
         return pyautogui.size()
 
     def return_to_desktop(self) -> str:
+        """按下 Win+D 返回桌面。
+
+        Returns:
+            操作结果描述字符串。
+        """
         pyautogui.hotkey("win", "d")
         return "Returned to desktop"
 
     def execute_action(self, action: dict) -> str:
+        """根据 action 字典分发并执行对应的 GUI 操作。
+
+        支持的动作类型：click、double_click、right_click、move_to、type、
+        press、hotkey、scroll、screenshot、wait、open_app、return_to_desktop、over。
+        包含 x/y 坐标的动作会先通过 _grid_to_screen 转换为屏幕像素坐标。
+
+        Args:
+            action: 包含 "action" 字段及对应参数的字典。
+
+        Returns:
+            str: 操作结果描述字符串，未知动作返回错误提示。
+        """
         action_type = action.get("action", "").lower()
 
         if action_type == "click":

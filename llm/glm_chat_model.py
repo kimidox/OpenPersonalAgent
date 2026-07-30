@@ -77,6 +77,21 @@ class GLMChatModel(BaseChatModel):
             raise RuntimeError(f"API错误: {e}")
 
     def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
+        """发起带工具的补全请求并提取工具调用信息。
+
+        发送消息和工具定义到 GLM 模型，从响应中优先提取 function_call（旧格式），
+        兼容 tool_calls（新格式）的 name、arguments 和 reasoning_content。
+
+        Args:
+            messages: 对话消息列表。
+            tools: 工具定义列表。
+
+        Returns:
+            包含 name、arguments、reasoning_content 的字典，无工具调用时返回 None。
+
+        Raises:
+            RuntimeError: API 请求失败时抛出。
+        """
         # 最终防线：校验并修复所有 messages 中的 tool_calls
         from llm.BaseChatModel import _sanitize_messages_for_api
         messages = _sanitize_messages_for_api(messages)

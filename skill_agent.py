@@ -194,6 +194,11 @@ class SkillAgent:
         self._state = ConversationState.IDLE
 
     def set_file_upload_controller(self, controller: Any) -> None:
+        """Set the file upload controller for handling file upload operations.
+
+        Args:
+            controller: File upload controller instance to delegate upload tasks to.
+        """
         self._tool_ctx.file_upload_controller = controller
 
     def set_uploaded_files_content(self, content: str | dict) -> None:
@@ -415,6 +420,11 @@ class SkillAgent:
         return "\n".join(lines)
 
     def get_base_info(self) -> str:
+        """Return a formatted string containing the user's basic system information.
+
+        Returns:
+            Multi-line string with username, current system time, and OS type.
+        """
         import platform
         base_info = f"用户名：{self.username}\n"
         base_info+=f"当前系统时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -454,12 +464,35 @@ class SkillAgent:
 
     @property
     def conversation_id(self) -> str:
+        """Return the current conversation's unique identifier.
+
+        Returns:
+            The UUID string of the active conversation, or empty string if none.
+        """
         return self._conversation_id
 
     def reload_skills(self) -> None:
+        """Reload all skill definitions from the registry, refreshing the available skill set.
+
+        Side effects:
+            Re-reads skill configurations from disk and updates the in-memory registry.
+        """
         self.registry.reload()
 
     def start_new_conversation(self, *, conversation_type: str = 'agent_conversation', default_skills: list[dict] | None = None) -> tuple[str, str]:
+        """Create a new conversation with a generated UUID, persisting it in memory.
+
+        Args:
+            conversation_type: Type label for the conversation (e.g. 'agent_conversation').
+            default_skills: Optional list of dicts (id, name) for skills enabled by default;
+                if None, loaded from global preferences for the given type.
+
+        Returns:
+            A tuple of (conversation_id, conversation_title).
+
+        Side effects:
+            Sets the internal conversation ID and updates the dynamic prompt template.
+        """
         if self.memory is None:
             self._conversation_id = ""
             return (self._conversation_id, "")
@@ -489,21 +522,51 @@ class SkillAgent:
         return (self._conversation_id, title)
 
     def set_conversation_id(self, conversation_id: str) -> None:
+        """Set the active conversation ID, stripping surrounding whitespace.
+
+        Args:
+            conversation_id: The conversation UUID to activate; empty string if None.
+        """
         self._conversation_id = (conversation_id or "").strip()
 
     def set_enable_thinking(self, enabled: bool) -> None:
+        """Enable or disable the model's extended thinking mode.
+
+        Args:
+            enabled: True to enable thinking, False to disable.
+        """
         self._enable_thinking = enabled
 
     def request_stop(self) -> None:
+        """Signal a stop request to interrupt the current conversation processing loop.
+
+        Side effects:
+            Sets the internal stop event, causing is_stop_requested to return True.
+        """
         self._stop_event.set()
 
     def is_stop_requested(self) -> bool:
+        """Check whether a stop request has been issued for the current conversation.
+
+        Returns:
+            True if request_stop was called and not yet cleared, False otherwise.
+        """
         return self._stop_event.is_set()
 
     def set_conversation_constraints(self, constraints: str) -> None:
+        """Set textual constraints that guide the conversation behavior.
+
+        Args:
+            constraints: Constraint text to apply; whitespace is stripped.
+        """
         self._conversation_constraints = (constraints or "").strip()
 
     def clear_conversation_constraints(self) -> None:
+        """Remove all conversation constraints, resetting to no constraints.
+
+        Side effects:
+            Sets the internal constraints string to empty.
+        """
         self._conversation_constraints = ""
 
     def clear_runtime_cache(self) -> None:
@@ -856,9 +919,19 @@ class SkillAgent:
         return None
 
     def get_conversation_constraints(self) -> str:
+        """Return the current conversation constraints text.
+
+        Returns:
+            The constraint string, or empty string if none are set.
+        """
         return self._conversation_constraints
 
     def list_saved_conversations(self) -> list[Conversation]:
+        """Retrieve all saved conversations for the current user.
+
+        Returns:
+            List of Conversation objects, or empty list if memory is not initialized.
+        """
         if self.memory is None:
             return []
         return self.memory.list_user_conversations()
@@ -870,6 +943,16 @@ class SkillAgent:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        """Fetch message records for a specific conversation with optional pagination.
+
+        Args:
+            conversation_id: UUID of the target conversation.
+            limit: Maximum number of records to return; None for all.
+            offset: Number of records to skip from the beginning.
+
+        Returns:
+            List of message record dicts, or empty list if memory is not initialized.
+        """
         if self.memory is None:
             return []
         return self.memory.get_message_records(
@@ -883,6 +966,15 @@ class SkillAgent:
         memory: Memory | None,
         conversation_id: str,
     ) -> bool:
+        """Check whether a conversation is waiting for user clarification before proceeding.
+
+        Args:
+            memory: Memory instance to query, or None.
+            conversation_id: UUID of the conversation to check.
+
+        Returns:
+            True if the conversation is in a state awaiting user input, False otherwise.
+        """
         if memory is None:
             return False
         cid = (conversation_id or "").strip()
@@ -1447,6 +1539,183 @@ class SkillAgent:
 
         return False
 
+    def _append_tool_result_to_messages(
+        self,
+        fname: str,
+        args: dict,
+        result_str: str,
+        full_thinking: str | None,
+        arg_str: str,
+        messages: list[dict],
+        active_skill_text: list[str],
+        active_skill_ids: list[str],
+        log_callback: Optional[Callable[[str, str], Any]] = None,
+    ) -> None:
+        """将工具调用结果持久化到 messages 列表和 memory。
+
+        统一处理 memory 和非 memory 两种分支，消除 run() 中的重复代码。
+
+        Business purpose:
+            工具调用结果的持久化逻辑只在一处维护，避免两处代码不一致。
+
+        Parameters:
+            fname: 工具名称
+            args: 工具参数字典
+            result_str: 工具执行结果字符串
+            full_thinking: LLM 思考过程内容（可选）
+            arg_str: 工具参数 JSON 字符串
+            messages: 消息列表（会被修改）
+            active_skill_text: 活跃 Skill 文本列表
+            active_skill_ids: 活跃 Skill ID 列表
+            log_callback: 前端回调
+
+        Side effects:
+            修改 messages 列表（追加 assistant + tool 消息）
+            当 memory 存在时，通过 _persist_after_tool_turn 持久化
+            当 fname == "select_skill" 时，更新动态系统提示词
+
+        Modification notes:
+            2026-07-29: 从 run() 主循环中两处重复逻辑提取合并
+
+        Related tests:
+            tests/test_skill_agent.py (待补充)
+        """
+        if self.memory is not None:
+            self._persist_after_tool_turn(
+                fname,
+                args,
+                result_str,
+                active_skill_text,
+                active_skill_ids,
+                messages,
+                log_callback,
+                reasoning_content=full_thinking or None,
+                arg_str=arg_str,
+            )
+        else:
+            _call_id = f"call_{uuid.uuid4().hex[:12]}"
+            messages.append({
+                "role": "assistant",
+                "content": full_thinking or None,
+                "tool_calls": [{
+                    "id": _call_id,
+                    "type": "function",
+                    "function": {"name": fname, "arguments": _ensure_valid_json_args(arg_str)},
+                }],
+            })
+            messages.append({
+                "role": "tool",
+                "name": fname,
+                "tool_call_id": _call_id,
+                "content": str(result_str),
+            })
+            if fname == "select_skill" and active_skill_text and not str(result_str).startswith("错误"):
+                active_skills_text = self._build_active_skills_text(active_skill_text, active_skill_ids)
+                self._dynamic_prompt.update_active_skills(active_skills_text)
+                for i, msg in enumerate(messages):
+                    if msg.get("role") == "system":
+                        messages[i] = {"role": "system", "content": self._dynamic_prompt.build()}
+                        logger.debug("更新系统提示词_dynamic_prompt：%s", self._dynamic_prompt.build())
+                        break
+
+    def _handle_text_result(
+        self,
+        result: StreamResult,
+        full_thinking: str,
+        content_parts: list[str],
+        messages: list[dict],
+        has_called_tool_in_run: bool,
+        log_callback: Optional[Callable[[str, str], Any]],
+        emit_token_usage: Callable[[], None],
+    ) -> tuple[str, str | None]:
+        """处理 LLM 返回的文本/截断结果。
+
+        Business purpose:
+            统一处理文本响应、截断响应和自动 finish 逻辑。
+
+        Parameters:
+            result: LLM 流式结果
+            full_thinking: 思考过程全文
+            content_parts: 内容分片列表
+            messages: 消息列表
+            has_called_tool_in_run: 本轮是否调用过工具
+            log_callback: 前端回调
+            emit_token_usage: token 使用量发射函数
+
+        Returns:
+            (action, value) 元组:
+            - ("return", 返回值): 应立即返回
+            - ("continue", None): 应继续主循环
+            - ("none", None): 不处理（不应到达此分支）
+
+        Side effects:
+            可能修改 messages 和 memory
+
+        Modification notes:
+            2026-07-29: 从 run() 主循环中提取
+
+        Related tests:
+            tests/test_skill_agent.py (待补充)
+        """
+        is_truncated = result.result_type == "truncated"
+        final_text = result.content or ""
+        if not final_text:
+            final_text = "".join(content_parts).strip()
+
+        if full_thinking and self.memory is not None:
+            self.memory.append_message(
+                self._conversation_id,
+                "assistant",
+                full_thinking,
+                metadata={"type": "think"},
+            )
+
+        if not final_text:
+            thinking_preview = (full_thinking or "")[:200]
+            logger.warning(
+                "[SkillAgent] final_text 为空，模型未返回内容。"
+                "thinking 前 200 字: %r", thinking_preview,
+            )
+            err = "模型未返回内容，无法继续。"
+            if log_callback:
+                log_callback(err, "assistant")
+            if self.memory is not None:
+                metadata = {"token_usage": asdict(self._token_usage)}
+                self.memory.append_message(self._conversation_id, "assistant", err, metadata=metadata)
+            emit_token_usage()
+            return ("return", err)
+
+        # 自动 finish：如果已调用工具，自动包装文本为 finish 调用
+        if has_called_tool_in_run:
+            logger.info("检测到工具调用后的文本输出，自动包装为finish工具调用")
+            logger.debug(f"文本长度: {len(final_text)}, 工具调用历史: {len(self._recent_tool_calls)}")
+            if log_callback:
+                log_callback(final_text, "assistant")
+            if self.memory is not None:
+                metadata = {"token_usage": asdict(self._token_usage)}
+                self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
+            emit_token_usage()
+            return ("return", final_text)
+
+        is_reasoning = self._is_reasoning_text(final_text, has_called_tool=False)
+        if is_reasoning:
+            logger.debug(f"检测到推理文本（已自动处理），内容前100字: {final_text[:100]}, 文本长度: {len(final_text)}")
+
+        if is_reasoning or is_truncated:
+            logger.debug("检测到推理文本或被截断的响应 (长度: %s, truncated: %s)",
+                         len(final_text), is_truncated)
+            if self.memory is not None:
+                metadata = {"token_usage": asdict(self._token_usage)}
+                self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
+            return ("continue", None)
+        else:
+            if self.memory is not None:
+                metadata = {"token_usage": asdict(self._token_usage)}
+                self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
+            emit_token_usage()
+            logger.debug("返回文本内容 (长度: %s)", len(final_text))
+            return ("return", final_text)
+
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None, stop_check_callback: Optional[Callable[[], bool]] = None) -> str:
         import traceback
         # 性能优化：移除高频DEBUG日志，降低I/O开销
@@ -1954,71 +2223,17 @@ class SkillAgent:
 
                 # Handle text response
                 if result.result_type in ("text", "truncated"):
-                    is_truncated = result.result_type == "truncated"
-                    final_text = result.content or ""
-                    if not final_text:
-                        final_text = "".join(content_parts).strip()
                     if not full_thinking:
                         full_thinking = "".join(thinking_parts).strip()
 
-                    if full_thinking and self.memory is not None:
-                        self.memory.append_message(
-                            self._conversation_id,
-                            "assistant",
-                            full_thinking,
-                            metadata={"type": "think"},
-                        )
-
-                    if not final_text:
-                        # 可观测性：记录 thinking 前 200 字，便于诊断"XML 进 reasoning 未被解析"等情况
-                        thinking_preview = (full_thinking or "")[:200]
-                        logger.warning(
-                            "[SkillAgent] final_text 为空，模型未返回内容。"
-                            "thinking 前 200 字: %r", thinking_preview,
-                        )
-                        err = "模型未返回内容，无法继续。"
-                        if log_callback:
-                            log_callback(err, "assistant")
-                        if self.memory is not None:
-                            metadata = {"token_usage": asdict(self._token_usage)}
-                            self.memory.append_message(self._conversation_id, "assistant", err, metadata=metadata)
-                        _emit_token_usage()
-                        return err
-
-                    # 自动 finish：如果已调用工具，自动包装文本为 finish 调用
-                    if has_called_tool_in_run:
-                        logger.info("检测到工具调用后的文本输出，自动包装为finish工具调用")
-                        logger.debug(f"文本长度: {len(final_text)}, 工具调用历史: {len(self._recent_tool_calls)}")
-                        if log_callback:
-                            log_callback(final_text, "assistant")
-                        if self.memory is not None:
-                            metadata = {"token_usage": asdict(self._token_usage)}
-                            self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
-                        _emit_token_usage()
-                        return final_text
-
-                    # 仅用于日志诊断，不影响会话流程
-                    is_reasoning = self._is_reasoning_text(final_text, has_called_tool=False)
-                    if is_reasoning:
-                        logger.debug(f"检测到推理文本（已自动处理），内容前100字: {final_text[:100]}, 文本长度: {len(final_text)}")
-
-                    if is_reasoning or is_truncated:
-                        # 推理文本或被截断的响应：将文本加入上下文，给 LLM 再一轮机会
-                        logger.debug("检测到推理文本或被截断的响应 (长度: %s, truncated: %s)",
-                                     len(final_text), is_truncated)
-                        if self.memory is not None:
-                            metadata = {"token_usage": asdict(self._token_usage)}
-                            self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
-                        # 继续循环，让 LLM 有机会输出工具调用
+                    action, value = self._handle_text_result(
+                        result, full_thinking, content_parts, messages,
+                        has_called_tool_in_run, log_callback, _emit_token_usage,
+                    )
+                    if action == "return":
+                        return value
+                    elif action == "continue":
                         continue
-                    else:
-                        # 正常文本响应：结束对话
-                        if self.memory is not None:
-                            metadata = {"token_usage": asdict(self._token_usage)}
-                            self.memory.append_message(self._conversation_id, "assistant", final_text, metadata=metadata)
-                        _emit_token_usage()
-                        logger.debug("返回文本内容 (长度: %s)", len(final_text))
-                        return final_text
 
                 # Handle error response
                 if result.result_type == "error":
@@ -2101,36 +2316,11 @@ class SkillAgent:
                             logger.debug("  工具 [%s] 已动态添加到可用工具集", tool_name)
                             logger.debug("  当前 tools 列表大小: %s", len(tools))
                     
-                    # 关键修复：通过 _persist_after_tool_turn 同时追加 assistant(tool_calls) + tool(result)
-                    if self.memory is not None:
-                        self._persist_after_tool_turn(
-                            fname,
-                            args,
-                            tool_result,
-                            active_skill_text,
-                            active_skill_ids,
-                            messages,
-                            log_callback,
-                            reasoning_content=full_thinking or None,
-                            arg_str=arg_str,
-                        )
-                    else:
-                        _call_id = f"call_{uuid.uuid4().hex[:12]}"
-                        messages.append({
-                            "role": "assistant",
-                            "content": full_thinking or None,
-                            "tool_calls": [{
-                                "id": _call_id,
-                                "type": "function",
-                                "function": {"name": fname, "arguments": _ensure_valid_json_args(arg_str)},
-                            }],
-                        })
-                        messages.append({
-                            "role": "tool",
-                            "name": fname,
-                            "tool_call_id": _call_id,
-                            "content": str(tool_result),
-                        })
+                    # 持久化工具结果到 messages 和 memory
+                    self._append_tool_result_to_messages(
+                        fname, args, tool_result, full_thinking, arg_str,
+                        messages, active_skill_text, active_skill_ids, log_callback,
+                    )
                     
                     if log_callback:
                         found_names = [d.get("name", "") for d in definitions_found]
@@ -2389,38 +2579,14 @@ class SkillAgent:
 
                 if terminate and final is not None:
                     # 关键修复：终止型工具（如 finish）也要先追加 assistant(tool_calls)+tool 完整序列
+                    self._append_tool_result_to_messages(
+                        fname, args, str(result), full_thinking, arg_str,
+                        messages, active_skill_text, active_skill_ids, log_callback,
+                    )
                     if self.memory is not None:
-                        self._persist_after_tool_turn(
-                            fname,
-                            args,
-                            str(result),
-                            active_skill_text,
-                            active_skill_ids,
-                            messages,
-                            log_callback,
-                            reasoning_content=full_thinking or None,
-                            arg_str=arg_str,
-                        )
                         cid = self._conversation_id
                         metadata = {"token_usage": asdict(self._token_usage)}
                         self.memory.append_message(cid, "assistant", str(final), metadata=metadata)
-                    else:
-                        _call_id = f"call_{uuid.uuid4().hex[:12]}"
-                        messages.append({
-                            "role": "assistant",
-                            "content": full_thinking or None,
-                            "tool_calls": [{
-                                "id": _call_id,
-                                "type": "function",
-                                "function": {"name": fname, "arguments": _ensure_valid_json_args(arg_str)},
-                            }],
-                        })
-                        messages.append({
-                            "role": "tool",
-                            "name": fname,
-                            "tool_call_id": _call_id,
-                            "content": str(result),
-                        })
                     if log_callback:
                         log_callback(str(final), "assistant")
                     _emit_token_usage()
@@ -2428,78 +2594,20 @@ class SkillAgent:
                     return final
 
                 if fname == "ask_user" and not str(result).startswith("错误"):
-                    if self.memory is not None:
-                        self._persist_after_tool_turn(
-                            fname,
-                            args,
-                            str(result),
-                            active_skill_text,
-                            active_skill_ids,
-                            messages,
-                            log_callback,
-                            reasoning_content=full_thinking or None,
-                            arg_str=arg_str,
-                        )
-                    else:
-                        _call_id = f"call_{uuid.uuid4().hex[:12]}"
-                        messages.append({
-                            "role": "assistant",
-                            "content": full_thinking or None,
-                            "tool_calls": [{
-                                "id": _call_id,
-                                "type": "function",
-                                "function": {"name": fname, "arguments": _ensure_valid_json_args(arg_str)},
-                            }],
-                        })
-                        messages.append({
-                            "role": "tool",
-                            "name": fname,
-                            "tool_call_id": _call_id,
-                            "content": str(result),
-                        })
+                    self._append_tool_result_to_messages(
+                        fname, args, str(result), full_thinking, arg_str,
+                        messages, active_skill_text, active_skill_ids, log_callback,
+                    )
                     if log_callback:
                         log_callback(_ask_user_ui_log_payload(args), "await_user")
                     _emit_token_usage()
                     logger.debug("等待用户回复 (ask_user)")
                     return SKILL_AGENT_AWAITING_USER_REPLY
 
-                if self.memory is not None:
-                    self._persist_after_tool_turn(
-                        fname,
-                        args,
-                        str(result),
-                        active_skill_text,
-                        active_skill_ids,
-                        messages,
-                        log_callback,
-                        reasoning_content=full_thinking or None,
-                        arg_str=arg_str,
-                    )
-                else:
-                    _call_id = f"call_{uuid.uuid4().hex[:12]}"
-                    messages.append({
-                        "role": "assistant",
-                        "content": full_thinking or None,
-                        "tool_calls": [{
-                            "id": _call_id,
-                            "type": "function",
-                            "function": {"name": fname, "arguments": _ensure_valid_json_args(arg_str)},
-                        }],
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "name": fname,
-                        "tool_call_id": _call_id,
-                        "content": str(result),
-                    })
-                    if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
-                        active_skills_text = self._build_active_skills_text(active_skill_text, active_skill_ids)
-                        self._dynamic_prompt.update_active_skills(active_skills_text)
-                        for i, msg in enumerate(messages):
-                            if msg.get("role") == "system":
-                                messages[i] = {"role": "system", "content": self._dynamic_prompt.build()}
-                                logger.debug("更新系统提示词_dynamic_prompt：%s", self._dynamic_prompt.build())
-                                break
+                self._append_tool_result_to_messages(
+                    fname, args, str(result), full_thinking, arg_str,
+                    messages, active_skill_text, active_skill_ids, log_callback,
+                )
 
             logger.debug(f"达到最大步数限制 ({self.max_steps})，退出循环")
             tail = f"已达到最大执行步数限制（{self.max_steps}），已停止。"

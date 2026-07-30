@@ -42,10 +42,20 @@ class AsyncTaskResult:
 
     @property
     def is_success(self) -> bool:
+        """判断任务是否成功完成。
+
+        Returns:
+            bool: 当状态为 COMPLETED 且无错误时返回 True。
+        """
         return self.state == TaskState.COMPLETED and self.error is None
 
     @property
     def is_finished(self) -> bool:
+        """判断任务是否已结束（无论成功或失败）。
+
+        Returns:
+            bool: 状态为 COMPLETED、FAILED、CANCELLED 或 TIMEOUT 时返回 True。
+        """
         return self.state in (TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED, TaskState.TIMEOUT)
 
 
@@ -183,6 +193,11 @@ class LLMExecutorManager:
 
         # 包装任务函数，添加状态管理
         def wrapped_func():
+            """包装实际任务函数，管理执行状态、结果保存和回调触发。
+
+            执行传入的 func，根据结果更新 AsyncTaskResult 状态，
+            并在成功时调用 on_complete 回调、失败时调用 on_error 回调。
+            """
             task_result = AsyncTaskResult(
                 task_id=task_id,
                 state=TaskState.RUNNING,

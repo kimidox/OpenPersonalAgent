@@ -59,10 +59,22 @@ class UploadedFileInfo:
 
     @property
     def is_success(self) -> bool:
+        """判断文件是否解析成功
+
+        Returns:
+            bool: 当文件已解析完成且无错误时返回 True，否则返回 False
+        """
         return self.is_parsed and self.parse_error is None
 
     @property
     def content_preview(self) -> str:
+        """获取解析内容的预览文本
+
+        截取解析结果内容的前 200 个字符作为预览，超出部分用省略号表示。
+
+        Returns:
+            str: 内容预览文本；若无可预览内容则返回空字符串
+        """
         if self.parse_result and hasattr(self.parse_result, "content"):
             content = self.parse_result.content
             if content:
@@ -72,11 +84,23 @@ class UploadedFileInfo:
 
     @property
     def summary(self) -> str:
+        """获取解析结果的摘要信息
+
+        Returns:
+            str: 文件摘要文本；若解析结果中无摘要则返回空字符串
+        """
         if self.parse_result and hasattr(self.parse_result, "summary") and self.parse_result.summary:
             return self.parse_result.summary
         return ""
 
     def get_file_size_display(self) -> str:
+        """获取文件大小的可读显示字符串
+
+        根据文件大小自动选择合适的单位（B / KB / MB）进行显示。
+
+        Returns:
+            str: 格式化后的文件大小字符串，如 "1.5 KB"、"3.2 MB"
+        """
         size = self.file_size
         if size < 1024:
             return f"{size} B"
@@ -86,6 +110,14 @@ class UploadedFileInfo:
             return f"{size / (1024 * 1024):.1f} MB"
 
     def to_dict(self) -> dict[str, Any]:
+        """将文件信息转换为字典格式
+
+        用于序列化和数据传输，将文件信息对象中的关键字段转换为可 JSON 化的字典。
+
+        Returns:
+            dict[str, Any]: 包含文件 ID、原始名称、路径、大小、扩展名、
+                MIME 类型、上传时间、解析状态、错误信息和元数据的字典
+        """
         return {
             "file_id": self.file_id,
             "original_name": self.original_name,
@@ -101,6 +133,17 @@ class UploadedFileInfo:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "UploadedFileInfo":
+        """从字典创建 UploadedFileInfo 实例
+
+        与 to_dict 方法互为逆操作，用于反序列化恢复文件信息对象。
+
+        Args:
+            data: 包含文件信息的字典，需包含 file_id、original_name、
+                file_path、file_size、extension 等键
+
+        Returns:
+            UploadedFileInfo: 从字典数据重建的文件信息实例
+        """
         file_path = Path(data.get("file_path")) if data.get("file_path") else None
         upload_time = datetime.fromisoformat(data["upload_time"]) if data.get("upload_time") else datetime.now()
         return cls(

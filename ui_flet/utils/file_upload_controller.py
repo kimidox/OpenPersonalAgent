@@ -56,6 +56,7 @@ class FileUploadController:
             self._callbacks[event].remove(callback)
 
     def _emit(self, event: str, file_info: Optional[UploadedFileInfo] = None) -> None:
+        """触发指定事件的所有回调"""
         for callback in self._callbacks.get(event, []):
             try:
                 if file_info is not None:
@@ -113,11 +114,23 @@ class FileUploadController:
         return self._vision_enabled
 
     def get_file_filter(self) -> str:
+        """获取文件选择器的过滤器字符串
+
+        根据当前支持的扩展名生成适用于文件选择对话框的过滤器描述。
+
+        Returns:
+            str: 格式化的文件过滤器字符串，如 "支持的文件 (*.docx *.pdf ...)"
+        """
         extensions = self.get_supported_extensions()
         filter_parts = [f"*.{ext}" for ext in extensions]
         return f"支持的文件 ({' '.join(filter_parts)})"
 
     def can_add_file(self) -> bool:
+        """判断是否还可以添加更多文件
+
+        Returns:
+            bool: 当前文件数量未达到上限时返回 True，否则返回 False
+        """
         return len(self._files) < self._max_files
 
     def get_remaining_slots(self) -> int:
@@ -125,6 +138,16 @@ class FileUploadController:
         return max(0, self._max_files - len(self._files))
 
     def validate_file(self, file_path: Path) -> Optional[str]:
+        """校验文件是否满足上传条件
+
+        依次检查文件是否存在、是否为文件、扩展名是否受支持、文件大小是否超限。
+
+        Args:
+            file_path: 待校验文件的路径
+
+        Returns:
+            Optional[str]: 校验通过返回 None；校验失败返回错误描述字符串
+        """
         if not file_path.exists():
             return f"文件不存在: {file_path}"
         if not file_path.is_file():
@@ -143,6 +166,17 @@ class FileUploadController:
         return None
 
     def add_file(self, file_path: Path) -> Optional[UploadedFileInfo]:
+        """添加文件到上传列表
+
+        对文件进行校验和数量检查后创建文件信息对象，并自动触发异步解析。
+
+        Args:
+            file_path: 待添加文件的路径
+
+        Returns:
+            Optional[UploadedFileInfo]: 添加成功返回文件信息对象；
+                校验失败或数量超限时返回 None
+        """
         validation_error = self.validate_file(file_path)
         if validation_error:
             self._emit_upload_error(validation_error)
@@ -173,6 +207,11 @@ class FileUploadController:
         return file_info
 
     def remove_file(self, file_id: str) -> None:
+        """从上传列表中移除指定文件
+
+        Args:
+            file_id: 要移除的文件 ID
+        """
         if file_id not in self._files:
             return
 
@@ -182,25 +221,55 @@ class FileUploadController:
         self._emit("files_changed", file_info)
 
     def clear_all_files(self) -> None:
+        """清除所有已上传的文件"""
         for file_id in list(self._files.keys()):
             self.remove_file(file_id)
 
     def get_file(self, file_id: str) -> Optional[UploadedFileInfo]:
+        """根据文件 ID 获取文件信息
+
+        Args:
+            file_id: 文件 ID
+
+        Returns:
+            Optional[UploadedFileInfo]: 对应的文件信息对象；不存在时返回 None
+        """
         return self._files.get(file_id)
 
     def get_all_files(self) -> list[UploadedFileInfo]:
+        """获取所有已上传文件的信息列表
+
+        Returns:
+            list[UploadedFileInfo]: 所有文件信息对象的列表
+        """
         return list(self._files.values())
 
     def get_parsed_files(self) -> list[UploadedFileInfo]:
+        """获取所有解析成功的文件列表
+
+        Returns:
+            list[UploadedFileInfo]: 所有解析成功（is_success 为 True）的文件信息列表
+        """
         return [f for f in self._files.values() if f.is_success]
 
     def has_files(self) -> bool:
+        """判断是否存在已上传的文件
+
+        Returns:
+            bool: 有文件时返回 True，否则返回 False
+        """
         return len(self._files) > 0
 
     def file_count(self) -> int:
+        """获取当前已上传文件的数量
+
+        Returns:
+            int: 文件数量
+        """
         return len(self._files)
 
     def _start_parse(self, file_id: str) -> None:
+        """启动文件异步解析流程"""
         file_info = self._files.get(file_id)
         if not file_info:
             return
@@ -241,6 +310,7 @@ class FileUploadController:
             self._on_parse_error(file_id, str(e))
 
     def _on_parse_finished(self, file_id: str, result: Any) -> None:
+        """处理文件解析完成事件"""
         file_info = self._files.get(file_id)
         if not file_info:
             return
@@ -255,6 +325,7 @@ class FileUploadController:
         logger.info(f"FileUploadController: 文件解析完成 {file_info.original_name}")
 
     def _on_parse_error(self, file_id: str, error: str) -> None:
+        """处理文件解析失败事件"""
         file_info = self._files.get(file_id)
         if not file_info:
             return
@@ -269,6 +340,7 @@ class FileUploadController:
         logger.error(f"FileUploadController: 文件解析失败 {file_info.original_name}: {error}")
 
     def _emit_upload_error(self, message: str) -> None:
+        """触发上传错误回调并记录日志"""
         logger.warning(f"FileUploadController: {message}")
         for callback in self._callbacks.get("upload_error", []):
             try:
@@ -277,6 +349,16 @@ class FileUploadController:
                 logger.exception("FileUploadController: upload_error 回调异常")
 
     def generate_file_summary(self, file_info: UploadedFileInfo) -> str:
+        """生成单个文件的摘要文本
+
+        包含文件名、类型、大小、摘要和内容预览信息。
+
+        Args:
+            file_info: 已上传文件的信息对象
+
+        Returns:
+            str: 格式化的文件摘要文本；文件未解析成功时返回空字符串
+        """
         if not file_info.is_success:
             return ""
 
@@ -302,6 +384,14 @@ class FileUploadController:
         return "\n".join(summary_parts)
 
     def generate_combined_summary(self) -> str:
+        """生成所有已解析文件的合并摘要文本
+
+        将所有解析成功的文件的摘要信息合并为一段完整的文本，
+        各文件之间用分隔线隔开。
+
+        Returns:
+            str: 合并后的摘要文本；无已解析文件时返回空字符串
+        """
         parsed_files = self.get_parsed_files()
         if not parsed_files:
             return ""
@@ -319,6 +409,16 @@ class FileUploadController:
         return header + "\n\n" + "\n\n---\n\n".join(summaries)
 
     def generate_file_full_content(self, file_info: UploadedFileInfo) -> str:
+        """生成单个文件的完整内容（XML 格式）
+
+        将文件的解析内容包装为 <filename> 和 <file_content> 标签格式。
+
+        Args:
+            file_info: 已上传文件的信息对象
+
+        Returns:
+            str: XML 格式的文件完整内容；文件未解析成功或无内容时返回空字符串
+        """
         if not file_info.is_success:
             return ""
 
@@ -333,6 +433,13 @@ class FileUploadController:
         return f"<filename>{file_info.original_name}</filename>\n<file_content>\n{content}\n</file_content>"
 
     def generate_combined_full_content(self) -> str:
+        """生成所有已解析文件的合并完整内容（XML 格式）
+
+        将所有解析成功的文件内容合并，用 <user_upload_files> 标签包裹。
+
+        Returns:
+            str: XML 格式的所有文件完整内容；无已解析文件时返回空字符串
+        """
         parsed_files = self.get_parsed_files()
         if not parsed_files:
             return ""
@@ -402,6 +509,16 @@ class FileUploadController:
         }
 
     def inject_summary_to_message(self, user_message: str) -> str:
+        """将文件摘要注入到用户消息中
+
+        在用户消息前附加所有已解析文件的合并摘要，用分隔线隔开。
+
+        Args:
+            user_message: 原始用户消息文本
+
+        Returns:
+            str: 注入文件摘要后的消息文本；无摘要时返回原始消息
+        """
         combined_summary = self.generate_combined_summary()
         if not combined_summary:
             return user_message

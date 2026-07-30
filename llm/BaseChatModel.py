@@ -108,6 +108,16 @@ class StreamResult:
         reasoning_content: str = "",
         token_usage: Optional[TokenUsage] = None,
     ) -> "StreamResult":
+        """构造文本类型的流式结果。
+
+        Args:
+            content: 模型输出的文本内容。
+            reasoning_content: 推理/思考过程内容，默认为空。
+            token_usage: 本次请求的 token 用量统计。
+
+        Returns:
+            StreamResult: result_type 为 "text" 的实例。
+        """
         return cls(
             result_type="text",
             content=content,
@@ -123,6 +133,17 @@ class StreamResult:
         reasoning_content: str = "",
         token_usage: Optional[TokenUsage] = None,
     ) -> "StreamResult":
+        """构造工具调用类型的流式结果。
+
+        Args:
+            name: 工具/函数名称。
+            arguments: 工具调用参数的 JSON 字符串。
+            reasoning_content: 推理/思考过程内容，默认为空。
+            token_usage: 本次请求的 token 用量统计。
+
+        Returns:
+            StreamResult: result_type 为 "tool_call" 的实例。
+        """
         return cls(
             result_type="tool_call",
             tool_name=name,
@@ -138,6 +159,18 @@ class StreamResult:
         reasoning_content: str = "",
         token_usage: Optional[TokenUsage] = None,
     ) -> "StreamResult":
+        """构造截断类型的流式结果。
+
+        当模型输出因 max_tokens 限制被截断（finish_reason="length"）且无工具调用时使用。
+
+        Args:
+            content: 截断前的部分文本内容。
+            reasoning_content: 截断前的推理/思考过程内容，默认为空。
+            token_usage: 本次请求的 token 用量统计。
+
+        Returns:
+            StreamResult: result_type 为 "truncated" 的实例。
+        """
         return cls(
             result_type="truncated",
             content=content,
@@ -147,6 +180,14 @@ class StreamResult:
 
     @classmethod
     def from_error(cls, message: str) -> "StreamResult":
+        """构造错误类型的流式结果。
+
+        Args:
+            message: 错误描述信息。
+
+        Returns:
+            StreamResult: result_type 为 "error" 的实例。
+        """
         return cls(
             result_type="error",
             error_message=message,
@@ -154,7 +195,14 @@ class StreamResult:
         )
 
     def to_legacy_dict(self) -> Optional[dict[str, str]]:
-        """向后兼容：转换为旧的 dict 返回格式"""
+        """向后兼容：将 StreamResult 转换为旧的 dict 返回格式。
+
+        text 类型返回 content/arguments/name 字段，tool_call 类型返回工具信息，
+        error 类型将 name 设为 "finish" 并将错误信息序列化为 arguments。
+
+        Returns:
+            包含 name、arguments、content、reasoning_content、token_usage 的字典。
+        """
         if self.result_type == "text":
             return {
                 "name": None,
@@ -178,7 +226,14 @@ class StreamResult:
             }
 
     def to_simple_namespace(self):
-        """向后兼容：转换为 SimpleNamespace 对象"""
+        """向后兼容：将 StreamResult 转换为 SimpleNamespace 对象。
+
+        仅提取 content、reasoning_content 和 token_usage 字段，
+        适用于不关心 tool_call 差异的旧代码路径。
+
+        Returns:
+            SimpleNamespace: 包含 content、reasoning_content、token_usage 属性的对象。
+        """
         from types import SimpleNamespace
         return SimpleNamespace(
             content=self.content or "",
@@ -941,25 +996,52 @@ class BaseChatModel(ABC):
         # 发送IPC告警通知
         if self._state_update_callback:
             try:
-                # 动态导入 make_llm_state_warning_message，避免循环导入
-                from ui_flet.floating_ball_ipc import make_llm_state_warning_message
-
-                warning_msg = make_llm_state_warning_message(
-                    warning_type=warning_type,
-                    timestamp=_time.time(),
-                    state=self._llm_communication_context.state.value,
-                    duration_ms=self._llm_communication_context.duration_ms(),
-                    model=self._llm_communication_context.model_name,
-                    session_id=self._llm_communication_context.session_id,
-                    message=message
-                )
-                self._state_update_callback(warning_msg)
-            except ImportError as e:
-                logger.warning("[LLM通信] 无法导入告警消息构造函数，跳过IPC告警: %s", e)
+                # 通过 EventBus 发布 LLM 状态告警事件，避免 llm→ui_flet 反向依赖
+                # UI 层通过订阅 EventType.LLM_ERROR 事件来构造和发送 IPC 告警消息
+                try:
+                    from events.event_bus import EventBus
+                    from events.event_types import EventType, EventData, EventPriority
+                    bus = EventBus.get_instance()
+                    bus.emit(
+                        EventType.LLM_ERROR,
+                        data={
+                            "warning_type": warning_type,
+                            "state": self._llm_communication_context.state.value,
+                            "duration_ms": self._llm_communication_context.duration_ms(),
+                            "model": self._llm_communication_context.model_name,
+                            "session_id": self._llm_communication_context.session_id,
+                            "message": message,
+                            "timestamp": _time.time(),
+                        },
+                        source="BaseChatModel",
+                        priority=EventPriority.HIGH,
+                    )
+                except ImportError:
+                    # EventBus 不可用时，回退到直接通过 callback 传递原始告警数据
+                    # UI 层负责将原始数据转换为 IPC 消息格式
+                    warning_data = {
+                        "type": "llm_state_warning",
+                        "warning_type": warning_type,
+                        "timestamp": _time.time(),
+                        "state": self._llm_communication_context.state.value,
+                        "duration_ms": self._llm_communication_context.duration_ms(),
+                        "model": self._llm_communication_context.model_name,
+                        "session_id": self._llm_communication_context.session_id,
+                        "message": message,
+                    }
+                    self._state_update_callback(warning_data)
             except Exception as e:
                 logger.warning("[LLM通信] 发送超时告警失败: %s", e)
 
     def get_client(self) -> OpenAI:
+        """获取或懒初始化 OpenAI 客户端实例。
+
+        首次调用时使用实例的 api_key 和 base_url 创建客户端，
+        后续调用直接返回已创建的实例。
+
+        Returns:
+            OpenAI: 已初始化的 OpenAI 客户端。
+        """
         if self._client is None:
             self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         return self._client
@@ -1119,6 +1201,14 @@ class BaseChatModel(ABC):
         return formatted_tool.get("function", {}).get("name")
 
     def encode_image(self, image_path: str) -> str:
+        """将图片文件编码为 base64 字符串。
+
+        Args:
+            image_path: 图片文件的绝对路径。
+
+        Returns:
+            str: 图片的 base64 编码字符串。
+        """
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode("utf-8")
 
@@ -1681,6 +1771,16 @@ class BaseChatModel(ABC):
             self._transition_communication_state(LLMCommunicationState.IDLE)
 
     def execute_function_call(self, fname: str, args: dict, executor: Executor) -> str:
+        """执行指定的工具调用并返回结果字符串。
+
+        Args:
+            fname: 工具/函数名称。
+            args: 工具调用参数字典。
+            executor: Executor 实例，用于执行本地动作。
+
+        Returns:
+            str: 工具执行的返回结果。
+        """
         action = {"action": fname}
         if args:
             action.update(args)

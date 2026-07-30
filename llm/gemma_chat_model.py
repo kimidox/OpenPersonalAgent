@@ -19,6 +19,13 @@ class GemmaChatModel(BaseChatModel):
         super().__init__(model_name=model_name, **kwargs)
 
     def build_tools(self) -> list[dict]:
+        """构建 Gemma 模型专用的工具定义列表。
+
+        委托给 build_functions_gemma 生成新格式（type + function 嵌套）的工具 schema。
+
+        Returns:
+            list[dict]: Gemma 格式的工具定义列表。
+        """
         return self.build_functions_gemma()
 
     def build_functions_gemma(self) -> list[dict]:
@@ -166,6 +173,21 @@ class GemmaChatModel(BaseChatModel):
             raise RuntimeError(f"API错误: {e}")
 
     def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
+        """发起带工具的补全请求并提取工具调用信息。
+
+        发送消息和工具定义到 Gemma 模型，从响应中提取首个工具调用的
+        name、arguments 和 reasoning_content。
+
+        Args:
+            messages: 对话消息列表。
+            tools: 工具定义列表。
+
+        Returns:
+            包含 name、arguments、reasoning_content 的字典，无工具调用时返回 None。
+
+        Raises:
+            RuntimeError: API 请求失败时抛出。
+        """
         # 最终防线：校验并修复所有 messages 中的 tool_calls
         from llm.BaseChatModel import _sanitize_messages_for_api
         messages = _sanitize_messages_for_api(messages)
