@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import flet as ft
 
 from logger import get_logger
-from ui_flet.theme import ThemeManager, get_color
+from ui_flet.theme import ThemeManager, ThemeMode, get_color
 from ui_flet.utils.markdown_utils import create_markdown_content
 from ui_flet.utils.message_utils import extract_display_content, is_multimodal_content
 
@@ -642,6 +642,47 @@ class MessageCard(ft.Container):
                 self._token_label.value = f"Token: {total_tokens}"
                 self._token_label.visible = True
                 self._safe_update(self._token_label)
+
+        # 助手消息卡片接收完成后，切换到Markdown渲染
+        if self._msg_type == "assistant":
+            self._switch_to_markdown_rendering()
+
+    def _switch_to_markdown_rendering(self) -> None:
+        """
+        切换到Markdown渲染(仅用于assistant消息)
+
+        将_content_markdown容器中的ft.Text替换为ft.Markdown组件,
+        使用create_markdown_content函数创建Markdown组件。
+        """
+        # 检查是否为助手消息（双重保护）
+        if self._msg_type != "assistant":
+            return
+
+        # 获取当前文本内容
+        text_content = self._raw_content
+        if isinstance(self._raw_content, list):
+            # 如果是多模态内容，提取文本部分
+            display_data = extract_display_content(self._raw_content)
+            text_content = display_data["text"]
+
+        # 根据当前主题确定代码主题
+        current_theme = self._theme_manager.current_theme
+        theme_str = "dark" if current_theme == ThemeMode.DARK else "light"
+
+        # 创建Markdown组件
+        markdown_component = create_markdown_content(
+            markdown=text_content,
+            selectable=True,  # 保持文本可选中
+            theme=theme_str,  # 传入主题参数，确保代码高亮适配深色/浅色主题
+        )
+
+        # 清空_content_markdown容器并添加Markdown组件
+        self._content_markdown.controls.clear()
+        self._content_markdown.controls.append(markdown_component)
+
+        # 刷新UI
+        self._safe_update(self._content_markdown)
+        self._logger.debug("MessageCard: 已切换到Markdown渲染")
 
     def get_content(self) -> str:
         """获取消息内容"""
