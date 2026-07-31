@@ -65,7 +65,7 @@ REQUEST_TOOL_DETAILS_DEFINITION = {
 TOOL_CATALOG = {
     "run_command": "执行 Python 命令或 PowerShell 命令。",
     "file_operation": "文件操作工具。支持四种操作：",
-    "edit": "精确编辑文件。在文件中搜索指定内容并替换。",
+    "edit": "精确编辑文件。搜索指定内容并替换，支持唯一性校验、行号定位和批量替换。",
     "create_scheduled_task": "创建定时任务提醒。",
     "list_scheduled_tasks": "列出定时任务。",
     "delete_scheduled_task": "删除定时任务。",
@@ -351,18 +351,29 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
     {
         "name": "edit",
         "description": (
-            "精确编辑文件。在文件中搜索指定内容并替换。\n"
-            "特点：只替换第一个匹配项，未找到则报错。\n"
-            "参数：path(必需)、old_str(必需，要搜索的内容)、new_str(必需，替换后的内容)、skill_id(可选)。\n\n"
-            "【参数构造规范】\n"
-            "- path: 必需参数，必须是有效的文件路径字符串\n"
-            "- old_str: 必需参数，必须是精确的字符串内容（包括空格和换行）\n"
-            "- new_str: 必需参数，替换后的内容，必须是非空字符串\n"
-            "- skill_id: 可选参数，如果提供必须是有效的 Skill ID 字符串\n\n"
+            "精确编辑文件。搜索指定内容并替换，支持唯一性校验、行号定位和批量替换。\n\n"
+            "【核心行为】\n"
+            "- 默认只替换第一个匹配项，但要求匹配必须唯一（匹配多次时拒绝替换）\n"
+            "- 匹配多次时可设置 replace_all=true 替换所有匹配\n"
+            "- 可用 start_line 指定从哪一行开始搜索，实现精确定位\n"
+            "- 未找到时返回包含文件行数的信息，匹配多次时返回所有匹配行号\n\n"
+            "【参数】\n"
+            "- path(必需): 文件路径\n"
+            "- old_str(必需): 要搜索的内容（必须精确匹配，包括空格和换行）\n"
+            "- new_str(必需): 替换后的内容\n"
+            "- start_line(可选): 从指定行号开始搜索（1-based），用于重复代码消歧\n"
+            "- replace_all(可选, 默认false): 是否替换所有匹配项\n"
+            "- skill_id(可选): Skill ID\n\n"
+            "【唯一性校验】\n"
+            "当 old_str 在文件中匹配多次且 replace_all=false 时，工具会拒绝替换并返回：\n"
+            "- 匹配总次数\n"
+            "- 每个匹配的行号位置\n"
+            "- 建议扩大 old_str 范围或使用 start_line 消歧\n\n"
             "✅ 正确示例：\n"
             "1. edit(path='config.py', old_str='DEBUG = False', new_str='DEBUG = True')\n"
             "2. edit(path='data.txt', old_str='old content', new_str='new content')\n"
-            "3. edit(path='SKILL.md', old_str='version: 1.0', new_str='version: 1.1', skill_id='8')\n\n"
+            "3. edit(path='app.py', old_str='return True', new_str='return False', start_line=42)\n"
+            "4. edit(path='utils.py', old_str='old_name', new_str='new_name', replace_all=true)\n\n"
             "❌ 错误示例：\n"
             "错误1: edit(path='test.txt', old_str='old', new_str=None)\n"
             "原因：new_str 不能为 None\n"
@@ -380,11 +391,19 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 },
                 "old_str": {
                     "type": "string",
-                    "description": "要搜索的内容（必须精确匹配）。必须是非空字符串，不能为 None。"
+                    "description": "要搜索的内容（必须精确匹配，包括空格和换行）。必须是非空字符串，不能为 None。"
                 },
                 "new_str": {
                     "type": "string",
                     "description": "替换后的内容。必须是有效的字符串，不能为 None。"
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "从指定行号开始搜索（1-based）。用于在重复代码中精确定位。如果提供，必须是正整数。"
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "是否替换所有匹配项。默认 false（仅替换第一个匹配，且要求匹配唯一）。设为 true 时替换所有匹配。"
                 },
                 "skill_id": {
                     "type": "string",
