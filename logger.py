@@ -10,9 +10,17 @@
 - 支持DEBUG_MODE环境变量切换DEBUG级别
 - 区分控制台和文件日志级别
 - 使用延迟字符串格式化（%）避免无效字符串操作
+
+结构化日志支持（阶段5新增）：
+- trace_id：请求/任务唯一标识，用于关联一次完整操作的所有日志
+- operation_type：操作类型（如：model_load、audio_transcribe）
+- phase：操作阶段（如：init、download、load、complete、error）
+- error_code：错误码（成功为空，失败时为具体错误码）
 """
 import logging
 import os
+import random
+import string
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -133,6 +141,26 @@ def install_exception_hook():
     sys.excepthook = log_exception
 
 
+def generate_trace_id(module_name: str = "") -> str:
+    """
+    生成trace_id用于关联一次完整操作的所有日志
+    
+    Args:
+        module_name: 模块名称前缀（如：asr, llm）
+        
+    Returns:
+        格式为 {module_name}_{timestamp}_{random_4hex} 的trace_id
+        示例：asr_20260731_143025_a3f2
+    """
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    random_hex = ''.join(random.choices(string.hexdigits[:16], k=4))
+    
+    if module_name:
+        return f"{module_name}_{timestamp}_{random_hex}"
+    else:
+        return f"{timestamp}_{random_hex}"
+
+
 class LoggerAdapter:
     """日志适配器，提供便捷的日志方法
     
@@ -190,6 +218,146 @@ class LoggerAdapter:
                 self.logger.exception("[%s] " + msg, self._module_name, *args, **kwargs)
             else:
                 self.logger.exception(msg, *args, **kwargs)
+
+    def _format_structured_msg(
+        self,
+        msg: str,
+        trace_id: str = None,
+        operation_type: str = None,
+        phase: str = None,
+        error_code: str = None
+    ) -> str:
+        """
+        格式化结构化日志消息
+        
+        Args:
+            msg: 原始日志消息
+            trace_id: 请求/任务唯一标识
+            operation_type: 操作类型
+            phase: 操作阶段
+            error_code: 错误码
+            
+        Returns:
+            格式化后的结构化日志消息
+            示例：[trace_id=asr_20260731_143025_a3f2 | op=model_load | phase=init] 开始加载模型
+        """
+        context_parts = []
+        
+        if trace_id:
+            context_parts.append(f"trace_id={trace_id}")
+        if operation_type:
+            context_parts.append(f"op={operation_type}")
+        if phase:
+            context_parts.append(f"phase={phase}")
+        if error_code:
+            context_parts.append(f"error_code={error_code}")
+        
+        if context_parts:
+            structured_msg = "[" + " | ".join(context_parts) + "] " + msg
+        else:
+            structured_msg = msg
+        
+        return structured_msg
+
+    def debug_with_context(
+        self,
+        msg: str,
+        trace_id: str = None,
+        operation_type: str = None,
+        phase: str = None,
+        error_code: str = None,
+        *args,
+        **kwargs
+    ):
+        """带上下文的结构化debug日志"""
+        if self.logger.isEnabledFor(logging.DEBUG):
+            structured_msg = self._format_structured_msg(
+                msg, trace_id, operation_type, phase, error_code
+            )
+            if self._module_name:
+                self.logger.debug("[%s] " + structured_msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.debug(structured_msg, *args, **kwargs)
+
+    def info_with_context(
+        self,
+        msg: str,
+        trace_id: str = None,
+        operation_type: str = None,
+        phase: str = None,
+        error_code: str = None,
+        *args,
+        **kwargs
+    ):
+        """带上下文的结构化info日志"""
+        if self.logger.isEnabledFor(logging.INFO):
+            structured_msg = self._format_structured_msg(
+                msg, trace_id, operation_type, phase, error_code
+            )
+            if self._module_name:
+                self.logger.info("[%s] " + structured_msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.info(structured_msg, *args, **kwargs)
+
+    def warning_with_context(
+        self,
+        msg: str,
+        trace_id: str = None,
+        operation_type: str = None,
+        phase: str = None,
+        error_code: str = None,
+        *args,
+        **kwargs
+    ):
+        """带上下文的结构化warning日志"""
+        if self.logger.isEnabledFor(logging.WARNING):
+            structured_msg = self._format_structured_msg(
+                msg, trace_id, operation_type, phase, error_code
+            )
+            if self._module_name:
+                self.logger.warning("[%s] " + structured_msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.warning(structured_msg, *args, **kwargs)
+
+    def error_with_context(
+        self,
+        msg: str,
+        trace_id: str = None,
+        operation_type: str = None,
+        phase: str = None,
+        error_code: str = None,
+        *args,
+        **kwargs
+    ):
+        """带上下文的结构化error日志"""
+        if self.logger.isEnabledFor(logging.ERROR):
+            structured_msg = self._format_structured_msg(
+                msg, trace_id, operation_type, phase, error_code
+            )
+            if self._module_name:
+                self.logger.error("[%s] " + structured_msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.error(structured_msg, *args, **kwargs)
+
+    def exception_with_context(
+        self,
+        msg: str,
+        trace_id: str = None,
+        operation_type: str = None,
+        phase: str = None,
+        error_code: str = None,
+        *args,
+        **kwargs
+    ):
+        """带上下文的结构化exception日志（自动包含异常堆栈）"""
+        if self.logger.isEnabledFor(logging.ERROR):
+            structured_msg = self._format_structured_msg(
+                msg, trace_id, operation_type, phase, error_code
+            )
+            if self._module_name:
+                self.logger.exception("[%s] " + structured_msg, self._module_name, *args, **kwargs)
+            else:
+                self.logger.exception(structured_msg, *args, **kwargs)
 
 
 def get_module_logger(module_name: str) -> LoggerAdapter:
