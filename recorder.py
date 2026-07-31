@@ -13,6 +13,7 @@ from typing import Optional, Callable
 from logger import get_module_logger
 from resource_path import paths
 import config
+from utils.lazy_loader import scipy_signal
 
 logger = get_module_logger("recorder")
 
@@ -1008,15 +1009,26 @@ def transcribe_audio_with_onnx(audio_path: Path, progress_callback: Optional[Cal
         
         # 重采样到 16kHz（如果需要）
         if sample_rate != 16000:
-            import scipy.signal
-            logger.info(f"重采样: {sample_rate}Hz -> 16000Hz")
-            if progress_callback:
-                progress_callback(15, f"重采样: {sample_rate}Hz -> 16000Hz")
-            audio_array = scipy.signal.resample_poly(
-                audio_array,
-                16000,
-                sample_rate
-            ).astype(np.int16)
+            # 延迟加载scipy.signal
+            signal = scipy_signal.load()
+            if signal:
+                logger.info(f"重采样: {sample_rate}Hz -> 16000Hz")
+                if progress_callback:
+                    progress_callback(15, f"重采样: {sample_rate}Hz -> 16000Hz")
+                audio_array = signal.resample_poly(
+                    audio_array,
+                    16000,
+                    sample_rate
+                ).astype(np.int16)
+            else:
+                # 降级方案：使用numpy实现简单重采样
+                logger.warning("scipy.signal不可用，使用numpy降级方案进行重采样")
+                if progress_callback:
+                    progress_callback(15, f"重采样（降级方案）: {sample_rate}Hz -> 16000Hz")
+                ratio = 16000 / sample_rate
+                n_samples = int(len(audio_array) * ratio)
+                indices = np.linspace(0, len(audio_array) - 1, n_samples)
+                audio_array = np.interp(indices, np.arange(len(audio_array)), audio_array).astype(np.int16)
         
         # 判断是否需要分块处理
         if duration > chunk_threshold:

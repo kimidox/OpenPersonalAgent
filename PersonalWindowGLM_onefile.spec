@@ -8,6 +8,7 @@ block_cipher = None
 # UPX压缩配置 - 需要安装UPX并添加到PATH环境变量
 # UPX下载地址: https://github.com/upx/upx/releases
 # 如果未安装UPX，将upx_enable设置为False
+# 单文件模式默认禁用UPX（避免启动过慢）
 upx_enable = False
 upx_dir = None  # 如果UPX不在PATH中，可以指定UPX目录路径，例如: r'C:\upx'
 
@@ -36,8 +37,17 @@ a = Analysis(
     pathex=[],
     binaries=onnxruntime_binaries,
     datas=[
-        ('ui/styles/ui_skill_agent_styles.css', 'ui/styles'),
+        # PySide6 相关样式已移除（项目已迁移到 Flet）
+        # ('ui/styles/ui_skill_agent_styles.css', 'ui/styles'),
         ('application.ico', '.'),
+        # 只打包必要的PersonalData子目录，排除模型目录和临时文件
+        ('PersonalData/data', 'PersonalData/data'),
+        ('PersonalData/Skills', 'PersonalData/Skills'),
+        # 排除以下目录:
+        # - PersonalData/model (模型文件，体积过大，运行时下载)
+        # - PersonalData/logs (运行时日志)
+        # - PersonalData/records (用户录音文件)
+        # - PersonalData/tts (TTS输出音频)
         ('.env', '.'),
         ('Skills', 'Skills'),
     ],
@@ -49,18 +59,8 @@ a = Analysis(
         'executor',
         'skill_agent',
         'skill_agent_preferences',
-        'recorder',
-        'prompt_template_config',
-        'tts',
         'ui',
         'ui_skill_agent',
-        'scheduled_tasks',
-        'scheduler',
-        'notification',
-        'autostart',
-        'automation',
-        'prompt',
-        'document_parser',
         'base_tool',
         'base_tool.context',
         'base_tool.definitions',
@@ -87,27 +87,23 @@ a = Analysis(
         'skill.processing',
         'skill.registry',
         'skill.types',
-        'PySide6.QtWidgets',
-        'PySide6.QtCore',
-        'PySide6.QtGui',
+        # Flet 相关模块（项目已迁移到 Flet）
+        'flet',
+        'flet_core',
+        'flet_core.app',
+        'flet_core.page',
+        'flet_core.controls',
+        # 延迟加载的重型依赖（打包但不自动加载）
+        'scipy.signal',  # 音频重采样（延迟加载）
+        'cv2',  # 图像处理/模板匹配（延迟加载）
+        'pandas',  # 数据处理（延迟加载）
+        'utils.lazy_loader',  # 延迟加载工具
         'sqlalchemy.dialects.sqlite',
         'sqlalchemy.orm',
         'openai',
         'dotenv',
         'pyautogui',
         'PIL',
-        'openpyxl',
-        'xlrd',
-        'jieba',
-        'python-docx',
-        'pdfplumber',
-        'sounddevice',
-        'numpy',
-        'faster-whisper',
-        'onnxruntime',
-        'comtypes',
-        'uiautomation',
-        'scipy'
     ],
     hookspath=[],
     hooksconfig={},
@@ -163,7 +159,15 @@ a = Analysis(
         'flake8',
         'autopep8',
         'yapf',
-        'black'
+        'black',
+        # 排除 PySide6 相关库（已迁移到 Flet）
+        'PySide6',
+        'PySide6.QtWidgets',
+        'PySide6.QtCore',
+        'PySide6.QtGui',
+        'shiboken6',
+        'PyQt6',
+        'PyQt5',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -203,7 +207,7 @@ exe = EXE(
         '*.int8.onnx',  # int8量化模型
     ],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
