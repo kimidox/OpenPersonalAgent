@@ -13,6 +13,10 @@ from typing import Any, Optional
 from .uia_client import UIAClient, UIElementInfo, get_uia_client
 from .success_rate_tracker import get_tracker
 
+from logger import get_module_logger, generate_trace_id
+
+logger = get_module_logger("ActionExecutor")
+
 
 class ActionExecutor:
     """动作执行器"""
@@ -25,6 +29,71 @@ class ActionExecutor:
             client: UIA 客户端
         """
         self.client = client or get_uia_client()
+
+    def _resolve_element(
+        self,
+        element: Any,
+        auto_module,
+        error_key: str = "success",
+        error_label: str = "error",
+    ) -> tuple[Any, dict[str, Any] | None]:
+        """从元素信息字典或元素对象解析为 UI 元素对象。
+
+        将 7 个操作方法中重复的 isinstance(element, dict) 判断和 FindControl
+        搜索逻辑统一提取到此方法，消除代码重复。
+
+        Args:
+            element: 元素对象（直接传入）或元素信息字典（含 automation_id/name/control_type）。
+            auto_module: uiautomation 模块，由调用方在其 try 块内 import 后传入。
+            error_key: 失败时返回字典的主键名，默认 "success"；
+                verify_operation_feasible 传 "feasible"。
+            error_label: 失败时返回字典的错误描述键名，默认 "error"；
+                verify_operation_feasible 传 "reason"。
+
+        Returns:
+            (target, None)  — 成功解析到 UI 元素对象。
+            (None, error_dict) — 解析失败，error_dict 包含错误信息。
+        """
+        if isinstance(element, dict):
+            automation_id = element.get("automation_id", "")
+            name = element.get("name", "")
+            control_type = element.get("control_type", "")
+
+            target = None
+            if automation_id:
+                target = auto_module.FindControl(
+                    lambda c: c.AutomationId == automation_id, searchDepth=10
+                )
+            elif name:
+                ct = self.client._str_to_control_type(control_type) if control_type else None
+                if ct:
+                    target = auto_module.FindControl(
+                        lambda c: c.ControlType == ct
+                        and name.lower() in (c.Name or "").lower(),
+                        searchDepth=10,
+                    )
+                else:
+                    target = auto_module.FindControl(
+                        lambda c: name.lower() in (c.Name or "").lower(),
+                        searchDepth=10,
+                    )
+            else:
+                return None, {
+                    error_key: False,
+                    error_label: "元素信息不足，无法定位",
+                    "elapsed_ms": 0,
+                }
+        else:
+            target = element
+
+        if not target:
+            return None, {
+                error_key: False,
+                error_label: "未找到目标元素",
+                "elapsed_ms": 0,
+            }
+
+        return target, None
 
     def click(
         self,
@@ -43,47 +112,19 @@ class ActionExecutor:
         Returns:
             执行结果
         """
+        trace_id = generate_trace_id("action_executor")
+        logger.debug_with_context(f"click: method={method}, wait_time={wait_time}", trace_id=trace_id, operation_type="ui_action", phase="start")
         start_time = time.time()
 
         try:
             import uiautomation as auto
 
             # 获取元素对象
-            if isinstance(element, dict):
-                # 从元素信息重建元素对象
-                automation_id = element.get("automation_id", "")
-                name = element.get("name", "")
-                control_type = element.get("control_type", "")
-
-                if automation_id:
-                    target = auto.FindControl(lambda c: c.AutomationId == automation_id, searchDepth=10)
-                elif name:
-                    ct = self.client._str_to_control_type(control_type) if control_type else None
-                    if ct:
-                        target = auto.FindControl(
-                            lambda c: c.ControlType == ct and name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                    else:
-                        target = auto.FindControl(
-                            lambda c: name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                else:
-                    return {
-                        "success": False,
-                        "error": "元素信息不足，无法定位",
-                        "elapsed_ms": int((time.time() - start_time) * 1000),
-                    }
-            else:
-                target = element
-
-            if not target:
-                return {
-                    "success": False,
-                    "error": "未找到目标元素",
-                    "elapsed_ms": int((time.time() - start_time) * 1000),
-                }
+            target, resolve_error = self._resolve_element(element, auto)
+            if resolve_error is not None:
+                resolve_error["elapsed_ms"] = int((time.time() - start_time) * 1000)
+                logger.debug_with_context("click: resolve element failed", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="resolve_failed")
+                return resolve_error
 
             # 执行点击
             if method == "invoke":
@@ -99,6 +140,7 @@ class ActionExecutor:
                         center_y = (rect.top + rect.bottom) // 2
                         auto.Click(center_x, center_y)
                     else:
+                        logger.debug_with_context("click: no InvokePattern and no coords", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="no_pattern_no_coords")
                         return {
                             "success": False,
                             "error": "元素不支持 InvokePattern 且无法获取坐标",
@@ -112,12 +154,14 @@ class ActionExecutor:
                     center_y = (rect.top + rect.bottom) // 2
                     auto.Click(center_x, center_y)
                 else:
+                    logger.debug_with_context("click: no coords for mouse click", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="no_coords")
                     return {
                         "success": False,
                         "error": "无法获取元素坐标",
                         "elapsed_ms": int((time.time() - start_time) * 1000),
-                        }
+                    }
             else:
+                logger.debug_with_context(f"click: unknown method {method}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="unknown_method")
                 return {
                     "success": False,
                     "error": f"未知的点击方法: {method}",
@@ -128,6 +172,7 @@ class ActionExecutor:
                 time.sleep(wait_time)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.debug_with_context(f"click: success, elapsed_ms={elapsed_ms}", trace_id=trace_id, operation_type="ui_action", phase="complete")
 
             return {
                 "success": True,
@@ -137,6 +182,7 @@ class ActionExecutor:
             }
 
         except Exception as e:
+            logger.debug_with_context(f"click: exception {e}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="exception")
             return {
                 "success": False,
                 "error": str(e),
@@ -164,53 +210,25 @@ class ActionExecutor:
         Returns:
             执行结果
         """
+        trace_id = generate_trace_id("action_executor")
+        logger.debug_with_context(f"type_text: method={method}, clear_first={clear_first}", trace_id=trace_id, operation_type="ui_action", phase="start")
         start_time = time.time()
 
         try:
             import uiautomation as auto
 
             # 获取元素对象
-            if isinstance(element, dict):
-                automation_id = element.get("automation_id", "")
-                name = element.get("name", "")
-                control_type = element.get("control_type", "")
-
-                if automation_id:
-                    target = auto.FindControl(lambda c: c.AutomationId == automation_id, searchDepth=10)
-                elif name:
-                    ct = self.client._str_to_control_type(control_type) if control_type else None
-                    if ct:
-                        target = auto.FindControl(
-                            lambda c: c.ControlType == ct and name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                    else:
-                        target = auto.FindControl(
-                            lambda c: name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                else:
-                    return {
-                        "success": False,
-                        "error": "元素信息不足，无法定位",
-                        "elapsed_ms": int((time.time() - start_time) * 1000),
-                    }
-            else:
-                target = element
-
-            if not target:
-                return {
-                    "success": False,
-                    "error": "未找到目标元素",
-                    "elapsed_ms": int((time.time() - start_time) * 1000),
-                }
+            target, resolve_error = self._resolve_element(element, auto)
+            if resolve_error is not None:
+                resolve_error["elapsed_ms"] = int((time.time() - start_time) * 1000)
+                logger.debug_with_context("type_text: resolve element failed", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="resolve_failed")
+                return resolve_error
 
             # 确保元素有焦点
             try:
                 target.SetFocus()
                 time.sleep(0.05)
-            except Exception:
-                pass
+            except Exception as e: logger.debug("SetFocus 失败（非关键）: %s", e)
 
             # 执行输入
             if method == "value":
@@ -231,6 +249,7 @@ class ActionExecutor:
                     target.SendKeys("{Ctrl}{A}{Delete}", waitTime=0.05)
                 target.SendKeys(text, waitTime=0.05)
             else:
+                logger.debug_with_context(f"type_text: unknown method {method}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="unknown_method")
                 return {
                     "success": False,
                     "error": f"未知的输入方法: {method}",
@@ -241,6 +260,7 @@ class ActionExecutor:
                 time.sleep(wait_time)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.debug_with_context(f"type_text: success, elapsed_ms={elapsed_ms}", trace_id=trace_id, operation_type="ui_action", phase="complete")
 
             return {
                 "success": True,
@@ -251,6 +271,7 @@ class ActionExecutor:
             }
 
         except Exception as e:
+            logger.debug_with_context(f"type_text: exception {e}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="exception")
             return {
                 "success": False,
                 "error": str(e),
@@ -276,46 +297,19 @@ class ActionExecutor:
         Returns:
             执行结果
         """
+        trace_id = generate_trace_id("action_executor")
+        logger.debug_with_context(f"scroll: direction={direction}, amount={amount}", trace_id=trace_id, operation_type="ui_action", phase="start")
         start_time = time.time()
 
         try:
             import uiautomation as auto
 
             # 获取元素对象
-            if isinstance(element, dict):
-                automation_id = element.get("automation_id", "")
-                name = element.get("name", "")
-                control_type = element.get("control_type", "")
-
-                if automation_id:
-                    target = auto.FindControl(lambda c: c.AutomationId == automation_id, searchDepth=10)
-                elif name:
-                    ct = self.client._str_to_control_type(control_type) if control_type else None
-                    if ct:
-                        target = auto.FindControl(
-                            lambda c: c.ControlType == ct and name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                    else:
-                        target = auto.FindControl(
-                            lambda c: name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                else:
-                    return {
-                        "success": False,
-                        "error": "元素信息不足，无法定位",
-                        "elapsed_ms": int((time.time() - start_time) * 1000),
-                    }
-            else:
-                target = element
-
-            if not target:
-                return {
-                    "success": False,
-                    "error": "未找到目标元素",
-                    "elapsed_ms": int((time.time() - start_time) * 1000),
-                }
+            target, resolve_error = self._resolve_element(element, auto)
+            if resolve_error is not None:
+                resolve_error["elapsed_ms"] = int((time.time() - start_time) * 1000)
+                logger.debug_with_context("scroll: resolve element failed", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="resolve_failed")
+                return resolve_error
 
             # 使用 ScrollPattern
             scroll_pattern = target.GetPattern(auto.PatternScroll)
@@ -359,6 +353,7 @@ class ActionExecutor:
                             auto.ScrollWheel(scroll_amount, isHorizontal=True)
                         time.sleep(0.05)
                 else:
+                    logger.debug_with_context("scroll: no ScrollPattern and no coords", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="no_pattern_no_coords")
                     return {
                         "success": False,
                         "error": "元素不支持 ScrollPattern 且无法获取坐标",
@@ -366,6 +361,7 @@ class ActionExecutor:
                     }
 
             elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.debug_with_context(f"scroll: success, elapsed_ms={elapsed_ms}", trace_id=trace_id, operation_type="ui_action", phase="complete")
 
             return {
                 "success": True,
@@ -377,6 +373,7 @@ class ActionExecutor:
             }
 
         except Exception as e:
+            logger.debug_with_context(f"scroll: exception {e}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="exception")
             return {
                 "success": False,
                 "error": str(e),
@@ -398,46 +395,19 @@ class ActionExecutor:
         Returns:
             执行结果
         """
+        trace_id = generate_trace_id("action_executor")
+        logger.debug_with_context(f"expand_collapse: action={action}", trace_id=trace_id, operation_type="ui_action", phase="start")
         start_time = time.time()
 
         try:
             import uiautomation as auto
 
             # 获取元素对象
-            if isinstance(element, dict):
-                automation_id = element.get("automation_id", "")
-                name = element.get("name", "")
-                control_type = element.get("control_type", "")
-
-                if automation_id:
-                    target = auto.FindControl(lambda c: c.AutomationId == automation_id, searchDepth=10)
-                elif name:
-                    ct = self.client._str_to_control_type(control_type) if control_type else None
-                    if ct:
-                        target = auto.FindControl(
-                            lambda c: c.ControlType == ct and name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                    else:
-                        target = auto.FindControl(
-                            lambda c: name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                else:
-                    return {
-                        "success": False,
-                        "error": "元素信息不足，无法定位",
-                        "elapsed_ms": int((time.time() - start_time) * 1000),
-                    }
-            else:
-                target = element
-
-            if not target:
-                return {
-                    "success": False,
-                    "error": "未找到目标元素",
-                    "elapsed_ms": int((time.time() - start_time) * 1000),
-                }
+            target, resolve_error = self._resolve_element(element, auto)
+            if resolve_error is not None:
+                resolve_error["elapsed_ms"] = int((time.time() - start_time) * 1000)
+                logger.debug_with_context("expand_collapse: resolve element failed", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="resolve_failed")
+                return resolve_error
 
             # 使用 ExpandCollapsePattern
             expand_pattern = target.GetPattern(auto.PatternExpandCollapse)
@@ -453,12 +423,14 @@ class ActionExecutor:
                     else:
                         expand_pattern.Collapse()
                 else:
+                    logger.debug_with_context(f"expand_collapse: unknown action {action}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="unknown_action")
                     return {
                         "success": False,
                         "error": f"未知的动作: {action}",
                         "elapsed_ms": int((time.time() - start_time) * 1000),
                     }
             else:
+                logger.debug_with_context("expand_collapse: no ExpandCollapsePattern", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="no_pattern")
                 return {
                     "success": False,
                     "error": "元素不支持 ExpandCollapsePattern",
@@ -466,6 +438,7 @@ class ActionExecutor:
                 }
 
             elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.debug_with_context(f"expand_collapse: success, elapsed_ms={elapsed_ms}", trace_id=trace_id, operation_type="ui_action", phase="complete")
 
             return {
                 "success": True,
@@ -475,6 +448,7 @@ class ActionExecutor:
             }
 
         except Exception as e:
+            logger.debug_with_context(f"expand_collapse: exception {e}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="exception")
             return {
                 "success": False,
                 "error": str(e),
@@ -494,46 +468,19 @@ class ActionExecutor:
         Returns:
             执行结果
         """
+        trace_id = generate_trace_id("action_executor")
+        logger.debug_with_context("toggle", trace_id=trace_id, operation_type="ui_action", phase="start")
         start_time = time.time()
 
         try:
             import uiautomation as auto
 
             # 获取元素对象
-            if isinstance(element, dict):
-                automation_id = element.get("automation_id", "")
-                name = element.get("name", "")
-                control_type = element.get("control_type", "")
-
-                if automation_id:
-                    target = auto.FindControl(lambda c: c.AutomationId == automation_id, searchDepth=10)
-                elif name:
-                    ct = self.client._str_to_control_type(control_type) if control_type else None
-                    if ct:
-                        target = auto.FindControl(
-                            lambda c: c.ControlType == ct and name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                    else:
-                        target = auto.FindControl(
-                            lambda c: name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                else:
-                    return {
-                        "success": False,
-                        "error": "元素信息不足，无法定位",
-                        "elapsed_ms": int((time.time() - start_time) * 1000),
-                    }
-            else:
-                target = element
-
-            if not target:
-                return {
-                    "success": False,
-                    "error": "未找到目标元素",
-                    "elapsed_ms": int((time.time() - start_time) * 1000),
-                }
+            target, resolve_error = self._resolve_element(element, auto)
+            if resolve_error is not None:
+                resolve_error["elapsed_ms"] = int((time.time() - start_time) * 1000)
+                logger.debug_with_context("toggle: resolve element failed", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="resolve_failed")
+                return resolve_error
 
             # 使用 TogglePattern
             toggle_pattern = target.GetPattern(auto.PatternToggle)
@@ -544,6 +491,7 @@ class ActionExecutor:
                 return self.click(target, method="invoke")
 
             elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.debug_with_context(f"toggle: success, elapsed_ms={elapsed_ms}", trace_id=trace_id, operation_type="ui_action", phase="complete")
 
             return {
                 "success": True,
@@ -552,6 +500,7 @@ class ActionExecutor:
             }
 
         except Exception as e:
+            logger.debug_with_context(f"toggle: exception {e}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="exception")
             return {
                 "success": False,
                 "error": str(e),
@@ -568,38 +517,19 @@ class ActionExecutor:
         Returns:
             元素状态信息
         """
+        trace_id = generate_trace_id("action_executor")
+        logger.debug_with_context("get_element_state", trace_id=trace_id, operation_type="ui_action", phase="start")
         start_time = time.time()
 
         try:
             import uiautomation as auto
 
             # 获取元素对象
-            if isinstance(element, dict):
-                automation_id = element.get("automation_id", "")
-                name = element.get("name", "")
-
-                if automation_id:
-                    target = auto.FindControl(lambda c: c.AutomationId == automation_id, searchDepth=10)
-                elif name:
-                    target = auto.FindControl(
-                        lambda c: name.lower() in (c.Name or "").lower(),
-                        searchDepth=10
-                    )
-                else:
-                    return {
-                        "success": False,
-                        "error": "元素信息不足，无法定位",
-                        "elapsed_ms": int((time.time() - start_time) * 1000),
-                    }
-            else:
-                target = element
-
-            if not target:
-                return {
-                    "success": False,
-                    "error": "未找到目标元素",
-                    "elapsed_ms": int((time.time() - start_time) * 1000),
-                }
+            target, resolve_error = self._resolve_element(element, auto)
+            if resolve_error is not None:
+                resolve_error["elapsed_ms"] = int((time.time() - start_time) * 1000)
+                logger.debug_with_context("get_element_state: resolve element failed", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="resolve_failed")
+                return resolve_error
 
             # 获取状态
             state = {
@@ -615,24 +545,22 @@ class ActionExecutor:
                 toggle_pattern = target.GetPattern(auto.PatternToggle)
                 if toggle_pattern:
                     state["toggle_state"] = str(toggle_pattern.ToggleState)
-            except Exception:
-                pass
+            except Exception as e: logger.debug("获取 TogglePattern 失败: %s", e)
 
             try:
                 expand_pattern = target.GetPattern(auto.PatternExpandCollapse)
                 if expand_pattern:
                     state["expand_state"] = str(expand_pattern.ExpandCollapseState)
-            except Exception:
-                pass
+            except Exception as e: logger.debug("获取 ExpandCollapsePattern 失败: %s", e)
 
             try:
                 value_pattern = target.GetPattern(auto.PatternValue)
                 if value_pattern:
                     state["value"] = value_pattern.Value
-            except Exception:
-                pass
+            except Exception as e: logger.debug("获取 ValuePattern 失败: %s", e)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.debug_with_context(f"get_element_state: success, elapsed_ms={elapsed_ms}", trace_id=trace_id, operation_type="ui_action", phase="complete")
 
             return {
                 "success": True,
@@ -641,6 +569,7 @@ class ActionExecutor:
             }
 
         except Exception as e:
+            logger.debug_with_context(f"get_element_state: exception {e}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="exception")
             return {
                 "success": False,
                 "error": str(e),
@@ -658,46 +587,19 @@ class ActionExecutor:
         Returns:
             验证结果
         """
+        trace_id = generate_trace_id("action_executor")
+        logger.debug_with_context(f"verify_operation_feasible: operation={operation}", trace_id=trace_id, operation_type="ui_action", phase="start")
         start_time = time.time()
-        
+
         try:
             import uiautomation as auto
-            
+
             # 获取元素对象
-            if isinstance(element, dict):
-                automation_id = element.get("automation_id", "")
-                name = element.get("name", "")
-                control_type = element.get("control_type", "")
-                
-                if automation_id:
-                    target = auto.FindControl(lambda c: c.AutomationId == automation_id, searchDepth=10)
-                elif name:
-                    ct = self.client._str_to_control_type(control_type) if control_type else None
-                    if ct:
-                        target = auto.FindControl(
-                            lambda c: c.ControlType == ct and name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                    else:
-                        target = auto.FindControl(
-                            lambda c: name.lower() in (c.Name or "").lower(),
-                            searchDepth=10
-                        )
-                else:
-                    return {
-                        "feasible": False,
-                        "reason": "元素信息不足，无法定位",
-                        "elapsed_ms": int((time.time() - start_time) * 1000),
-                    }
-            else:
-                target = element
-            
-            if not target:
-                return {
-                    "feasible": False,
-                    "reason": "元素不存在",
-                    "elapsed_ms": int((time.time() - start_time) * 1000),
-                }
+            target, resolve_error = self._resolve_element(element, auto, error_key="feasible", error_label="reason")
+            if resolve_error is not None:
+                resolve_error["elapsed_ms"] = int((time.time() - start_time) * 1000)
+                logger.debug_with_context("verify_operation_feasible: resolve element failed", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="resolve_failed")
+                return resolve_error
             
             # 检查元素是否支持目标操作
             if operation == "click":
@@ -795,13 +697,15 @@ class ActionExecutor:
                         "elapsed_ms": int((time.time() - start_time) * 1000),
                     }
             
+            logger.debug_with_context(f"verify_operation_feasible: default allow for operation={operation}", trace_id=trace_id, operation_type="ui_action", phase="complete")
             return {
                 "feasible": True,
                 "reason": f"操作 '{operation}' 未进行可行性检查，默认允许",
                 "elapsed_ms": int((time.time() - start_time) * 1000),
             }
-        
+
         except Exception as e:
+            logger.debug_with_context(f"verify_operation_feasible: exception {e}", trace_id=trace_id, operation_type="ui_action", phase="error", error_code="exception")
             return {
                 "feasible": False,
                 "reason": f"验证操作可行性时发生错误: {e}",
@@ -1027,26 +931,26 @@ class ActionExecutor:
         for i, m in enumerate(methods[:max_retries]):
             try:
                 if operation == "click":
-                    result = self.click(element, method=m, **kwargs)
-                    tracker.record_operation_attempt("click", m, result.get("success", False), element_name)
+                    operation_result = self.click(element, method=m, **kwargs)
+                    tracker.record_operation_attempt("click", m, operation_result.get("success", False), element_name)
                 elif operation == "type":
                     text = kwargs.get("text", "")
-                    result = self.type_text(element, text=text, method=m, **kwargs)
-                    tracker.record_operation_attempt("type_text", m, result.get("success", False), element_name)
+                    operation_result = self.type_text(element, text=text, method=m, **kwargs)
+                    tracker.record_operation_attempt("type_text", m, operation_result.get("success", False), element_name)
                 elif operation == "scroll":
-                    result = self.scroll(element, **kwargs)
-                    tracker.record_operation_attempt("scroll", "default", result.get("success", False), element_name)
+                    operation_result = self.scroll(element, **kwargs)
+                    tracker.record_operation_attempt("scroll", "default", operation_result.get("success", False), element_name)
                 else:
-                    result = {"success": False, "error": f"未知操作: {operation}"}
+                    operation_result = {"success": False, "error": f"未知操作: {operation}"}
                 
-                if result.get("success"):
-                    result["used_method"] = m
-                    result["retry_count"] = i
-                    return result
+                if operation_result.get("success"):
+                    operation_result["used_method"] = m
+                    operation_result["retry_count"] = i
+                    return operation_result
                 
                 results_list.append({
                     "method": m,
-                    "error": result.get("error", "操作失败"),
+                    "error": operation_result.get("error", "操作失败"),
                 })
                 
             except Exception as e:
@@ -1100,16 +1004,16 @@ class ActionExecutor:
         }
         
         # 执行点击
-        result = self.click(element, method=method, wait_time=wait_time)
+        click_result = self.click(element, method=method, wait_time=wait_time)
         
-        if not result.get("success"):
-            return result
+        if not click_result.get("success"):
+            return click_result
         
         # 验证点击结果
         verify_result = self.verify_click_result(element, before_state)
-        result["verification"] = verify_result
+        click_result["verification"] = verify_result
         
-        return result
+        return click_result
 
     def type_with_verification(
         self,
@@ -1142,20 +1046,20 @@ class ActionExecutor:
             }
         
         # 执行输入
-        result = self.type_text(element, text=text, method=method, clear_first=clear_first, wait_time=wait_time)
+        input_result = self.type_text(element, text=text, method=method, clear_first=clear_first, wait_time=wait_time)
         
-        if not result.get("success"):
-            return result
+        if not input_result.get("success"):
+            return input_result
         
         # 验证输入结果
         verify_result = self.verify_type_result(element, text)
-        result["verification"] = verify_result
+        input_result["verification"] = verify_result
         
         if not verify_result.get("verified"):
-            result["success"] = False
-            result["error"] = verify_result.get("reason", "输入验证失败")
+            input_result["success"] = False
+            input_result["error"] = verify_result.get("reason", "输入验证失败")
         
-        return result
+        return input_result
 
 
 # 单例执行器

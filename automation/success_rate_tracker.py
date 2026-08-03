@@ -9,6 +9,10 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from logger import get_module_logger
+
+logger = get_module_logger("SuccessRateTracker")
+
 
 class SuccessRateTracker:
     """成功率统计器"""
@@ -31,8 +35,8 @@ class SuccessRateTracker:
         if self.stats_file.exists():
             try:
                 return json.loads(self.stats_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("记录操作结果异常: %s", e)
         return {
             "find_methods": {},
             "operations": {},
@@ -51,8 +55,8 @@ class SuccessRateTracker:
                 json.dumps(self.stats, indent=2, ensure_ascii=False),
                 encoding="utf-8"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("获取成功率异常: %s", e)
     
     def record_find_attempt(self, method: str, success: bool, element_name: str = None):
         """

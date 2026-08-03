@@ -10,6 +10,10 @@ from executor import Executor
 import config
 from llm import get_chat_model
 
+from logger import get_module_logger, generate_trace_id
+
+logger = get_module_logger("Agent")
+
 
 
 
@@ -36,6 +40,8 @@ class Agent:
 
     
     def run(self, task: str, log_callback=None) -> str:
+        trace_id = generate_trace_id("agent")
+        logger.info_with_context(f"Agent.run 开始执行任务: {task[:100]}", trace_id=trace_id, operation_type="agent_run", phase="start")
         model = get_chat_model()
 
         # Step 1: Preliminary model pass to decide if a screenshot is needed
@@ -49,4 +55,5 @@ class Agent:
         )
         if log_callback:
             log_callback(str(pre_actions), "response")
+        logger.info_with_context("Agent.run 任务完成", trace_id=trace_id, operation_type="agent_run", phase="complete")
         return "完成"

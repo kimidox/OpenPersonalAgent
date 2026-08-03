@@ -11,7 +11,8 @@ import flet as ft
 
 from logger import get_logger
 from ui_flet.theme import ThemeManager
-from ui_flet.utils.message_utils import try_parse_json_content
+from ui_flet.viewmodels.conversation_viewmodel import ConversationViewModel
+from ui_flet.viewmodels.agent_viewmodel import AgentViewModel
 
 
 class ConversationManagerMixin:
@@ -42,7 +43,7 @@ class ConversationManagerMixin:
         self._logger.info("创建新会话")
 
         # 检查是否有正在运行的任务
-        if self._worker_thread and self._worker_thread.is_alive():
+        if self._agent_vm.is_worker_alive():
             self._logger.warning("当前仍有对话在执行，请结束后再新建会话")
             # 可以添加一个提示对话框
             return
@@ -60,7 +61,7 @@ class ConversationManagerMixin:
         self._logger.info(f"删除会话: {conversation_id}")
 
         # 检查是否有正在运行的任务
-        if self._worker_thread and self._worker_thread.is_alive():
+        if self._agent_vm.is_worker_alive():
             self._logger.warning("该会话正在执行中，请结束后再删除")
             self._show_snackbar("该会话正在执行中，请结束后再删除", error=True)
             return
@@ -182,13 +183,17 @@ class ConversationManagerMixin:
 
     def _create_new_conversation(self) -> str | None:
         """创建新会话并返回会话ID"""
-        if not self.skill_agent:
+        vm: ConversationViewModel = self._conversation_vm
+        if not vm.is_available:
             self._logger.error("SkillAgent 未初始化，无法创建会话")
             return None
 
         try:
-            # 调用 SkillAgent 创建新会话
-            conversation_id, title = self.skill_agent.start_new_conversation()
+            # 通过 ViewModel 创建新会话
+            result = vm.start_new_conversation()
+            if result is None:
+                return None
+            conversation_id, title = result
             self._logger.info(f"创建新会话: {conversation_id}")
 
             # 添加到状态管理
@@ -220,9 +225,8 @@ class ConversationManagerMixin:
         # 设置当前会话
         self._app_state.session.set_current_conversation(conversation_id)
 
-        # 设置 SkillAgent 的当前会话
-        if self.skill_agent:
-            self.skill_agent.set_conversation_id(conversation_id)
+        # 通过 ViewModel 设置当前会话
+        self._conversation_vm.set_conversation_id(conversation_id)
 
         # 更新侧边栏选中状态
         if self._conversation_sidebar:
@@ -253,7 +257,8 @@ class ConversationManagerMixin:
 
     def _load_conversation_messages(self, conversation_id: str) -> None:
         """加载会话的历史消息（分页加载，默认加载最近10条）"""
-        if not self.skill_agent or not self._message_list:
+        vm: ConversationViewModel = self._conversation_vm
+        if not vm.is_available or not self._message_list:
             return
 
         try:
@@ -268,7 +273,7 @@ class ConversationManagerMixin:
             PAGE_SIZE = 10
 
             # 获取总消息数（用于判断是否有更多消息）
-            all_records = self.skill_agent.message_records_for_conversation(conversation_id)
+            all_records = vm.message_records_for_conversation(conversation_id)
             total_count = len(all_records)
 
             # 只加载最近 PAGE_SIZE 条消息
@@ -289,44 +294,23 @@ class ConversationManagerMixin:
             # 重放消息
             for record in records:
                 role = str(record.get("role", ""))
-                # 防御性处理：to_record_dict 已将 None content 归一化为 ""，
-                # 此处仍用 or 兜底，避免任何历史脏数据导致 str(None) = "None" 渲染问题
                 raw_content = record.get("content")
 
-                # 处理内容：支持多模态消息格式
-                if raw_content is None:
-                    content = ""
-                    self._logger.debug(f"历史消息 {role} content 为 None，使用空字符串")
-                elif isinstance(raw_content, list):
-                    # 已经是列表格式（多模态），直接使用
-                    content = raw_content
+                # 通过 ViewModel 解析消息内容
+                content = ConversationViewModel.parse_message_content(raw_content)
+                # 保留日志：记录多模态情况
+                if isinstance(raw_content, list):
                     image_count = sum(1 for item in raw_content if isinstance(item, dict) and item.get("type") == "image_url")
                     self._logger.info(f"检测到多模态历史消息 {role}，图片数量: {image_count}")
-                elif isinstance(raw_content, str):
-                    # 尝试解析为 JSON（可能是多模态格式）
-                    parsed_content = try_parse_json_content(raw_content)
-                    if isinstance(parsed_content, list):
-                        content = parsed_content
-                        image_count = sum(1 for item in parsed_content if isinstance(item, dict) and item.get("type") == "image_url")
-                        self._logger.info(f"解析多模态历史消息 {role} 成功，图片数量: {image_count}")
-                    else:
-                        content = raw_content
-                        self._logger.debug(f"历史消息 {role} 为纯文本，长度: {len(raw_content)}")
-                else:
-                    # 其他类型（如 dict），转换为字符串
-                    content = str(raw_content)
-                    self._logger.warning(f"历史消息 {role} content 类型异常: {type(raw_content)}，转换为字符串")
+                elif isinstance(content, list):
+                    image_count = sum(1 for item in content if isinstance(item, dict) and item.get("type") == "image_url")
+                    self._logger.info(f"解析多模态历史消息 {role} 成功，图片数量: {image_count}")
+
                 metadata = record.get("metadata", {}) or {}
 
-                if role == "user":
-                    msg_type = "user"
-                elif role == "assistant":
-                    msg_type = metadata.get("type", "assistant")
-                    if msg_type not in ["assistant", "think", "tool_call"]:
-                        msg_type = "assistant"
-                elif role == "tool":
-                    msg_type = "tool"
-                else:
+                # 通过 ViewModel 分类消息类型
+                msg_type = ConversationViewModel.classify_message_type(role, metadata)
+                if msg_type is None:
                     continue
 
                 # 关键修复：tool_call 卡片在持久化时 content 为空（to_llm_dict
@@ -337,16 +321,7 @@ class ConversationManagerMixin:
                 # 这里从 metadata 中还原出同样的展示文本，保持加载历史与
                 # 实时会话的视觉一致。
                 if msg_type == "tool_call":
-                    tool_name = str(metadata.get("name", "") or "")
-                    args_value = metadata.get("args", "")
-                    if isinstance(args_value, (dict, list)):
-                        args_str = json.dumps(args_value, ensure_ascii=False)
-                    else:
-                        args_str = str(args_value or "")
-                    if tool_name:
-                        content = f"调用工具 `{tool_name}` · {args_str}" if args_str else f"调用工具 `{tool_name}`"
-                    else:
-                        content = "调用工具"
+                    content = ConversationViewModel.build_tool_call_display_text(metadata)
 
                 # 添加消息到列表
                 # update_ui=False：批量加载时不逐条触发 page.update()，
@@ -401,7 +376,8 @@ class ConversationManagerMixin:
 
     def _load_more_messages(self) -> None:
         """加载更多历史消息（分页加载）"""
-        if not self.skill_agent or not self._message_list:
+        vm: ConversationViewModel = self._conversation_vm
+        if not vm.is_available or not self._message_list:
             return
 
         conversation_id = self._app_state.session.get_current_conversation()
@@ -413,7 +389,7 @@ class ConversationManagerMixin:
             current_offset = getattr(self, '_loaded_message_offset', 0)
 
             # 获取所有消息记录
-            all_records = self.skill_agent.message_records_for_conversation(conversation_id)
+            all_records = vm.message_records_for_conversation(conversation_id)
             total_count = len(all_records)
 
             # 计算要加载的消息范围
@@ -435,45 +411,19 @@ class ConversationManagerMixin:
                 role = str(record.get("role", ""))
                 raw_content = record.get("content")
 
-                # 处理内容
-                if raw_content is None:
-                    content = ""
-                elif isinstance(raw_content, list):
-                    content = raw_content
-                elif isinstance(raw_content, str):
-                    parsed_content = try_parse_json_content(raw_content)
-                    if isinstance(parsed_content, list):
-                        content = parsed_content
-                    else:
-                        content = raw_content
-                else:
-                    content = str(raw_content)
+                # 通过 ViewModel 解析消息内容
+                content = ConversationViewModel.parse_message_content(raw_content)
 
                 metadata = record.get("metadata", {}) or {}
 
-                if role == "user":
-                    msg_type = "user"
-                elif role == "assistant":
-                    msg_type = metadata.get("type", "assistant")
-                    if msg_type not in ["assistant", "think", "tool_call"]:
-                        msg_type = "assistant"
-                elif role == "tool":
-                    msg_type = "tool"
-                else:
+                # 通过 ViewModel 分类消息类型
+                msg_type = ConversationViewModel.classify_message_type(role, metadata)
+                if msg_type is None:
                     continue
 
                 # 处理 tool_call 消息
                 if msg_type == "tool_call":
-                    tool_name = str(metadata.get("name", "") or "")
-                    args_value = metadata.get("args", "")
-                    if isinstance(args_value, (dict, list)):
-                        args_str = json.dumps(args_value, ensure_ascii=False)
-                    else:
-                        args_str = str(args_value or "")
-                    if tool_name:
-                        content = f"调用工具 `{tool_name}` · {args_str}" if args_str else f"调用工具 `{tool_name}`"
-                    else:
-                        content = "调用工具"
+                    content = ConversationViewModel.build_tool_call_display_text(metadata)
 
                 messages_to_insert.append((msg_type, content))
 
@@ -501,13 +451,14 @@ class ConversationManagerMixin:
 
     def _load_initial_conversations_sync(self) -> None:
         """加载初始会话列表"""
-        if not self.skill_agent or not self._conversation_sidebar:
+        vm: ConversationViewModel = self._conversation_vm
+        if not vm.is_available or not self._conversation_sidebar:
             return
 
         try:
             # 获取所有会话
             all_sessions = [
-                c for c in self.skill_agent.list_saved_conversations()
+                c for c in vm.list_saved_conversations()
                 if (c.conversation_id or "").strip()
             ]
 

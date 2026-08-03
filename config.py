@@ -88,6 +88,25 @@ except (TypeError, ValueError):
 if SKILL_AGENT_MAX_STEPS < 1:
     SKILL_AGENT_MAX_STEPS = 50
 
+# Token 消耗上限：当 Agent 累计消耗 token 超过此阈值时自动终止循环
+# 替代 max_steps 硬性步数限制，支持复杂任务的灵活执行
+_mtb = get_config("MAX_TOKEN_BUDGET")
+try:
+    MAX_TOKEN_BUDGET = int(_mtb) if _mtb not in (None, "") else 200000
+except (TypeError, ValueError):
+    MAX_TOKEN_BUDGET = 200000
+if MAX_TOKEN_BUDGET < 1000:
+    MAX_TOKEN_BUDGET = 200000
+
+# LLM API 调用重试配置
+_llm_max_retries = get_config("LLM_MAX_RETRIES")
+try:
+    LLM_MAX_RETRIES = int(_llm_max_retries) if _llm_max_retries not in (None, "") else 3
+except (TypeError, ValueError):
+    LLM_MAX_RETRIES = 3
+if LLM_MAX_RETRIES < 0:
+    LLM_MAX_RETRIES = 3
+
 
 def _env_bool(raw, default: bool) -> bool:
     if raw is None or str(raw).strip() == "":

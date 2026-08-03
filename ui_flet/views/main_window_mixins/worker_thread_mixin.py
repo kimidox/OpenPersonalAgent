@@ -11,6 +11,8 @@ import threading
 from logger import get_logger
 from skill_agent import SKILL_AGENT_AWAITING_USER_REPLY
 from ui_flet.state import StreamType, LLMCommunicationState
+from ui_flet.viewmodels.conversation_viewmodel import ConversationViewModel
+from ui_flet.viewmodels.agent_viewmodel import AgentViewModel
 from ui_flet.views.main_window_mixins._utils import _get_state_display_text, _get_warning_display_text
 
 
@@ -28,45 +30,52 @@ class WorkerThreadMixin:
 
     def _start_skill_agent_worker(self, query: str, conversation_id: str) -> None:
         """启动 SkillAgent 工作线程"""
+        vm: ConversationViewModel = self._conversation_vm
+        agent_vm: AgentViewModel = self._agent_vm
+
         # 重置停止事件
-        self._stop_event.clear()
+        agent_vm.stop_event.clear()
 
         # 设置思考模式状态
-        if self.skill_agent and self._input_area:
-            self.skill_agent.set_enable_thinking(self._input_area.is_thinking_enabled())
+        if vm.is_available and self._input_area:
+            vm.set_enable_thinking(self._input_area.is_thinking_enabled())
 
         # 创建并启动工作线程
-        self._worker_thread = threading.Thread(
+        worker_thread = threading.Thread(
             target=self._skill_agent_worker_thread,
             args=(query, conversation_id),
             name=f"skill-agent-worker-{conversation_id[:8]}",
             daemon=True,
         )
-        self._worker_thread.start()
+        agent_vm.worker_thread = worker_thread
+        worker_thread.start()
 
         self._logger.info(f"启动工作线程: {conversation_id}")
 
     def _skill_agent_worker_thread(self, query: str, conversation_id: str) -> None:
         """SkillAgent 工作线程"""
+        vm: ConversationViewModel = self._conversation_vm
+        agent_vm: AgentViewModel = self._agent_vm
+
         try:
             # 设置会话 ID
-            if self.skill_agent:
-                self.skill_agent.set_conversation_id(conversation_id)
+            vm.set_conversation_id(conversation_id)
 
             # 定义日志回调函数
             def log_callback(message: str, msg_type: str) -> None:
                 # 检查是否被请求停止
-                if self._stop_event.is_set():
+                if agent_vm.stop_event.is_set():
                     return
 
                 # 在主线程中更新 UI
                 self._page.run_task(self._handle_worker_message, message, msg_type, conversation_id)
 
-            # 调用 SkillAgent
-            result = self.skill_agent.run(
+            # 通过 ViewModel 调用 SkillAgent
+            result = vm.send_message(
                 query,
+                conversation_id,
                 log_callback=log_callback,
-                stop_check_callback=self._stop_event.is_set,
+                stop_check_callback=agent_vm.stop_event.is_set,
             )
 
             # 处理完成
@@ -348,12 +357,9 @@ class WorkerThreadMixin:
 
     def request_stop_worker(self) -> None:
         """请求停止工作线程"""
-        if self._worker_thread and self._worker_thread.is_alive():
-            self._stop_event.set()
-            if self.skill_agent:
-                self.skill_agent.request_stop()
-            self._logger.info("请求停止工作线程")
+        self._agent_vm.stop_task()
+        self._logger.info("请求停止工作线程")
 
     def is_agent_busy(self) -> bool:
         """Agent 工作线程是否正在运行（供 TaskScheduler 触发前检查，避免线程竞争）"""
-        return bool(self._worker_thread and self._worker_thread.is_alive())
+        return self._agent_vm.is_worker_alive()

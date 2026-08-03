@@ -27,6 +27,7 @@ from ui_flet.components.await_user_card import AwaitUserCard
 from ui_flet.components.conversation_sidebar import ConversationSidebar
 from ui_flet.views.floating_chat_window import FloatingChatWindow
 from ui_flet.views.settings_dialog import SettingsDialog
+from ui_flet.viewmodels import ConversationViewModel, AgentViewModel
 from ui_flet.views.main_window_mixins import (
     WindowEventsMixin,
     ConversationManagerMixin,
@@ -79,6 +80,10 @@ class MainWindow(
         self._setup_stream_callbacks()
         self._setup_ui_state_callbacks()
 
+        # ViewModel 层（解耦 UI 与 SkillAgent）
+        self._conversation_vm = ConversationViewModel()
+        self._agent_vm = AgentViewModel()
+
         # 主题管理
         self._theme_manager = ThemeManager()
 
@@ -103,9 +108,9 @@ class MainWindow(
         # 设置对话框
         self._settings_dialog: SettingsDialog | None = None
 
-        # 工作线程管理
-        self._worker_thread: threading.Thread | None = None
-        self._stop_event = threading.Event()
+        # 工作线程管理（由 AgentViewModel 统一管理）
+        self._worker_thread: threading.Thread | None = None  # 向后兼容属性，实际由 _agent_vm 管理
+        self._stop_event = threading.Event()  # 向后兼容属性，实际由 _agent_vm 管理
 
         # 录音实时识别文本缓冲区
         self._recording_text: str = ""
@@ -179,6 +184,12 @@ class MainWindow(
             )
             self._logger.info("SkillAgent 初始化完成")
 
+            # 将 SkillAgent 注入 ViewModel
+            self._conversation_vm.set_skill_agent(self.skill_agent)
+            self._conversation_vm.set_memory(self._memory)
+            self._agent_vm.set_skill_agent(self.skill_agent)
+            self._logger.info("ViewModel 已绑定 SkillAgent")
+
             # 初始化定时任务调度器（依赖主窗口引用，需在最后实例化）
             self._scheduler = TaskScheduler(tray_icon=None, main_window=self)
             self._scheduler.start()
@@ -192,6 +203,10 @@ class MainWindow(
             self._memory = None
             self.skill_agent = None
             self._scheduler = None
+            # ViewModel 也不绑定任何 Agent
+            self._conversation_vm.set_skill_agent(None)
+            self._conversation_vm.set_memory(None)
+            self._agent_vm.set_skill_agent(None)
 
     def _setup_window_events(self) -> None:
         """设置窗口事件处理"""
@@ -352,13 +367,13 @@ class MainWindow(
         if files:
             self._logger.info(f"附带文件: {[f.original_name for f in files]}")
 
-        # 检查 SkillAgent 是否初始化
-        if not self.skill_agent:
+        # 通过 ViewModel 检查 SkillAgent 是否初始化
+        if not self._conversation_vm.is_available:
             self._logger.error("SkillAgent 未初始化")
             return
 
         # 检查是否有正在运行的任务
-        if self._worker_thread and self._worker_thread.is_alive():
+        if self._agent_vm.is_worker_alive():
             # 检查是否是 ask_user 等待回复场景
             if self._is_awaiting_user_reply():
                 # 允许用户回复继续处理
@@ -380,8 +395,8 @@ class MainWindow(
         if self._input_area:
             self._input_area.clear()
 
-        # 将文件内容嵌入系统提示词
-        if self.skill_agent:
+        # 将文件内容嵌入系统提示词（通过 ViewModel）
+        if self._conversation_vm.is_available:
             from ui_flet.utils.file_upload_controller import FileUploadController
             files_content = FileUploadController.generate_full_content_from_list(files)
 
@@ -400,7 +415,7 @@ class MainWindow(
             else:
                 self._logger.info("无文件内容传递给 SkillAgent")
 
-            self.skill_agent.set_uploaded_files_content(files_content)
+            self._conversation_vm.set_uploaded_files_content(files_content)
 
         # 添加用户消息到消息列表
         if self._message_list:
@@ -425,13 +440,13 @@ class MainWindow(
         """
         self._logger.info(f"悬浮聊天窗口发送消息: {text[:50] if text else ''}...")
 
-        # 检查 SkillAgent 是否初始化
-        if not self.skill_agent:
+        # 通过 ViewModel 检查 SkillAgent 是否初始化
+        if not self._conversation_vm.is_available:
             self._logger.error("SkillAgent 未初始化")
             return
 
         # 检查是否有正在运行的任务
-        if self._worker_thread and self._worker_thread.is_alive():
+        if self._agent_vm.is_worker_alive():
             # 检查是否是 ask_user 等待回复场景
             if self._is_awaiting_user_reply():
                 # 允许用户回复继续处理

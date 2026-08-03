@@ -6,7 +6,7 @@ Flet 设置模块
 from ui_flet.settings.model_config_page import ModelConfigPage
 from ui_flet.settings.skill_management_page import SkillManagementPage
 from ui_flet.settings.skill_toggle_page import SkillTogglePage
-from ui_flet.settings.voice_settings_page import VoiceSettingsPage
+from ui_flet.settings.voice_settings import VoiceSettingsPage
 from ui_flet.settings.hotkey_settings_page import HotkeySettingsPage
 from ui_flet.settings.scheduled_tasks_page import ScheduledTasksPage
 from ui_flet.settings.prompt_template_page import PromptTemplatePage

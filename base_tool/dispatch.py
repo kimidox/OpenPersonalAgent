@@ -1,3 +1,16 @@
+"""原子工具调度核心模块。
+
+职责：工具注册与分发、命令安全检测、输出处理、UIA 惰性加载。
+
+注意：大量辅助函数已按职责拆分到子模块，本文件通过重新导出保持
+所有 ``from base_tool.dispatch import xxx`` 的兼容性。
+
+拆分目标：
+- environment.py    → 环境检查 / 虚拟环境管理
+- skill_installer.py → Skill 依赖检查与安装
+- command_fixer.py   → 命令预校验与自动修复
+- installation_verifier.py → 安装验证与报告
+"""
 from __future__ import annotations
 
 
@@ -25,11 +38,58 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from skill import SkillRegistry
 
-from logger import get_module_logger
+from logger import get_module_logger, generate_trace_id
 from .command_validator import CommandValidator
 from .context import ToolContext
 from .decorators import atomic_tool
 from .run_command import validate_and_log_warnings
+
+# ── 从子模块重新导出，保持外部 import 路径不断裂 ──────────────
+
+# environment
+from .environment import (                          # noqa: F401
+    check_pip_available,
+    check_network_connection,
+    detect_os_type,
+    check_installation_environment,
+    _find_system_python,
+    _ensure_venv_exists,
+    _get_venv_python,
+    _get_venv_activate_script,
+    _get_venv_pip,
+    _VENV_DIR,
+)
+
+# skill_installer
+from .skill_installer import (                      # noqa: F401
+    _check_skill_dependencies,
+    _install_skill_dependencies,
+    check_skill_dependencies,
+    install_skill_dependencies,
+    install_skill_from_zip,
+    _get_installed_packages,
+)
+
+# command_fixer
+from .command_fixer import (                        # noqa: F401
+    _detect_and_fix_command,
+    _fix_findstr_quotes,
+    _fix_wmic_command,
+    _has_batch_variable_syntax,
+    _fix_cmd_to_powershell,
+    _should_use_powershell,
+    _fix_powershell_env_variables,
+)
+
+# installation_verifier
+from .installation_verifier import (                # noqa: F401
+    verify_skillhub_installation,
+    verify_skill_installation,
+    verify_and_report_skillhub_installation,
+    verify_and_report_skill_installation,
+    _parse_skill_yaml_front_matter,
+    _get_skillhub_installation_guide,
+)
 
 logger = get_module_logger("ToolDispatch")
 
@@ -88,444 +148,10 @@ _DANGEROUS_COMMAND_PATTERNS = [
     r'^\s*net\s+user\s+',                      # net user (user management)
 ]
 
-_VENV_DIR = paths.get_venv_dir()
-
 
 # ============================================================
-# 环境检查模块
+# 核心调度函数
 # ============================================================
-
-def check_pip_available() -> bool:
-    """
-    检查 pip 是否可用。
-
-    执行 `pip --version` 命令，检查 pip 是否正常工作。
-
-    Returns:
-        bool: pip 是否可用
-    """
-    import shutil
-
-    # 优先检查虚拟环境中的 pip
-    venv_pip = _get_venv_pip()
-    if venv_pip and Path(venv_pip).exists():
-        try:
-            result = subprocess.run(
-                [venv_pip, "--version"],
-                capture_output=True,
-                timeout=5,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
-            )
-            if result.returncode == 0:
-                logger.debug(f"检测到虚拟环境 pip 可用: {venv_pip}")
-                return True
-        except Exception as e:
-            logger.warning(f"虚拟环境 pip 检查失败: {e}")
-
-    # 检查系统 pip
-    pip_path = shutil.which("pip")
-    if pip_path:
-        try:
-            result = subprocess.run(
-                [pip_path, "--version"],
-                capture_output=True,
-                timeout=5,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
-            )
-            if result.returncode == 0:
-                logger.debug(f"检测到系统 pip 可用: {pip_path}")
-                return True
-        except Exception as e:
-            logger.warning(f"系统 pip 检查失败: {e}")
-
-    # 检查 python -m pip
-    python_path = shutil.which("python") or shutil.which("python3")
-    if python_path:
-        try:
-            result = subprocess.run(
-                [python_path, "-m", "pip", "--version"],
-                capture_output=True,
-                timeout=5,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
-            )
-            if result.returncode == 0:
-                logger.debug(f"检测到 python -m pip 可用: {python_path}")
-                return True
-        except Exception as e:
-            logger.warning(f"python -m pip 检查失败: {e}")
-
-    logger.warning("未检测到可用的 pip")
-    return False
-
-
-def check_network_connection() -> bool:
-    """
-    检查网络连接状态。
-
-    尝试访问 https://pypi.org 或执行 ping 命令检查网络连接。
-
-    Returns:
-        bool: 网络是否连接
-    """
-    import urllib.request
-    import socket
-
-    # 方法1: 尝试访问 PyPI
-    test_urls = [
-        "https://pypi.org",
-        "https://mirrors.aliyun.com/pypi/simple/",  # 国内镜像
-    ]
-
-    for url in test_urls:
-        try:
-            request = urllib.request.Request(url, method='HEAD')
-            request.add_header('User-Agent', 'Mozilla/5.0')
-            urllib.request.urlopen(request, timeout=5)
-            logger.debug(f"网络连接正常，成功访问: {url}")
-            return True
-        except urllib.error.URLError as e:
-            logger.debug(f"访问 {url} 失败: {e}")
-        except Exception as e:
-            logger.debug(f"访问 {url} 异常: {e}")
-
-    # 方法2: 使用 ping 命令检查网络（作为备用方案）
-    try:
-        # 检测操作系统
-        os_type = detect_os_type()
-
-        # 根据操作系统选择 ping 命令
-        if os_type == "Windows":
-            ping_cmd = ["ping", "-n", "1", "pypi.org"]
-        else:  # Linux/Mac
-            ping_cmd = ["ping", "-c", "1", "pypi.org"]
-
-        result = subprocess.run(
-            ping_cmd,
-            capture_output=True,
-            timeout=5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
-        )
-
-        if result.returncode == 0:
-            logger.debug("网络连接正常（ping 测试成功）")
-            return True
-        else:
-            logger.warning("网络连接异常（ping 测试失败）")
-            return False
-
-    except Exception as e:
-        logger.warning(f"网络检查异常: {e}")
-        return False
-
-
-def detect_os_type() -> str:
-    """
-    检测操作系统类型。
-
-    Returns:
-        str: 操作系统类型，返回 "Windows"、"Linux" 或 "Mac"
-    """
-    import platform
-
-    system = platform.system().lower()
-
-    if system == "windows":
-        return "Windows"
-    elif system == "linux":
-        return "Linux"
-    elif system == "darwin":
-        return "Mac"
-    else:
-        logger.warning(f"未识别的操作系统: {system}")
-        return system.capitalize()
-
-
-def check_installation_environment() -> dict:
-    """
-    执行完整的环境检查。
-
-    Returns:
-        dict: 包含各项环境检查结果的字典
-    """
-    import time
-
-    start_time = time.time()
-
-    results = {
-        "os_type": detect_os_type(),
-        "pip_available": check_pip_available(),
-        "network_connected": check_network_connection(),
-        "check_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "elapsed_ms": 0,
-    }
-
-    # 计算耗时
-    results["elapsed_ms"] = int((time.time() - start_time) * 1000)
-
-    # 记录检查结果
-    logger.info(
-        f"环境检查完成 - "
-        f"操作系统: {results['os_type']}, "
-        f"pip可用: {results['pip_available']}, "
-        f"网络连接: {results['network_connected']}, "
-        f"耗时: {results['elapsed_ms']}ms"
-    )
-
-    # 如果环境不满足要求，记录警告
-    if not results["pip_available"]:
-        logger.warning("pip 不可用，可能导致依赖安装失败")
-
-    if not results["network_connected"]:
-        logger.warning("网络连接异常，可能导致下载安装脚本失败")
-
-    return results
-
-
-def _find_system_python() -> str | None:
-    """
-    查找系统安装的 Python 解释器（非虚拟环境）。
-    始终查找系统级 Python，避免使用虚拟环境中的 Python 来创建新虚拟环境，
-    因为虚拟环境可能缺少 ensurepip 模块导致创建的 venv 没有 pip。
-    """
-    import shutil
-    
-    candidate_names = ["python", "python3", "py"]
-    
-    for name in candidate_names:
-        python_path = shutil.which(name)
-        if python_path and python_path.lower().find("\\venv\\") == -1 and python_path.lower().find("\\virtualenvs\\") == -1:
-            return python_path
-    
-    common_paths = [
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python311" / "python.exe",
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "python.exe",
-        Path(os.environ.get("PROGRAMFILES", "")) / "Python" / "python.exe",
-        Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Python" / "python.exe",
-    ]
-    for p in common_paths:
-        if p.exists() and p.is_file():
-            return str(p)
-    
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Python\PythonCore") as key:
-            i = 0
-            while True:
-                version = winreg.EnumKey(key, i)
-                subkey = winreg.OpenKey(key, version)
-                install_path, _ = winreg.QueryValueEx(subkey, "InstallPath")
-                python_exe = Path(install_path) / "python.exe"
-                if python_exe.exists():
-                    return str(python_exe)
-                i += 1
-    except (ImportError, OSError, FileNotFoundError):
-        pass
-    
-    return None
-
-
-def _ensure_venv_exists() -> bool:
-    """确保 PersonalData 下存在虚拟环境,如果不存在则创建"""
-    if _VENV_DIR.exists() and (_VENV_DIR / "Scripts" / "python.exe").exists():
-        return True
-    try:
-        system_python = _find_system_python()
-        if not system_python:
-            return False
-        
-        subprocess.run(
-            [system_python, "-m", "venv", str(_VENV_DIR)],
-            capture_output=True,
-            timeout=60,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
-        )
-        
-        venv_python = str(_VENV_DIR / "Scripts" / "python.exe")
-        if not Path(venv_python).exists():
-            return False
-        
-        pip_exe = _VENV_DIR / "Scripts" / "pip.exe"
-        if not pip_exe.exists():
-            import urllib.request
-            import tempfile
-            
-            get_pip_url = "https://bootstrap.pypa.io/get-pip.py"
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
-                temp_file = f.name
-            
-            try:
-                urllib.request.urlretrieve(get_pip_url, temp_file)
-                subprocess.run(
-                    [venv_python, temp_file],
-                    capture_output=True,
-                    timeout=120,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
-                )
-            except Exception as e:
-                logger.error(f"安装pip失败: {e}")
-            finally:
-                try:
-                    os.unlink(temp_file)
-                except:
-                    pass
-        
-        return True
-    except Exception as e:
-        logger.error(f"创建虚拟环境异常: {e}")
-        return False
-
-
-def _get_venv_python() -> str | None:
-    """获取虚拟环境中的 Python 可执行文件路径"""
-    if not _ensure_venv_exists():
-        return None
-    return str(_VENV_DIR / "Scripts" / "python.exe")
-
-
-def _get_venv_activate_script() -> str | None:
-    """获取激活虚拟环境的脚本路径（不包含call关键字）"""
-    if not _ensure_venv_exists():
-        return None
-    activate_script = _VENV_DIR / "Scripts" / "activate.bat"
-    if activate_script.exists():
-        return str(activate_script)
-    return None
-
-
-def _get_venv_pip() -> str | None:
-    """获取虚拟环境中的 pip 可执行文件路径"""
-    if not _ensure_venv_exists():
-        return None
-    pip_exe = _VENV_DIR / "Scripts" / "pip.exe"
-    if pip_exe.exists():
-        return str(pip_exe)
-    return None
-
-
-def _get_installed_packages() -> set[str]:
-    """获取虚拟环境中已安装的包名集合"""
-    venv_python = _get_venv_python()
-    if not venv_python:
-        return set()
-    try:
-        result = subprocess.run(
-            [venv_python, "-m", "pip", "list", "--format=freeze"],
-            capture_output=True,
-            text=False,
-            timeout=30,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
-        )
-        stdout = _decode_output(result.stdout or b"")
-        packages = set()
-        for line in stdout.strip().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                pkg_name = line.split("==")[0].lower().replace("-", "_")
-                packages.add(pkg_name)
-        return packages
-    except Exception:
-        return set()
-
-
-def _check_skill_dependencies(skill_dir: Path) -> tuple[bool, list[str], str]:
-    """
-    检查 skill 包的依赖是否已安装。
-    返回 (是否需要安装, 需要安装的包列表, 错误消息)
-    """
-    requirements_file = skill_dir / "requirements.txt"
-    if not requirements_file.exists():
-        return False, [], ""
-    
-    required_packages = set()
-    try:
-        content = requirements_file.read_text(encoding="utf-8")
-        for line in content.strip().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                pkg_name = line.split("==")[0].split(">=")[0].split("<=")[0].split("[")[0]
-                pkg_name = pkg_name.lower().replace("-", "_")
-                required_packages.add(pkg_name)
-    except Exception as e:
-        return False, [], f"读取 requirements.txt 失败: {e}"
-    
-    if not required_packages:
-        return False, [], ""
-    
-    installed = _get_installed_packages()
-    to_install = required_packages - installed
-    
-    if not to_install:
-        return False, [], ""
-    
-    return True, sorted(to_install), ""
-
-
-def _install_skill_dependencies(skill_dir: Path) -> tuple[bool, str]:
-    """
-    安装 skill 包的依赖。
-    返回 (成功与否, 消息)
-    """
-    # 执行环境检查（不阻塞安装流程，仅记录状态）
-    try:
-        env_check = check_installation_environment()
-        # 如果环境不满足要求，记录警告但不阻止安装
-        if not env_check.get("pip_available"):
-            logger.warning(f"环境检查警告: pip 不可用，可能导致依赖安装失败 (skill_dir: {skill_dir})")
-        if not env_check.get("network_connected"):
-            logger.warning(f"环境检查警告: 网络连接异常，可能导致依赖下载失败 (skill_dir: {skill_dir})")
-    except Exception as e:
-        # 环境检查失败不影响安装流程
-        logger.debug(f"环境检查异常（已忽略）: {e}")
-
-    requirements_file = skill_dir / "requirements.txt"
-    if not requirements_file.exists():
-        return True, ""
-
-    required_packages = set()
-    try:
-        content = requirements_file.read_text(encoding="utf-8")
-        for line in content.strip().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                pkg_name = line.split("==")[0].split(">=")[0].split("<=")[0].split("[")[0]
-                pkg_name = pkg_name.lower().replace("-", "_")
-                required_packages.add(pkg_name)
-    except Exception as e:
-        return False, f"读取 requirements.txt 失败: {e}"
-
-    if not required_packages:
-        return True, ""
-
-    installed = _get_installed_packages()
-    to_install = required_packages - installed
-
-    if not to_install:
-        return True, ""
-
-    pip_exe = _get_venv_pip()
-    if not pip_exe:
-        return False, "无法找到虚拟环境的 pip"
-
-    try:
-        result = subprocess.run(
-            [pip_exe, "install", "-r", str(requirements_file)],
-            capture_output=True,
-            text=False,
-            timeout=120,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
-        )
-        if result.returncode == 0:
-            installed_names = ", ".join(sorted(to_install))
-            return True, f"已安装依赖: {installed_names}"
-        else:
-            stderr = _decode_output(result.stderr or b"")
-            return False, f"安装依赖失败: {stderr}"
-    except subprocess.TimeoutExpired:
-        return False, "安装依赖超时"
-    except Exception as e:
-        return False, f"安装依赖异常: {e}"
-
 
 def _resolve_safe(ctx: ToolContext, rel: str) -> Path:
     root = Path(ctx.work_dir).resolve()
@@ -690,64 +316,6 @@ def handle_installation_failure(command: str, error_output: str, exit_code: int,
     return _get_manual_installation_guide(command, error_output), False
 
 
-def _fix_powershell_env_variables(command: str) -> str:
-    """
-    修正 PowerShell 命令中的环境变量引用。
-
-    将 $env:TEMP 替换为实际路径，将 $env:USERPROFILE 替换为实际路径。
-    """
-    import re
-
-    fixed_command = command
-
-    # 替换 $env:TEMP
-    if "$env:TEMP" in command or "$env:temp" in command:
-        temp_path = os.environ.get("TEMP", os.environ.get("TMP", ""))
-        if temp_path:
-            # 使用 lambda 函数避免路径中的反斜杠被解释为正则表达式转义
-            fixed_command = re.sub(
-                r'\$env:TEMP',
-                lambda m: temp_path,
-                fixed_command,
-                flags=re.IGNORECASE
-            )
-
-    # 替换 $env:USERPROFILE
-    if "$env:USERPROFILE" in command or "$env:userprofile" in command:
-        userprofile_path = os.environ.get("USERPROFILE", "")
-        if userprofile_path:
-            fixed_command = re.sub(
-                r'\$env:USERPROFILE',
-                lambda m: userprofile_path,
-                fixed_command,
-                flags=re.IGNORECASE
-            )
-
-    # 替换 $env:APPDATA
-    if "$env:APPDATA" in command or "$env:appdata" in command:
-        appdata_path = os.environ.get("APPDATA", "")
-        if appdata_path:
-            fixed_command = re.sub(
-                r'\$env:APPDATA',
-                lambda m: appdata_path,
-                fixed_command,
-                flags=re.IGNORECASE
-            )
-
-    # 替换 $env:LOCALAPPDATA
-    if "$env:LOCALAPPDATA" in command or "$env:localappdata" in command:
-        localappdata_path = os.environ.get("LOCALAPPDATA", "")
-        if localappdata_path:
-            fixed_command = re.sub(
-                r'\$env:LOCALAPPDATA',
-                lambda m: localappdata_path,
-                fixed_command,
-                flags=re.IGNORECASE
-            )
-
-    return fixed_command
-
-
 def _is_download_failure(error_output: str) -> bool:
     """
     检测是否为下载失败。
@@ -853,17 +421,17 @@ def _get_manual_installation_guide(command: str, error_output: str) -> str:
 
 2. 在 PowerShell 中运行：
    Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-   .\install.ps1
+   .\\install.ps1
 
 方法3: 使用虚拟环境安装
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 如果需要在虚拟环境中安装：
 
 1. 创建虚拟环境（如已存在可跳过）：
-   python -m venv %USERPROFILE%\.skillhub_venv
+   python -m venv %USERPROFILE%\\.skillhub_venv
 
 2. 激活虚拟环境：
-   %USERPROFILE%\.skillhub_venv\Scripts\activate
+   %USERPROFILE%\\.skillhub_venv\\Scripts\\activate
 
 3. 安装 SkillHub：
    pip install skillhub-cli
@@ -893,221 +461,6 @@ GitHub: https://github.com/skillhub/skillhub-cli
 """.format(command=command, error=error_output[:200] if len(error_output) > 200 else error_output)
 
     return guide
-
-
-# ============================================================
-# 命令预校验和自动修复机制
-# ============================================================
-
-def _detect_and_fix_command(command: str) -> tuple:
-    """检测并自动修复命令中的已知问题模式。
-    
-    返回 (fixed_command, error_message):
-    - (fixed_command, ""): 修复成功，返回修复后的命令
-    - ("", error_message): 检测到不可修复的问题模式，返回错误提示
-    - (command, ""): 无需修复，返回原命令
-    """
-    if not command:
-        return command, ""
-    
-    # 1. 检测并转换 findstr /C:"..." 模式
-    fixed, msg = _fix_findstr_quotes(command)
-    if fixed is not None:
-        return fixed, msg
-    
-    # 2. 检测并转换 wmic 命令
-    fixed, msg = _fix_wmic_command(command)
-    if fixed is not None:
-        return fixed, msg
-    
-    # 3. 检测 %% 批处理语法（不可修复，直接报错）
-    if _has_batch_variable_syntax(command):
-        return "", "错误: 检测到批处理变量语法 (%%)。请改用 PowerShell 语法：使用 $variable 替代 %%a，使用 ForEach-Object 替代 for /f 循环。"
-    
-    # 4. 检测并转换常见 CMD 命令为 PowerShell 等效命令
-    fixed, msg = _fix_cmd_to_powershell(command)
-    if fixed is not None:
-        return fixed, msg
-    
-    return command, ""
-
-
-def _fix_findstr_quotes(command: str) -> tuple:
-    """检测 findstr /C:"..." 模式并转换为 PowerShell Select-String。
-    
-    返回 (fixed_command, "") 或 None 表示无需处理。
-    """
-    import re
-    
-    # 匹配 findstr /C:"..." 或 findstr /C:'...'
-    # 例如: systeminfo | findstr /C:"OS Name"
-    pattern = r'(\S+)\s*\|\s*findstr\s+((?:/[^ ]+\s+)*)/C:("([^"]*?)"|\'([^\']*?)\')'
-    match = re.search(pattern, command, re.IGNORECASE)
-    
-    if match:
-        before_pipe = match.group(1).strip()
-        findstr_args = match.group(2).strip()  # /B /C:... 等参数
-        search_pattern = match.group(4) or match.group(5)  # 引号内的内容
-        
-        # 分析 findstr 参数，转换为 Select-String 等效参数
-        select_string_args = []
-        
-        # 提取搜索模式
-        if search_pattern:
-            # 检查是否是 /C: 格式的属性名匹配（如 "OS Name"、"System Type"）
-            # 这种模式通常用于 systeminfo/wmic 输出过滤
-            # 转换为 PowerShell 的 Where-Object 或 Select-String
-            select_string_args.append(f"Select-String -Pattern '{search_pattern}'")
-        
-        # 构建 PowerShell 命令
-        fixed = f"powershell {before_pipe} | {' '.join(select_string_args)}"
-        return fixed, ""
-    
-    return None, None
-
-
-def _fix_wmic_command(command: str) -> tuple:
-    """检测 wmic 命令并转换为 Get-CimInstance 等效命令。
-    
-    返回 (fixed_command, "") 或 None 表示无需处理。
-    """
-    import re
-    
-    # 匹配 wmic 命令: wmic <class> get <properties>
-    pattern = r'wmic\s+(\w+)\s+get\s+(.+?)(?:\s*$|\s*&&|\s*2>|\s*>)'
-    match = re.search(pattern, command, re.IGNORECASE)
-    
-    if match:
-        wmic_class = match.group(1).strip()
-        properties = match.group(2).strip().rstrip(',').strip()
-        
-        # 映射常见 WMIC 类到 CIM 类
-        cim_class_map = {
-            'cpu': 'Win32_Processor',
-            'os': 'Win32_OperatingSystem',
-            'memorychip': 'Win32_PhysicalMemory',
-            'baseboard': 'Win32_BaseBoard',
-            'bios': 'Win32_BIOS',
-            'diskdrive': 'Win32_DiskDrive',
-            'logicaldisk': 'Win32_LogicalDisk',
-            'nic': 'Win32_NetworkAdapter',
-            'nicconfig': 'Win32_NetworkAdapterConfiguration',
-            'useraccount': 'Win32_UserAccount',
-            'group': 'Win32_Group',
-            'service': 'Win32_Service',
-            'process': 'Win32_Process',
-            'computersystem': 'Win32_ComputerSystem',
-            'share': 'Win32_Share',
-        }
-        
-        # 属性名映射
-        prop_map = {
-            'name': 'Name',
-            'numberofcores': 'NumberOfCores',
-            'numberoflogicalprocessors': 'NumberOfLogicalProcessors',
-            'maxclockspeed': 'MaxClockSpeed',
-            'caption': 'Caption',
-            'version': 'Version',
-            'serialnumber': 'SerialNumber',
-            'manufacturer': 'Manufacturer',
-            'model': 'Model',
-            'capacity': 'Capacity',
-            'speed': 'Speed',
-            'size': 'Size',
-            'freespace': 'FreeSpace',
-            'description': 'Description',
-            'status': 'Status',
-            'state': 'State',
-        }
-        
-        cim_class = cim_class_map.get(wmic_class.lower(), f'Win32_{wmic_class.title()}')
-        
-        # 转换属性名
-        ps_props = []
-        for prop in properties.split(','):
-            prop = prop.strip()
-            ps_prop = prop_map.get(prop.lower(), prop)
-            ps_props.append(ps_prop)
-        
-        fixed = f"powershell Get-CimInstance {cim_class} | Select-Object {', '.join(ps_props)}"
-        return fixed, ""
-    
-    return None, None
-
-
-def _has_batch_variable_syntax(command: str) -> bool:
-    """检测命令是否包含 %% 批处理变量语法。"""
-    import re
-    # 匹配 %%a, %%A, %%i 等批处理变量
-    return bool(re.search(r'%%[a-zA-Z]', command))
-
-
-def _fix_cmd_to_powershell(command: str) -> tuple:
-    """检测常见 CMD 命令并转换为 PowerShell 等效命令。
-    
-    返回 (fixed_command, "") 或 None 表示无需处理。
-    """
-    import re
-    
-    # 匹配 systeminfo 命令
-    if re.match(r'^systeminfo\s*$', command.strip(), re.IGNORECASE):
-        return "powershell Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,TotalVisibleMemorySize,FreePhysicalMemory; Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,TotalPhysicalMemory; Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors", ""
-    
-    # 匹配 whoami 命令
-    if re.match(r'^whoami\s*$', command.strip(), re.IGNORECASE):
-        return "powershell [System.Security.Principal.WindowsIdentity]::GetCurrent().Name", ""
-    
-    # 匹配 hostname 命令
-    if re.match(r'^hostname\s*$', command.strip(), re.IGNORECASE):
-        return "powershell $env:COMPUTERNAME", ""
-    
-    # 匹配 ipconfig 命令
-    if re.match(r'^ipconfig\s*(?:/all)?\s*$', command.strip(), re.IGNORECASE):
-        return "powershell Get-NetIPAddress | Select-Object InterfaceAlias,IPAddress,AddressFamily,PrefixLength", ""
-    
-    # 匹配 tasklist 命令
-    if re.match(r'^tasklist\s*$', command.strip(), re.IGNORECASE):
-        return "powershell Get-Process | Select-Object Name,Id,WorkingSet64,CPU | Sort-Object WorkingSet64 -Descending", ""
-    
-    # 匹配 netstat 命令
-    if re.match(r'^netstat\s*(?:-an|-ano)?\s*$', command.strip(), re.IGNORECASE):
-        return "powershell Get-NetTCPConnection | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State | Sort-Object LocalPort", ""
-    
-    return None, None
-
-
-def _should_use_powershell(command: str) -> bool:
-    """判断命令是否应该使用 PowerShell 执行。
-    
-    返回 True 如果命令应该用 PowerShell 执行，否则 False。
-    """
-    # 已经是 PowerShell 命令
-    if command.lower().startswith("powershell"):
-        return True
-    
-    # Python 命令不用 PowerShell
-    cmd_lower = command.lower().strip()
-    if cmd_lower.startswith("python") or cmd_lower.endswith(".py"):
-        return False
-    
-    # 检测是否包含 PowerShell 特有语法
-    powershell_patterns = [
-        r'\bGet-\w+',      # Get- 开头的 cmdlet
-        r'\bSet-\w+',      # Set- 开头的 cmdlet
-        r'\bSelect-\w+',   # Select- 开头的 cmdlet
-        r'\bWhere-\w+',    # Where- 开头的 cmdlet
-        r'\bForEach-Object\b',
-        r'\bSort-Object\b',
-        r'\|',             # 管道符（PowerShell 管道更可靠）
-        r'\$env:',         # 环境变量引用
-        r'\[System\.',     # .NET 类型引用
-    ]
-    
-    for pattern in powershell_patterns:
-        if re.search(pattern, command, re.IGNORECASE):
-            return True
-    
-    return False
 
 
 def _truncate_run_output(text: str, limit: int = None) -> str:
@@ -1176,16 +529,23 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry) -> st
     Related tests:
         tests/test_dispatch_handlers.py (待补充)
     """
+    trace_id = generate_trace_id("dispatch")
+    logger.debug_with_context(f"execute_atomic_tool: tool={name}", trace_id=trace_id, operation_type="tool_dispatch", phase="start")
     from .handlers import get_handler, ensure_registered
     ensure_registered()
     handler = get_handler(name)
+    # AI-BRANCH-MARKER: 工具分发分支 — handler命中走执行路径，未命中返回错误
     if handler is not None:
         try:
-            return handler.execute(args, ctx, registry)
+            handler_result = handler.execute(args, ctx, registry)
+            logger.debug_with_context(f"execute_atomic_tool: tool={name} completed", trace_id=trace_id, operation_type="tool_dispatch", phase="complete")
+            return handler_result
         except Exception as e:
             # 捕获所有未预期的异常，防止主进程崩溃
+            logger.debug_with_context(f"execute_atomic_tool: tool={name} exception {e}", trace_id=trace_id, operation_type="tool_dispatch", phase="error", error_code="exception")
             logger.exception(f"工具 [{name}] 执行异常: {e}")
             return f"错误: 工具 {name} 执行异常: {e}"
+    logger.debug_with_context(f"execute_atomic_tool: unknown tool={name}", trace_id=trace_id, operation_type="tool_dispatch", phase="error", error_code="unknown_tool")
     return f"未知原子工具: {name}"
 
 
@@ -1200,338 +560,9 @@ def _decode_output(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def check_skill_dependencies(skill_id: str, registry: SkillRegistry) -> tuple[bool, list[str], str]:
-    """
-    检查指定 skill 的依赖是否已安装。
-    返回 (是否需要安装, 需要安装的包列表, 错误消息)
-    """
-    skill = registry.get(str(skill_id))
-    if not skill:
-        return False, [], f"未找到 Skill: {skill_id}"
-    
-    if not skill.relative_path.parent:
-        return False, [], ""
-    
-    skill_dir = Path(config.WORKER_DIR) / skill.relative_path.parent
-    return _check_skill_dependencies(skill_dir)
-
-
-def install_skill_dependencies(skill_id: str, registry: SkillRegistry) -> tuple[bool, str]:
-    """
-    安装指定 skill 的依赖。
-    返回 (成功与否, 消息)
-    """
-    skill = registry.get(str(skill_id))
-    if not skill:
-        return False, f"未找到 Skill: {skill_id}"
-    
-    if not skill.relative_path.parent:
-        return True, ""
-    
-    skill_dir = Path(config.WORKER_DIR) / skill.relative_path.parent
-    return _install_skill_dependencies(skill_dir)
-
-
-def install_skill_from_zip(zip_path: str, registry: SkillRegistry, overwrite: bool = False) -> tuple[list[str], str]:
-    """
-    从 ZIP 包安装 Skill。
-    
-    Args:
-        zip_path: ZIP 文件路径
-        registry: SkillRegistry 实例
-        overwrite: 是否覆盖已存在的 Skill
-        
-    Returns:
-        (安装的 skill_id 列表, 错误消息)
-    """
-    try:
-        from skill.skill_manager import get_manager
-        mgr = get_manager()
-        installed_ids = mgr.install_from_zip(zip_path, overwrite=overwrite)
-        # 刷新 registry
-        if registry and installed_ids:
-            registry.reload()
-        return installed_ids, ""
-    except FileNotFoundError as e:
-        return [], f"ZIP文件不存在: {zip_path}"
-    except ValueError as e:
-        return [], str(e)
-    except FileExistsError as e:
-        return [], f"Skill已存在: {e}，如需覆盖请设置 overwrite=True"
-    except Exception as e:
-        return [], f"安装ZIP包失败: {e}"
-
-
 def splice_skill_path(rel_path: str, skill_id: str, registry: SkillRegistry) -> str:
     """将相对路径拼接到 skill 包目录下"""
     return _splice_skill_path(rel_path, skill_id, registry)
-
-
-# ============================================================
-# 安装成功验证机制
-# ============================================================
-
-def verify_skillhub_installation() -> tuple[bool, str]:
-    """
-    验证 SkillHub CLI 是否安装成功。
-
-    执行 `skillhub --version` 命令，检查 SkillHub CLI 是否可用。
-
-    Returns:
-        tuple[bool, str]: (是否验证成功, 版本信息或错误消息)
-    """
-    try:
-        # 执行 skillhub --version 命令
-        result = subprocess.run(
-            ["skillhub", "--version"],
-            capture_output=True,
-            text=False,
-            timeout=10,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
-        )
-
-        # 解码输出
-        stdout = _decode_output(result.stdout or b"")
-        stderr = _decode_output(result.stderr or b"")
-
-        if result.returncode == 0:
-            # 提取版本信息
-            version_info = stdout.strip() if stdout.strip() else "版本信息未知"
-            logger.info(f"SkillHub CLI 验证成功: {version_info}")
-            return True, f"验证成功，版本信息: {version_info}"
-        else:
-            error_msg = stderr.strip() if stderr.strip() else "未知错误"
-            logger.warning(f"SkillHub CLI 验证失败: {error_msg}")
-            return False, f"验证失败，错误: {error_msg}"
-
-    except FileNotFoundError:
-        # skillhub 命令不存在
-        error_msg = "SkillHub CLI 未安装或未添加到 PATH 环境变量"
-        logger.warning(error_msg)
-        return False, error_msg + _get_skillhub_installation_guide()
-    except subprocess.TimeoutExpired:
-        error_msg = "验证超时，SkillHub CLI 可能未正确安装"
-        logger.warning(error_msg)
-        return False, error_msg
-    except Exception as e:
-        error_msg = f"验证异常: {e}"
-        logger.error(error_msg)
-        return False, error_msg
-
-
-def verify_skill_installation(skill_dir: str) -> tuple[bool, str]:
-    """
-    验证 Skill 是否安装成功。
-
-    检查目标目录是否存在 SKILL.md 文件，并验证元数据是否正确。
-
-    Args:
-        skill_dir: Skill 安装目录路径
-
-    Returns:
-        tuple[bool, str]: (是否验证成功, 消息)
-    """
-    try:
-        skill_path = Path(skill_dir)
-
-        # 检查目录是否存在
-        if not skill_path.exists():
-            return False, f"Skill 目录不存在: {skill_dir}"
-
-        if not skill_path.is_dir():
-            return False, f"路径不是目录: {skill_dir}"
-
-        # 检查 SKILL.md 文件是否存在
-        skill_file = skill_path / "SKILL.md"
-        if not skill_file.exists():
-            return False, f"SKILL.md 文件不存在: {skill_file}"
-
-        if not skill_file.is_file():
-            return False, f"SKILL.md 不是文件: {skill_file}"
-
-        # 读取并解析 SKILL.md 文件
-        try:
-            content = skill_file.read_text(encoding="utf-8")
-        except Exception as e:
-            return False, f"读取 SKILL.md 失败: {e}"
-
-        # 解析 YAML front matter
-        metadata = _parse_skill_yaml_front_matter(content)
-
-        if metadata is None:
-            return False, f"SKILL.md 文件格式错误: 缺少有效的 YAML front matter"
-
-        # 验证必要的元数据字段
-        required_fields = ["id", "name"]
-        missing_fields = [field for field in required_fields if not metadata.get(field)]
-
-        if missing_fields:
-            return False, f"SKILL.md 元数据缺少必要字段: {', '.join(missing_fields)}"
-
-        # 验证成功
-        skill_id = metadata.get("id", "")
-        skill_name = metadata.get("name", "")
-        skill_description = metadata.get("description", "")
-
-        logger.info(f"Skill 验证成功: ID={skill_id}, Name={skill_name}")
-
-        return True, (
-            f"验证成功:\n"
-            f"- Skill ID: {skill_id}\n"
-            f"- 名称: {skill_name}\n"
-            f"- 描述: {skill_description[:50]}..." if len(skill_description) > 50 else f"- 描述: {skill_description}"
-        )
-
-    except Exception as e:
-        error_msg = f"验证异常: {e}"
-        logger.error(error_msg)
-        return False, error_msg
-
-
-def _parse_skill_yaml_front_matter(content: str) -> dict | None:
-    """
-    解析 SKILL.md 文件的 YAML front matter。
-
-    Args:
-        content: Markdown 文件内容
-
-    Returns:
-        dict | None: 解析后的元数据字典，解析失败返回 None
-    """
-    try:
-        if not content.startswith("---"):
-            return None
-
-        parts = content.split("---", 2)
-        if len(parts) < 3:
-            return None
-
-        yaml_content = parts[1].strip()
-
-        try:
-            metadata = yaml.safe_load(yaml_content)
-            if not isinstance(metadata, dict):
-                return None
-            return metadata
-        except yaml.YAMLError as e:
-            logger.warning(f"YAML 解析失败: {e}")
-            return None
-
-    except Exception as e:
-        logger.warning(f"解析 YAML front matter 失败: {e}")
-        return None
-
-
-def _get_skillhub_installation_guide() -> str:
-    """
-    获取 SkillHub CLI 安装指引。
-
-    Returns:
-        str: 安装指引字符串
-    """
-    return """
-
-【SkillHub CLI 安装指引】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-方法1: 使用 pip 安装（推荐）
-pip install skillhub-cli
-
-方法2: 使用安装脚本
-Invoke-WebRequest -Uri "https://skillhub.cn/install.ps1" | Invoke-Expression
-
-方法3: 从 GitHub 安装
-pip install git+https://github.com/skillhub/skillhub-cli.git
-
-【验证安装】
-安装完成后，请在新的终端窗口中运行：
-skillhub --version
-
-如果提示"命令未找到"，请：
-1. 确认 Python 已正确安装并添加到 PATH
-2. 重新打开终端窗口
-3. 检查 pip 安装路径是否在 PATH 中
-"""
-
-
-def verify_and_report_skillhub_installation() -> str:
-    """
-    验证 SkillHub CLI 安装并返回详细的报告。
-
-    Returns:
-        str: 验证报告字符串
-    """
-    success, message = verify_skillhub_installation()
-
-    if success:
-        report = f"""
-✓ SkillHub CLI 安装验证成功
-
-{message}
-
-【下一步】
-您可以开始使用 SkillHub CLI 安装 Skill：
-1. 列出可用的 Skill: skillhub list
-2. 安装 Skill: skillhub install <skill_id>
-3. 查看帮助: skillhub --help
-"""
-    else:
-        report = f"""
-✗ SkillHub CLI 安装验证失败
-
-{message}
-
-【故障排查建议】
-1. 确认已正确安装 SkillHub CLI
-2. 检查 Python 和 pip 是否正确安装
-3. 确认安装路径已添加到 PATH 环境变量
-4. 尝试重新打开终端窗口
-"""
-
-    return report
-
-
-def verify_and_report_skill_installation(skill_dir: str) -> str:
-    """
-    验证 Skill 安装并返回详细的报告。
-
-    Args:
-        skill_dir: Skill 安装目录路径
-
-    Returns:
-        str: 验证报告字符串
-    """
-    success, message = verify_skill_installation(skill_dir)
-
-    if success:
-        report = f"""
-✓ Skill 安装验证成功
-
-安装目录: {skill_dir}
-
-{message}
-
-【下一步】
-您现在可以使用此 Skill：
-- 查看 Skill 详情: manage_skill(action="get_info", skill_id="<id>")
-- 列出已安装 Skill: manage_skill(action="list")
-"""
-    else:
-        report = f"""
-✗ Skill 安装验证失败
-
-安装目录: {skill_dir}
-
-{message}
-
-【故障排查建议】
-1. 确认 Skill 目录路径正确
-2. 检查 SKILL.md 文件是否存在
-3. 验证 SKILL.md 文件格式是否正确（YAML front matter）
-4. 检查元数据是否包含必要的字段（id、name）
-"""
-
-    return report
 
 
 def _register_all_atomic_tools() -> None:

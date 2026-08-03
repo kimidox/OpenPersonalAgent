@@ -20,6 +20,7 @@
 import logging
 import os
 import random
+import re
 import string
 import sys
 from datetime import datetime
@@ -27,6 +28,53 @@ from pathlib import Path
 from typing import Optional
 
 from resource_path import paths
+
+
+class SensitiveDataFilter(logging.Filter):
+    """敏感数据日志过滤器
+
+    检测并脱敏日志消息中的敏感信息：
+    - API key: sk-xxx... → sk-***
+    - Bearer token: Bearer xxx... → Bearer ***
+    - 密码字段: password=xxx → password=***
+    - 长对话内容: 超过200字符的消息截断为前100字符+...[truncated]
+    """
+
+    # API key 模式：sk- 后跟任意非空白字符
+    _API_KEY_PATTERN = re.compile(r'(sk-)\S+')
+    # Bearer token 模式
+    _BEARER_PATTERN = re.compile(r'(Bearer\s+)\S+', re.IGNORECASE)
+    # 密码字段模式：password=xxx 或 password: xxx
+    _PASSWORD_PATTERN = re.compile(r'(password\s*[=:]\s*)\S+', re.IGNORECASE)
+    # 长消息截断阈值
+    _MAX_MESSAGE_LENGTH = 200
+    _TRUNCATE_PREFIX_LENGTH = 100
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """过滤日志记录，脱敏敏感数据"""
+        msg = record.getMessage()
+        sanitized = self._sanitize(msg)
+        # 截断过长消息
+        sanitized = self._truncate(sanitized)
+        # 用脱敏后的消息替换原消息
+        # 使用 args=() 防止后续格式化再次替换
+        record.msg = sanitized
+        record.args = ()
+        return True
+
+    def _sanitize(self, msg: str) -> str:
+        """脱敏敏感数据"""
+        msg = self._API_KEY_PATTERN.sub(r'\1***', msg)
+        msg = self._BEARER_PATTERN.sub(r'\1***', msg)
+        msg = self._PASSWORD_PATTERN.sub(r'\1***', msg)
+        return msg
+
+    def _truncate(self, msg: str) -> str:
+        """截断过长消息"""
+        if len(msg) > self._MAX_MESSAGE_LENGTH:
+            return msg[:self._TRUNCATE_PREFIX_LENGTH] + '...[truncated]'
+        return msg
+
 
 _logger: Optional[logging.Logger] = None
 
@@ -94,6 +142,7 @@ def setup_logger(name: str = "OpenPersonalAgent", level: int = None) -> logging.
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(console_level)  # 生产环境INFO，调试模式DEBUG
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(SensitiveDataFilter())
     logger.addHandler(console_handler)
     
     # 文件处理器（delay=True：首次写入才打开文件，避免启动时I/O）
@@ -109,6 +158,7 @@ def setup_logger(name: str = "OpenPersonalAgent", level: int = None) -> logging.
         )
         file_handler.setLevel(file_level)  # 生产环境INFO，调试模式DEBUG
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(SensitiveDataFilter())
         logger.addHandler(file_handler)
 
         # 使用延迟格式化（%），避免无效字符串操作
@@ -262,11 +312,11 @@ class LoggerAdapter:
     def debug_with_context(
         self,
         msg: str,
+        *args,
         trace_id: str = None,
         operation_type: str = None,
         phase: str = None,
         error_code: str = None,
-        *args,
         **kwargs
     ):
         """带上下文的结构化debug日志"""
@@ -282,11 +332,11 @@ class LoggerAdapter:
     def info_with_context(
         self,
         msg: str,
+        *args,
         trace_id: str = None,
         operation_type: str = None,
         phase: str = None,
         error_code: str = None,
-        *args,
         **kwargs
     ):
         """带上下文的结构化info日志"""
@@ -302,11 +352,11 @@ class LoggerAdapter:
     def warning_with_context(
         self,
         msg: str,
+        *args,
         trace_id: str = None,
         operation_type: str = None,
         phase: str = None,
         error_code: str = None,
-        *args,
         **kwargs
     ):
         """带上下文的结构化warning日志"""
@@ -322,11 +372,11 @@ class LoggerAdapter:
     def error_with_context(
         self,
         msg: str,
+        *args,
         trace_id: str = None,
         operation_type: str = None,
         phase: str = None,
         error_code: str = None,
-        *args,
         **kwargs
     ):
         """带上下文的结构化error日志"""
@@ -342,11 +392,11 @@ class LoggerAdapter:
     def exception_with_context(
         self,
         msg: str,
+        *args,
         trace_id: str = None,
         operation_type: str = None,
         phase: str = None,
         error_code: str = None,
-        *args,
         **kwargs
     ):
         """带上下文的结构化exception日志（自动包含异常堆栈）"""

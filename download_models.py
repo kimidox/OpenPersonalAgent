@@ -165,8 +165,8 @@ def download_model(model_key: str, model_dir: Path, show_progress: bool = True) 
         if tar_path.exists():
             try:
                 tar_path.unlink()
-            except:
-                pass
+            except Exception as e:
+                logger.debug("临时文件清理失败: %s", e)
         return None
 
 

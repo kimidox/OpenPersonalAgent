@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import config
 from logger import get_logger
+from ui_flet.viewmodels.conversation_viewmodel import ConversationViewModel
 
 
 class ScheduledTaskMixin:
@@ -31,7 +32,8 @@ class ScheduledTaskMixin:
         Args:
             task: ScheduledTask 对象（使用 task.content 作为用户消息）
         """
-        if not self.skill_agent:
+        vm: ConversationViewModel = self._conversation_vm
+        if not vm.is_available:
             self._logger.error("SkillAgent 未初始化，无法处理定时任务对话")
             return
 

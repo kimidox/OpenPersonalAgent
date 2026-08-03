@@ -10,8 +10,12 @@ from __future__ import annotations
 import time
 from typing import Any, Optional, List
 
+from logger import get_module_logger
+
 from .uia_client import UIAClient, UIElementInfo, get_uia_client
 from .success_rate_tracker import get_tracker
+
+logger = get_module_logger("ElementFinder")
 
 
 class ElementFinder:
@@ -70,8 +74,8 @@ class ElementFinder:
                         info = self.client._element_to_info(element, depth=0)
                         if info:
                             results.append(info.to_dict())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("元素查找回调异常: %s", e)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -185,8 +189,8 @@ class ElementFinder:
                             results.append(info.to_dict())
                         if len(results) >= max_results:
                             break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("元素查找回调异常: %s", e)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -292,8 +296,8 @@ class ElementFinder:
                             results.append(info.to_dict())
                         if len(results) >= max_results:
                             break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("元素查找回调异常: %s", e)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 

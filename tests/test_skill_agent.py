@@ -362,7 +362,7 @@ class TestDispatch:
     """_dispatch 工具分发测试。"""
 
     def test_select_skill_goes_control(self, skill_agent_minimal):
-        with patch("skill_agent.execute_skill_control_tool") as mock_ctrl:
+        with patch("skill_agent._agent.execute_skill_control_tool") as mock_ctrl:
             mock_ctrl.return_value = ("result", False, None)
             result = skill_agent_minimal._dispatch(
                 "select_skill", {"skill_id": "test"}, [], []
@@ -370,7 +370,7 @@ class TestDispatch:
             mock_ctrl.assert_called_once()
 
     def test_finish_goes_control(self, skill_agent_minimal):
-        with patch("skill_agent.execute_skill_control_tool") as mock_ctrl:
+        with patch("skill_agent._agent.execute_skill_control_tool") as mock_ctrl:
             mock_ctrl.return_value = ("done", False, None)
             result = skill_agent_minimal._dispatch(
                 "finish", {"summary": "done"}, [], []
@@ -378,7 +378,7 @@ class TestDispatch:
             mock_ctrl.assert_called_once()
 
     def test_ask_user_goes_control(self, skill_agent_minimal):
-        with patch("skill_agent.execute_skill_control_tool") as mock_ctrl:
+        with patch("skill_agent._agent.execute_skill_control_tool") as mock_ctrl:
             mock_ctrl.return_value = ("question asked", True, '{"question": "Q"}')
             result = skill_agent_minimal._dispatch(
                 "ask_user", {"question": "Q"}, [], []
@@ -386,7 +386,7 @@ class TestDispatch:
             mock_ctrl.assert_called_once()
 
     def test_atomic_tool_goes_execute(self, skill_agent_minimal):
-        with patch("skill_agent.execute_atomic_tool") as mock_atomic:
+        with patch("skill_agent._agent.execute_atomic_tool") as mock_atomic:
             mock_atomic.return_value = "file listed"
             result = skill_agent_minimal._dispatch(
                 "file_operation", {"action": "list", "path": "."}, [], []

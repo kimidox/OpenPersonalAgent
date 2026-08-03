@@ -18,7 +18,7 @@ except ImportError:
 
 from logger import get_module_logger
 
-logger = get_module_logger("UIClient")
+logger = get_module_logger("UIAClient")
 
 
 @dataclass
@@ -384,10 +384,8 @@ class UIAClient:
                     info.children.append(child_info)
                     if count[0] >= max_elements:
                         break
-            except Exception:
-                pass
-
-        return info
+            except Exception as e:
+                logger.debug("获取窗口列表异常: %s", e)
 
     def _control_type_to_str(self, ct: int) -> str:
         """将 ControlType 整数转换为字符串"""
@@ -504,8 +502,8 @@ class UIAClient:
                 pattern = element.GetPattern(pattern_name)
                 if pattern:
                     patterns.append(pattern_name)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("获取桌面元素异常: %s", e)
 
         return patterns
 

@@ -7,14 +7,15 @@
 - 分层依赖违规扫描
 """
 import sys
-import unittest
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-class TestConstantsModule(unittest.TestCase):
+class TestConstantsModule:
     """_constants 模块测试"""
 
     def test_size_constants_values(self):
@@ -23,12 +24,12 @@ class TestConstantsModule(unittest.TestCase):
             BALL_SIZE, BALL_MARGIN,
             CHAT_WIDTH, CHAT_HEIGHT, CHAT_MIN_WIDTH, CHAT_MIN_HEIGHT,
         )
-        self.assertEqual(BALL_SIZE, 50)
-        self.assertEqual(BALL_MARGIN, 20)
-        self.assertEqual(CHAT_WIDTH, 400)
-        self.assertEqual(CHAT_HEIGHT, 500)
-        self.assertEqual(CHAT_MIN_WIDTH, 300)
-        self.assertEqual(CHAT_MIN_HEIGHT, 400)
+        assert BALL_SIZE == 50
+        assert BALL_MARGIN == 20
+        assert CHAT_WIDTH == 400
+        assert CHAT_HEIGHT == 500
+        assert CHAT_MIN_WIDTH == 300
+        assert CHAT_MIN_HEIGHT == 400
 
     def test_string_color_constants(self):
         """验证字符串颜色常量格式"""
@@ -37,9 +38,9 @@ class TestConstantsModule(unittest.TestCase):
             DEFAULT_TEXT_COLOR,
             DEFAULT_BORDER_COLOR,
         )
-        self.assertTrue(DEFAULT_BG_COLOR.startswith("#"))
-        self.assertTrue(DEFAULT_TEXT_COLOR.startswith("#"))
-        self.assertTrue(DEFAULT_BORDER_COLOR.startswith("#"))
+        assert DEFAULT_BG_COLOR.startswith("#")
+        assert DEFAULT_TEXT_COLOR.startswith("#")
+        assert DEFAULT_BORDER_COLOR.startswith("#")
 
     def test_qcolor_constants_initial_none(self):
         """验证 QColor 常量初始为 None（延迟初始化）"""
@@ -50,22 +51,20 @@ class TestConstantsModule(unittest.TestCase):
         # 注意：如果其他测试先调用了 init_qcolor_constants，这里可能不是 None
         # 在隔离测试环境中应该是 None
         # 此测试验证延迟初始化模式存在
-        self.assertTrue(
-            DEFAULT_PRIMARY_COLOR is None or hasattr(DEFAULT_PRIMARY_COLOR, 'red'),
-            "DEFAULT_PRIMARY_COLOR 应为 None 或 QColor 实例"
-        )
+        assert (
+            DEFAULT_PRIMARY_COLOR is None or hasattr(DEFAULT_PRIMARY_COLOR, 'red')
+        ), "DEFAULT_PRIMARY_COLOR 应为 None 或 QColor 实例"
 
     def test_init_qcolor_constants_creates_qcolor(self):
         """验证 init_qcolor_constants() 正确初始化 QColor"""
         from ui_flet.floating_ball_widgets import _constants as _const
         _const.init_qcolor_constants()
-        self.assertIsNotNone(_const.DEFAULT_PRIMARY_COLOR)
-        self.assertIsNotNone(_const.DEFAULT_HOVER_COLOR)
+        assert _const.DEFAULT_PRIMARY_COLOR is not None
+        assert _const.DEFAULT_HOVER_COLOR is not None
         # 验证是 QColor 实例
-        self.assertTrue(
-            type(_const.DEFAULT_PRIMARY_COLOR).__name__ == 'QColor',
-            f"期望 QColor 实例，得到 {type(_const.DEFAULT_PRIMARY_COLOR)}"
-        )
+        assert (
+            type(_const.DEFAULT_PRIMARY_COLOR).__name__ == 'QColor'
+        ), f"期望 QColor 实例，得到 {type(_const.DEFAULT_PRIMARY_COLOR)}"
 
     def test_init_qcolor_constants_idempotent(self):
         """验证 init_qcolor_constants() 多次调用安全（幂等）"""
@@ -74,23 +73,23 @@ class TestConstantsModule(unittest.TestCase):
         first = _const.DEFAULT_PRIMARY_COLOR
         _const.init_qcolor_constants()
         second = _const.DEFAULT_PRIMARY_COLOR
-        self.assertEqual(first, second)
+        assert first == second
 
 
-class TestEventBusDecoupling(unittest.TestCase):
+class TestEventBusDecoupling:
     """EventBus 解耦验证测试"""
 
     def test_event_bus_available(self):
         """验证 EventBus 可正常导入和实例化"""
         from events.event_bus import EventBus
         bus = EventBus.get_instance()
-        self.assertIsNotNone(bus)
+        assert bus is not None
 
     def test_llm_error_event_type_exists(self):
         """验证 LLM_ERROR 事件类型已定义"""
         from events.event_types import EventType
-        self.assertTrue(hasattr(EventType, 'LLM_ERROR'))
-        self.assertEqual(EventType.LLM_ERROR.value, "llm_error")
+        assert hasattr(EventType, 'LLM_ERROR')
+        assert EventType.LLM_ERROR.value == "llm_error"
 
     def test_basechatmodel_no_direct_ui_flet_import(self):
         """验证 BaseChatModel 不再直接导入 ui_flet 模块"""
@@ -100,11 +99,10 @@ class TestEventBusDecoupling(unittest.TestCase):
             line for line in content.splitlines()
             if 'ui_flet' in line and not line.strip().startswith('#')
         ]
-        self.assertEqual(len(import_lines), 0,
-                         f"发现 ui_flet 导入: {import_lines}")
+        assert len(import_lines) == 0, f"发现 ui_flet 导入: {import_lines}"
 
 
-class TestLayerDependencyRules(unittest.TestCase):
+class TestLayerDependencyRules:
     """分层依赖规则验证"""
 
     def test_base_tool_no_module_level_skill_import(self):
@@ -121,7 +119,7 @@ class TestLayerDependencyRules(unittest.TestCase):
                         in_type_checking = True
                         break
                 if not in_type_checking:
-                    self.fail(f"L{i+1}: 发现非 TYPE_CHECKING 保护的 skill 导入: {line.strip()}")
+                    pytest.fail(f"L{i+1}: 发现非 TYPE_CHECKING 保护的 skill 导入: {line.strip()}")
 
     def test_base_tool_no_module_level_llm_import(self):
         """验证 base_tool/schema.py 的 llm 导入已受保护"""
@@ -138,8 +136,4 @@ class TestLayerDependencyRules(unittest.TestCase):
                 # 函数内的延迟导入是允许的
                 in_function = line.startswith(' ' * 8)  # 函数体至少8空格缩进
                 if not in_type_checking and not in_function:
-                    self.fail(f"L{i+1}: 发现非保护的 llm 导入: {line.strip()}")
-
-
-if __name__ == "__main__":
-    unittest.main()
+                    pytest.fail(f"L{i+1}: 发现非保护的 llm 导入: {line.strip()}")

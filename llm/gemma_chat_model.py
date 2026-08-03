@@ -122,7 +122,7 @@ class GemmaChatModel(BaseChatModel):
             }
         ]
 
-    def extract_function_call(self, message: Any) -> Optional[dict[str, str]]:
+    def extract_tool_call(self, message: Any) -> Optional[dict[str, str]]:
         """
         尝试从模型输出中提取工具调用信息。
         返回格式：{"name": ..., "arguments": "...json...", "reasoning_content": ...} 或 None
@@ -203,7 +203,7 @@ class GemmaChatModel(BaseChatModel):
                 extra_body=self.extra_body,
             )
             msg = response.choices[0].message
-            return self.extract_function_call(msg)
+            return self.extract_tool_call(msg)
         except BadRequestError as e:
             raise RuntimeError(f"请求参数错误: {e}")
         except AuthenticationError as e:
