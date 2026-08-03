@@ -74,8 +74,6 @@ def _auto_register_all() -> None:
         run_command,
         scheduled_tasks,
         uploaded_files,
-        accessibility,
-        application,
         hotkey,
         skill_management,
     )

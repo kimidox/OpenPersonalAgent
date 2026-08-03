@@ -621,6 +621,27 @@ class SkillAgent:
         self._stop_event.set()
         logger.debug("Agent 已请求 abort")
 
+    def _emit_event(self, event_type: AgentEventType, **data: Any) -> None:
+        """发出结构化事件，通过回调通知外部监听者。
+
+        若未设置事件回调（_event_callback 为 None），则静默跳过。
+        回调执行中的异常被捕获并记录为警告，避免影响 Agent 主流程。
+
+        Args:
+            event_type: 事件类型枚举值。
+            **data: 事件附加数据，作为 AgentEvent.data 传递。
+        """
+        if self._event_callback is not None:
+            try:
+                event = AgentEvent(
+                    event_type=event_type,
+                    data=data,
+                    conversation_id=self._conversation_id,
+                )
+                self._event_callback(event)
+            except Exception as e:
+                logger.warning("事件回调执行失败: %s", e)
+
     def set_event_callback(self, callback: Optional[Callable[[AgentEvent], None]]) -> None:
         """设置结构化事件回调函数。
 

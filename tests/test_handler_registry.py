@@ -3,7 +3,7 @@ Handler 注册表单元测试
 
 覆盖 base_tool/handlers 的核心功能：
 - Handler 注册和查找
-- 18 个 Handler 全部注册验证
+- 10 个 Handler 全部注册验证
 - execute_atomic_tool 分发逻辑
 - 未知工具名处理
 """
@@ -45,10 +45,10 @@ def tool_context():
 class TestHandlerRegistry:
     """Handler 注册表核心功能测试"""
 
-    def test_all_18_handlers_registered(self):
-        """验证 18 个 Handler 全部注册"""
+    def test_all_10_handlers_registered(self):
+        """验证 10 个 Handler 全部注册"""
         handlers = get_all_handlers()
-        assert len(handlers) == 18, f"期望 18 个 Handler，实际 {len(handlers)}"
+        assert len(handlers) == 10, f"期望 10 个 Handler，实际 {len(handlers)}"
 
     def test_expected_handler_names(self):
         """验证所有预期的 Handler 名称都已注册"""
@@ -60,14 +60,6 @@ class TestHandlerRegistry:
             "list_scheduled_tasks",
             "delete_scheduled_task",
             "uploaded_files",
-            "get_accessibility_tree",
-            "find_element",
-            "click_element",
-            "type_text",
-            "scroll_element",
-            "get_element_state",
-            "start_application",
-            "list_installed_apps",
             "send_hotkey",
             "install_skill_from_zip",
             "manage_skill",

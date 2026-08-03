@@ -19,10 +19,10 @@ class SendHotkeyHandler(ToolHandler):
         return "send_hotkey"
 
     def execute(self, args: dict, ctx: ToolContext, registry) -> str:
-        """发送热键组合到系统，支持指定目标窗口
+        """发送热键组合到当前焦点窗口
 
         Args:
-            args: 工具参数字典，支持 keys、target_window
+            args: 工具参数字典，支持 keys
             ctx: ToolContext 执行上下文
             registry: 工具注册表
 
@@ -30,7 +30,6 @@ class SendHotkeyHandler(ToolHandler):
             工具执行结果的字符串
         """
         keys = args.get("keys", "")
-        target_window = args.get("target_window", None)
 
         if not keys:
             return "错误: 缺少 keys 参数"
@@ -91,23 +90,6 @@ class SendHotkeyHandler(ToolHandler):
                 mapped_key = key_mapping.get(part, part)
                 mapped_keys.append(mapped_key)
 
-            # 如果指定了目标窗口，先激活该窗口
-            if target_window:
-                try:
-                    import ctypes
-                    user32 = ctypes.windll.user32
-
-                    # 查找窗口
-                    hwnd = user32.FindWindowW(None, target_window)
-                    if hwnd:
-                        # 激活窗口
-                        user32.SetForegroundWindow(hwnd)
-                        time.sleep(0.3)  # 等待窗口激活
-                    else:
-                        return f"警告: 未找到窗口 '{target_window}'，热键将发送到当前焦点窗口"
-                except Exception as e:
-                    return f"警告: 激活窗口失败: {e}，热键将发送到当前焦点窗口"
-
             # 发送热键
             # 尝试使用 pyautogui（如果已安装）
             try:
@@ -126,7 +108,6 @@ class SendHotkeyHandler(ToolHandler):
                 # 如果 pyautogui 未安装，使用 ctypes 直接调用 Win32 API
                 try:
                     import ctypes
-                    from ctypes import wintypes
 
                     user32 = ctypes.windll.user32
 

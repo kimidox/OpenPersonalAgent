@@ -1,6 +1,6 @@
 """原子工具调度核心模块。
 
-职责：工具注册与分发、命令安全检测、输出处理、UIA 惰性加载。
+职责：工具注册与分发、命令安全检测、输出处理。
 
 注意：大量辅助函数已按职责拆分到子模块，本文件通过重新导出保持
 所有 ``from base_tool.dispatch import xxx`` 的兼容性。
@@ -92,44 +92,6 @@ from .installation_verifier import (                # noqa: F401
 )
 
 logger = get_module_logger("ToolDispatch")
-
-# UI Automation 模块惰性加载：避免启动时同步加载 automation 子模块链，
-# 首个 UI 自动化工具调用时才导入（UIA_AVAILABLE 语义由 _ensure_uia() 保留）
-UIA_AVAILABLE: bool | None = None  # None=未探测，True/False=探测结果
-
-
-def _ensure_uia() -> bool:
-    """首次调用时导入 UI Automation 符号到模块全局，返回是否可用。"""
-    global UIA_AVAILABLE
-    global AccessibilityTreeParser, ElementFinder, ActionExecutor
-    global get_uia_client, get_controller, reset_controller, TaskController, get_tracker
-    if UIA_AVAILABLE is None:
-        try:
-            from automation import (
-                AccessibilityTreeParser as _ATP,
-                ElementFinder as _EF,
-                ActionExecutor as _AE,
-            )
-            from automation.uia_client import get_uia_client as _guc
-            from automation.task_controller import (
-                get_controller as _gc,
-                reset_controller as _rc,
-                TaskController as _TC,
-            )
-            from automation.success_rate_tracker import get_tracker as _gt
-
-            AccessibilityTreeParser = _ATP
-            ElementFinder = _EF
-            ActionExecutor = _AE
-            get_uia_client = _guc
-            get_controller = _gc
-            reset_controller = _rc
-            TaskController = _TC
-            get_tracker = _gt
-            UIA_AVAILABLE = True
-        except ImportError:
-            UIA_AVAILABLE = False
-    return UIA_AVAILABLE
 
 _RUN_COMMAND_DEFAULT_TIMEOUT = 60
 _RUN_COMMAND_MAX_TIMEOUT = 180

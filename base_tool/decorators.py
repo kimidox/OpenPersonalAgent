@@ -71,14 +71,12 @@ class ToolRegistry:
 
     支持两种注册方式：
     1. 装饰器注册：@atomic_tool / @control_tool
-    2. 编程注册：register_from_definition / register_automation_tool
+    2. 编程注册：register_from_definition
     """
 
     def __init__(self) -> None:
         # 主存储：{tool_name: {"definition": dict, "implementation": Callable | None}}
         self._tools: dict[str, dict] = {}
-        # 自动化工具存储
-        self._automation_tools: dict[str, dict] = {}
         # 向后兼容：ToolMetadata 缓存（惰性构建）
         self._atomic_tools: dict[str, ToolMetadata] = {}
         self._control_tools: dict[str, ToolMetadata] = {}
@@ -319,41 +317,6 @@ class ToolRegistry:
         """
         return self._register_from_definition(tool_name, tool_definition, implementation, overwrite)
 
-    def register_automation_tool(
-        self,
-        tool_name: str,
-        tool_definition: dict,
-        implementation: Callable | None = None,
-    ) -> bool:
-        """注册自动化工具（category 为 locator/executor/extractor/condition 等）。
-
-        Args:
-            tool_name: 工具名称
-            tool_definition: 工具定义字典
-            implementation: 工具实现函数（可选）
-
-        Returns:
-            bool: 注册是否成功
-        """
-        category = tool_definition.get("category", "automation")
-        # 存储到 automation 专用字典
-        self._automation_tools[tool_name] = {
-            "definition": {
-                "name": tool_name,
-                "category": category,
-                "description": tool_definition.get("description", ""),
-                "parameters": tool_definition.get("parameters", {}),
-            },
-            "implementation": implementation,
-        }
-        # 同时存储到主存储
-        self._tools[tool_name] = self._automation_tools[tool_name]
-
-        if implementation is not None:
-            self._implementations[tool_name] = implementation
-
-        return True
-
     # ------------------------------------------------------------------
     # 查询方法（装饰器 API）
     # ------------------------------------------------------------------
@@ -422,7 +385,6 @@ class ToolRegistry:
             return False
 
         del self._tools[tool_name]
-        self._automation_tools.pop(tool_name, None)
         self._atomic_tools.pop(tool_name, None)
         self._control_tools.pop(tool_name, None)
         self._implementations.pop(tool_name, None)
@@ -466,7 +428,7 @@ class ToolRegistry:
         return [info.get("definition") for info in self._tools.values()]
 
     def get_all_tools_flat(self) -> list[dict]:
-        """返回所有工具的扁平列表（包括 atomic、control、automation 类别）。
+        """返回所有工具的扁平列表（包括 atomic、control 类别）。
 
         每个元素为扁平化字典，包含 name、category、description、parameters、implementation。
         """
@@ -528,7 +490,6 @@ class ToolRegistry:
         count = len(custom)
         for n in custom:
             del self._tools[n]
-            self._automation_tools.pop(n, None)
             self._atomic_tools.pop(n, None)
             self._control_tools.pop(n, None)
             self._implementations.pop(n, None)

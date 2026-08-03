@@ -205,7 +205,7 @@ INPUT_CLASSIFICATION_TEMPLATE: Final[str] = """你是一个输入分类器。请
 
 【输出格式】
 请严格按以下JSON格式输出，不要输出任何其他内容：
-{"type": "chat|simple_task|complex_task", "reason": "简短说明分类原因"}
+{{"type": "chat|simple_task|complex_task", "reason": "简短说明分类原因"}}
 
 【用户的输入】
 {user_query}
