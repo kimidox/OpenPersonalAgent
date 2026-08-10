@@ -294,7 +294,7 @@ class ErrorHandlingMixin:
         else:
             error_msg = f"未知错误: {error}"
 
-        stream_callback(error_msg, "content")
+        stream_callback(error_msg, "assistant")
         self._transition_communication_state(
             LLMCommunicationState.COMMUNICATION_ENDED,
             error_message=error_msg

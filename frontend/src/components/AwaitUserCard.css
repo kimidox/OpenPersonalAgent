@@ -1,0 +1,58 @@
+.await-user-card {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-lg);
+  margin: 14px 0;
+  box-shadow: var(--shadow-sm);
+}
+
+.await-icon {
+  font-size: 20px;
+}
+
+.await-body {
+  flex: 1;
+}
+
+.await-title {
+  font-size: 13px;
+  color: var(--warning-text);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.await-form {
+  display: flex;
+  gap: 10px;
+}
+
+.await-input {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+}
+
+.await-submit {
+  padding: 8px 16px;
+  background: var(--warning);
+  color: white;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.await-submit:hover:not(:disabled) {
+  background: var(--warning-hover);
+  transform: translateY(-1px);
+}
+
+.await-submit:disabled {
+  opacity: 0.5;
+}

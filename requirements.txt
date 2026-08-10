@@ -1,5 +1,4 @@
-# GUI框架
-flet==0.85.3
+﻿# GUI框架（阶段 6 后 main.py 不再使用 Flet，仅悬浮球子进程用 PySide6）
 PySide6>=6.6.0  # 桌面悬浮球独立进程
 
 # 屏幕信息（用于窗口位置验证，支持多显示器）
@@ -56,3 +55,10 @@ sherpa-onnx==1.10.46
 
 # IPC 优化
 msgpack>=1.0.7
+
+# 后端服务层（Tauri 重构，见 .trae/documents/frontend-tauri-refactor.md）
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+python-multipart>=0.0.9
+websockets>=12.0

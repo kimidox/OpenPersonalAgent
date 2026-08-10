@@ -1,0 +1,46 @@
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 0;
+}
+
+.message-list.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.msg-empty-hint {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.message-list-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.reconnect-hint {
+  text-align: center;
+  padding: 10px;
+  color: var(--warning-text);
+  font-size: 12px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-md);
+  margin: 10px 0;
+  font-weight: 500;
+}
+
+.run-error-inline {
+  text-align: center;
+  padding: 10px;
+  color: var(--error);
+  font-size: 12px;
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-md);
+  margin: 10px 0;
+  font-weight: 500;
+}

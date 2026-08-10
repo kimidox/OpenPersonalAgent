@@ -1,0 +1,41 @@
+# Tauri 2.x Rust 外壳（阶段 6 打包入口）。
+#
+# 职责：
+# - 拉起 Python 后端 sidecar（backend_service.exe），解析 BACKEND_READY marker
+# - 把后端 URL/token 注入前端（invoke 命令）
+# - 健康轮询 + 崩溃重启（上限 3 次/会话）
+# - 系统托盘 + 单例锁 + 窗口显隐
+#
+# 见 frontend-tauri-refactor.md 3.12 / 3.13 节。
+
+[package]
+name = "personal-window-glm"
+version = "0.1.0"
+description = "PersonalWindowGLM Tauri Shell"
+authors = ["kimido"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "personal_window_glm_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "process", "sync"] }
+log = "0.4"
+env_logger = "0.11"
+rand = "0.8"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

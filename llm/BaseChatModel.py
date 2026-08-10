@@ -800,7 +800,7 @@ class BaseChatModel(
             return result
         except Exception as e:
             error_msg = f"流式响应处理错误: {e}"
-            stream_callback(error_msg, "content")
+            stream_callback(error_msg, "assistant")
             # 异常时转换状态为 COMMUNICATION_ENDED
             self._transition_communication_state(
                 LLMCommunicationState.COMMUNICATION_ENDED,

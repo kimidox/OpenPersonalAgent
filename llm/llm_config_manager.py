@@ -11,9 +11,7 @@ from resource_path import paths
 
 
 def _get_config_path() -> Path:
-    if paths.is_frozen:
-        return paths.user_data_dir / "llm_config.json"
-    return paths.project_root / "llm_config.json"
+    return paths.personal_data_dir / "llm_config.json"
 
 
 _CONFIG_PATH = _get_config_path()

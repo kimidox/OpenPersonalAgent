@@ -1,11 +1,29 @@
+"""TaskScheduler：周期检查 scheduled_tasks 并触发。
+
+迁移说明（见 frontend-tauri-refactor.md 3.8 节）：
+- 新增 `runner` / `bridge` / `skill_agent` 参数，用于后端服务模式（无 UI）。
+- 保留 `main_window` 参数，用于 Flet 旧路径（阶段 6 前）。
+- 二者互斥：若 `runner` 与 `bridge` 与 `skill_agent` 均提供，走后端路径；
+  否则回退到 main_window 路径。
+- `is_agent_busy`：后端路径读 `runner.is_busy()`；旧路径读 `main_window.is_agent_busy()`。
+- `create_conversation_for_scheduled_task`：
+  - 后端路径：`skill_agent.start_new_conversation()` + `runner.submit(RunContext)`。
+  - 旧路径：`main_window.create_conversation_for_scheduled_task(task)`。
+"""
 from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 from logger import get_module_logger
 from notification import send_notification
 from scheduled_tasks import ScheduledTask, get_pending_tasks, update_task, update_task_status
+
+if TYPE_CHECKING:
+    from backend_service.runner import RunCoordinator, RunContext
+    from backend_service.ws.stream_bridge import StreamBridge
+    from skill_agent import SkillAgent
 
 logger = get_module_logger("scheduler")
 
@@ -17,15 +35,34 @@ class _TaskDeferred(Exception):
 class TaskScheduler:
     CHECK_INTERVAL_MS: int = 5000
 
-    def __init__(self, tray_icon=None, main_window=None):
+    def __init__(
+        self,
+        tray_icon=None,
+        main_window=None,
+        *,
+        runner: RunCoordinator | None = None,
+        bridge: StreamBridge | None = None,
+        skill_agent: SkillAgent | None = None,
+    ) -> None:
         self._tray_icon = tray_icon
         self._main_window = main_window
+        self._runner = runner
+        self._bridge = bridge
+        self._skill_agent = skill_agent
         self._timer: threading.Timer | None = None
         self._running: bool = False
         self._lock = threading.Lock()
         self._timer_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        logger.info("TaskScheduler 初始化完成")
+        # 后端模式标记
+        self._backend_mode = runner is not None and bridge is not None and skill_agent is not None
+        logger.info(
+            f"TaskScheduler 初始化完成 (mode={'backend' if self._backend_mode else 'legacy'})"
+        )
+
+    # ------------------------------------------------------------------
+    # 启停
+    # ------------------------------------------------------------------
 
     def start(self) -> None:
         with self._lock:
@@ -66,6 +103,15 @@ class TaskScheduler:
             self._timer_thread = None
 
         logger.info("TaskScheduler 已停止")
+
+    @property
+    def is_running(self) -> bool:
+        """调度器是否在运行（供 /api/health 查询）。"""
+        return self._running
+
+    # ------------------------------------------------------------------
+    # 检查循环
+    # ------------------------------------------------------------------
 
     def _check_tasks(self) -> None:
         if not self._running:
@@ -124,7 +170,18 @@ class TaskScheduler:
         except Exception as e:
             logger.error(f"发送任务 {task.task_id} 通知失败: {e}")
 
+    # ------------------------------------------------------------------
+    # agent_conversation 触发（双路径）
+    # ------------------------------------------------------------------
+
     def _trigger_agent_conversation(self, task: ScheduledTask) -> None:
+        if self._backend_mode:
+            self._trigger_agent_conversation_backend(task)
+        else:
+            self._trigger_agent_conversation_legacy(task)
+
+    def _trigger_agent_conversation_legacy(self, task: ScheduledTask) -> None:
+        """旧路径：经 main_window.create_conversation_for_scheduled_task。"""
         if self._main_window is None:
             logger.error(f"无法触发 agent_conversation 任务 {task.task_id}: 主窗口引用未设置")
             return
@@ -137,7 +194,6 @@ class TaskScheduler:
             )
             return
 
-        # 前台对话进行中时延迟触发，避免与 agent_conversation 任务竞争 worker 线程
         is_busy = getattr(self._main_window, 'is_agent_busy', None)
         if callable(is_busy) and is_busy():
             raise _TaskDeferred(
@@ -146,9 +202,76 @@ class TaskScheduler:
 
         try:
             callback(task)
-            logger.info(f"任务 {task.task_id} agent_conversation 已触发")
+            logger.info(f"任务 {task.task_id} agent_conversation 已触发（legacy）")
         except Exception as e:
             logger.exception(f"触发任务 {task.task_id} agent_conversation 失败: {e}")
+
+    def _trigger_agent_conversation_backend(self, task: ScheduledTask) -> None:
+        """新路径：直接调 RunCoordinator.submit，事件经 WS 广播。
+
+        流程：
+        1. 检查 run_coordinator.is_busy() → 忙则 _TaskDeferred
+        2. 创建新会话 skill_agent.start_new_conversation()
+        3. 构造 RunContext(source="scheduler") 并 submit(queued_ok=False)
+           （调度器自身已用 _TaskDeferred 串行化，不再入队）
+        4. run 启动后事件经 stream_bridge 推 WS（含 scheduled_task_id 便于前端识别）
+        """
+        assert self._runner is not None
+        assert self._bridge is not None
+        assert self._skill_agent is not None
+
+        # 1. 忙则延迟
+        if self._runner.is_busy():
+            raise _TaskDeferred(
+                f"RunCoordinator 忙碌，任务 {task.task_id} 延迟到下个检查周期"
+            )
+
+        content = (getattr(task, "content", "") or "").strip()
+        if not content:
+            logger.warning(f"任务 {task.task_id} 内容为空，跳过")
+            return
+
+        # 2. 创建新会话
+        try:
+            conversation_id, _title = self._skill_agent.start_new_conversation(
+                conversation_type="agent_conversation",
+                default_skills=[{"id": sid, "name": sid} for sid in (task.skill_ids or [])],
+            )
+            if not conversation_id:
+                logger.error(f"任务 {task.task_id} 创建会话失败")
+                return
+        except Exception as e:
+            logger.exception(f"任务 {task.task_id} 创建会话失败: {e}")
+            return
+
+        # 3. 构造 RunContext 并提交
+        from backend_service.runner import RunContext
+        from backend_service.ws.events import new_run_id
+
+        run_id = new_run_id()
+        ctx = RunContext(
+            run_id=run_id,
+            conversation_id=conversation_id,
+            source="scheduler",
+            query=content,
+        )
+        ctx.executor = self._bridge.build_executor(ctx)
+        ctx.on_complete = self._bridge.make_on_complete(ctx)
+        ctx.on_error = self._bridge.make_on_error(ctx)
+
+        try:
+            result = self._runner.submit(ctx, queued_ok=False)
+            logger.info(
+                f"任务 {task.task_id} agent_conversation 已触发（backend）: "
+                f"run_id={run_id[:8]}, conversation_id={conversation_id[:8]}, "
+                f"status={result.status}"
+            )
+        except Exception as e:
+            logger.exception(f"任务 {task.task_id} 提交 RunCoordinator 失败: {e}")
+
+    # ------------------------------------------------------------------
+    # 重复任务计算
+    # ------------------------------------------------------------------
 
     def _calculate_next_trigger_time(self, task: ScheduledTask) -> datetime | None:
         current_trigger = task.trigger_time

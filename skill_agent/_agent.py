@@ -692,8 +692,8 @@ class SkillAgent:
                 {"role": "system", "content": "你是一个输入分类器，请严格按JSON格式输出。"},
                 {"role": "user", "content": prompt},
             ]
-            
-            response = model.client.chat.completions.create(
+
+            response = model.get_client().chat.completions.create(
                 model=model.model_name,
                 messages=messages,
                 temperature=0.0,
@@ -837,8 +837,8 @@ class SkillAgent:
                 {"role": "system", "content": "你是一个复杂任务规划器，请严格按JSON格式输出计划。"},
                 {"role": "user", "content": prompt},
             ]
-            
-            response = model.client.chat.completions.create(
+
+            response = model.get_client().chat.completions.create(
                 model=model.model_name,
                 messages=messages,
                 temperature=0.0,
@@ -1468,6 +1468,7 @@ class SkillAgent:
         *,
         tool_call_id: str | None = None,
         reasoning_content: str | None = None,
+        content: str | None = None,
         arg_str: str | None = None,
     ) -> None:
         """持久化并追加一轮工具调用的完整消息序列。
@@ -1492,7 +1493,8 @@ class SkillAgent:
             tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
 
         # 1) 持久化 assistant 工具调用消息（带 tool_calls 元数据，供 get_messages 还原）
-        assistant_content = reasoning_content or None
+        # content 优先：模型在调用工具前输出的说明文本需要保留到历史中
+        assistant_content = content or reasoning_content or None
         assistant_metadata: dict[str, Any] = {
             "type": "tool_call",
             "name": fname,
@@ -1504,7 +1506,7 @@ class SkillAgent:
         self.memory.append_message(
             conversation_id,
             "assistant",
-            reasoning_content or "",
+            content or reasoning_content or "",
             metadata=assistant_metadata,
         )
 
@@ -1658,6 +1660,7 @@ class SkillAgent:
         active_skill_text: list[str],
         active_skill_ids: list[str],
         log_callback: Optional[Callable[[str, str], Any]] = None,
+        content_parts: list[str] | None = None,
     ) -> None:
         """将工具调用结果持久化到 messages 列表和 memory。
 
@@ -1676,6 +1679,7 @@ class SkillAgent:
             active_skill_text: 活跃 Skill 文本列表
             active_skill_ids: 活跃 Skill ID 列表
             log_callback: 前端回调
+            content_parts: 本轮 LLM 在工具调用前输出的文本片段列表
 
         Side effects:
             修改 messages 列表（追加 assistant + tool 消息）
@@ -1688,6 +1692,7 @@ class SkillAgent:
         Related tests:
             tests/test_skill_agent.py (待补充)
         """
+        assistant_content = "".join(content_parts) if content_parts else None
         if self.memory is not None:
             self._persist_after_tool_turn(
                 fname,
@@ -1698,13 +1703,14 @@ class SkillAgent:
                 messages,
                 log_callback,
                 reasoning_content=full_thinking or None,
+                content=assistant_content,
                 arg_str=arg_str,
             )
         else:
             _call_id = f"call_{uuid.uuid4().hex[:12]}"
             messages.append({
                 "role": "assistant",
-                "content": full_thinking or None,
+                "content": assistant_content or full_thinking or None,
                 "tool_calls": [{
                     "id": _call_id,
                     "type": "function",
@@ -1717,14 +1723,6 @@ class SkillAgent:
                 "tool_call_id": _call_id,
                 "content": str(result_str),
             })
-            if fname == "select_skill" and active_skill_text and not str(result_str).startswith("错误"):
-                active_skills_text = self._build_active_skills_text(active_skill_text, active_skill_ids)
-                self._dynamic_prompt.update_active_skills(active_skills_text)
-                for i, msg in enumerate(messages):
-                    if msg.get("role") == "system":
-                        messages[i] = {"role": "system", "content": self._dynamic_prompt.build()}
-                        logger.debug("更新系统提示词_dynamic_prompt：%s", self._dynamic_prompt.build())
-                        break
 
     def _handle_text_result(
         self,
@@ -1928,6 +1926,9 @@ class SkillAgent:
                 user_query, tool_catalog_text, log_callback, model.enable_vision,
             )
             if early_return is not None:
+                # 等待用户确认计划前，先把用户原始 query 持久化
+                if self.memory is not None:
+                    self.memory.append_message(self._conversation_id, "user", user_query.strip())
                 return {"action": "return", "value": early_return}
 
         tools = model.build_skill_agent_tools_initial()
@@ -1942,6 +1943,10 @@ class SkillAgent:
             {"role": "user", "content": user_query.strip()},
         ]
         active_skill_text, active_skill_ids = self._recover_active_skills()
+
+        # 进入主循环前持久化用户 query（NO_PLAN 模式已在 _direct_reply 中保存）
+        if self.memory is not None and plan_mode != PlanMode.NO_PLAN:
+            self.memory.append_message(self._conversation_id, "user", user_query.strip())
 
         return {
             "action": "continue",
@@ -2320,7 +2325,7 @@ class SkillAgent:
 
         return None
 
-    def _handle_request_tool_details_step(self, fname, args, model, tools, full_thinking, arg_str, messages, active_skill_text, active_skill_ids, log_callback):
+    def _handle_request_tool_details_step(self, fname, args, model, tools, full_thinking, arg_str, messages, active_skill_text, active_skill_ids, log_callback, content_parts=None):
         """Handle request_tool_details: progressive disclosure of tool definitions.
 
         When LLM requests full tool definitions via request_tool_details, this method:
@@ -2395,6 +2400,7 @@ class SkillAgent:
         self._append_tool_result_to_messages(
             fname, args, tool_result, full_thinking, arg_str,
             messages, active_skill_text, active_skill_ids, log_callback,
+            content_parts=content_parts,
         )
 
         if log_callback:
@@ -2463,6 +2469,7 @@ class SkillAgent:
             if self._handle_request_tool_details_step(
                 fname, args, model, tools, full_thinking, arg_str,
                 messages, active_skill_text, active_skill_ids, log_callback,
+                content_parts=content_parts,
             ):
                 return {"action": "continue", "tool_called": False}
 
@@ -2637,6 +2644,7 @@ class SkillAgent:
             self._append_tool_result_to_messages(
                 fname, args, str(result), full_thinking, arg_str,
                 messages, active_skill_text, active_skill_ids, log_callback,
+                content_parts=content_parts,
             )
             if self.memory is not None:
                 conversation_id = self._conversation_id
@@ -2653,6 +2661,7 @@ class SkillAgent:
             self._append_tool_result_to_messages(
                 fname, args, str(result), full_thinking, arg_str,
                 messages, active_skill_text, active_skill_ids, log_callback,
+                content_parts=content_parts,
             )
             if log_callback:
                 log_callback(_ask_user_ui_log_payload(args), "await_user")
@@ -2664,6 +2673,7 @@ class SkillAgent:
         self._append_tool_result_to_messages(
             fname, args, str(result), full_thinking, arg_str,
             messages, active_skill_text, active_skill_ids, log_callback,
+            content_parts=content_parts,
         )
         return {"action": "continue", "tool_called": tool_called}
 
@@ -2726,6 +2736,9 @@ class SkillAgent:
             # 保存当前用户查询，用于后续更新系统提示词时的语义检索
             self._last_user_query = user_query
 
+            # 发出 AGENT_START 事件（必须在分类/直接回复之前，确保前端能接收所有流式事件）
+            self._emit_event(AgentEventType.AGENT_START, user_query=user_query[:200])
+
             # 新方案：运行时拦截确认检测
             # 如果上一轮触发了运行时确认，根据用户回复直接处理，不发送给 LLM
             # AI-BRANCH-MARKER: 运行时确认续跑分支 — 根据上一轮确认状态决定是直接进入主循环还是重新分类
@@ -2765,8 +2778,6 @@ class SkillAgent:
             # 内层循环：由 ToolCall/Steering 消息驱动
             _inner_loop_active = True
 
-            # 发出 AGENT_START 事件
-            self._emit_event(AgentEventType.AGENT_START, user_query=user_query[:200])
             # 标记外层循环是否应强制退出（致命错误等）
             _outer_exit = False
 
@@ -2901,8 +2912,8 @@ class SkillAgent:
                             self.memory.append_message(self._conversation_id, "assistant", err, metadata=metadata)
                         _emit_token_usage()
                         logger.debug("返回错误 (长度: %s)", len(err))
-                        # 发出 ERROR 事件
-                        self._emit_event(AgentEventType.ERROR, error=err[:200])
+                        # 发出 ERROR 事件（字段名与前端 handleError 对齐为 message）
+                        self._emit_event(AgentEventType.ERROR, message=err[:200])
                         # 致命错误（如 API key 无效）终止
                         if "api_key" in err.lower() or "authentication" in err.lower() or "401" in err:
                             _last_return_value = err

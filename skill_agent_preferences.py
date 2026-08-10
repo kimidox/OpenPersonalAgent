@@ -7,9 +7,7 @@ from resource_path import paths
 
 
 def _get_state_path() -> Path:
-    if paths.is_frozen:
-        return paths.user_data_dir / "skill_agent_disabled_skills.json"
-    return paths.project_root / "skill_agent_disabled_skills.json"
+    return paths.personal_data_dir / "skill_agent_disabled_skills.json"
 
 
 _STATE_PATH = _get_state_path()
@@ -35,9 +33,7 @@ def save_disabled_skill_ids(ids: set[str]) -> None:
 
 
 def _get_skill_bindings_path() -> Path:
-    if paths.is_frozen:
-        return paths.user_data_dir / "skill_agent_skill_bindings.json"
-    return paths.project_root / "skill_agent_skill_bindings.json"
+    return paths.personal_data_dir / "skill_agent_skill_bindings.json"
 
 
 _SKILL_BINDINGS_PATH = _get_skill_bindings_path()

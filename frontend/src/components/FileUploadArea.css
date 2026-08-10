@@ -1,0 +1,27 @@
+.file-upload-area {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.upload-btn {
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.upload-btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft-border);
+  color: var(--accent);
+}
+
+.upload-error {
+  color: var(--error);
+  font-size: 12px;
+  font-weight: 500;
+}
