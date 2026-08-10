@@ -1,26 +1,60 @@
 .input-area {
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
-  padding: 16px 24px;
+  padding: 16px 0;
   box-shadow: 0 -2px 12px rgba(30, 41, 59, 0.04);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .input-form {
-  max-width: 900px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0 8px;
+  box-sizing: border-box;
 }
 
-.uploaded-summary {
+.attachments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.attachment-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
   background: var(--accent-soft);
   border-radius: var(--radius-md);
   font-size: 12px;
   color: var(--accent);
-  margin-bottom: 10px;
   font-weight: 500;
+  border: 1px solid var(--accent-soft-border);
+}
+
+.attachment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.attachment-remove:hover {
+  background: var(--accent);
+  color: white;
 }
 
 .input-text {

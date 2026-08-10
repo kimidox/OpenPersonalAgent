@@ -203,6 +203,17 @@ export interface UploadResponse {
   parsed_pages: number;
 }
 
+export interface FileAttachment {
+  file_id: string;
+  original_name: string;
+  file_size: number;
+  mime_type: string | null;
+  parsed_pages: number;
+  summary: string;
+  // 解析出的纯文本内容，供 SkillAgent 拼接到用户 query
+  parsed_text: string;
+}
+
 export interface SetUploadedContentResponse {
   set: boolean;
 }

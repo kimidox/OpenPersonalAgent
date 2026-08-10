@@ -1,11 +1,33 @@
 import { useState } from "react";
 import type { DisplayMessage } from "@/store/chat";
+import { parseQueryFiles, type ParsedFileEntry } from "@/utils/fileTags";
 import MarkdownRenderer from "./MarkdownRenderer";
 import "./MessageItem.css";
 
 interface Props {
   message: DisplayMessage;
   isPaused: boolean;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function FileTagCard({ file }: { file: ParsedFileEntry }) {
+  const sizeStr = formatFileSize(new Blob([file.content]).size);
+  return (
+    <div className="file-attachment-card">
+      <div className="file-attachment-icon">📎</div>
+      <div className="file-attachment-info">
+        <div className="file-attachment-name">{file.filename}</div>
+        <div className="file-attachment-meta">
+          <span>{sizeStr}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ToolResultCard({ message }: { message: DisplayMessage }) {
@@ -36,10 +58,19 @@ function ToolResultCard({ message }: { message: DisplayMessage }) {
 
 export default function MessageItem({ message, isPaused }: Props) {
   if (message.role === "user") {
+    // 解析 query 中的 <Files> 标签，分离原生文本和文件列表
+    const { text, files } = parseQueryFiles(message.content);
     return (
       <div className="message-item user">
         <div className="message-bubble user-bubble">
-          <div className="message-content">{message.content}</div>
+          {files.length > 0 && (
+            <div className="attachments-block">
+              {files.map((f, i) => (
+                <FileTagCard key={i} file={f} />
+              ))}
+            </div>
+          )}
+          <div className="message-content">{text}</div>
         </div>
       </div>
     );

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import FileUploadArea from "./FileUploadArea";
+import type { FileAttachment } from "@/types/api";
 import "./InputArea.css";
 
 interface Props {
-  onSend: (query: string) => void | Promise<void>;
+  onSend: (query: string, attachments?: FileAttachment[]) => void | Promise<void>;
   onStop: () => void | Promise<void>;
   isRunning: boolean;
   awaitingUser: boolean;
@@ -22,13 +23,23 @@ export default function InputArea({
   onThinkingChange,
 }: Props) {
   const [text, setText] = useState("");
-  const [uploadedSummary, setUploadedSummary] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<FileAttachment[]>([]);
+
+  function handleUploaded(attachment: FileAttachment) {
+    setAttachments((prev) => [...prev, attachment]);
+  }
+
+  function removeAttachment(index: number) {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!text.trim() || disabled) return;
-    onSend(text);
+    const hasAttachments = attachments.length > 0;
+    onSend(text, hasAttachments ? attachments : undefined);
     setText("");
+    setAttachments([]);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -42,8 +53,22 @@ export default function InputArea({
   return (
     <div className="input-area">
       <form onSubmit={handleSubmit} className="input-form">
-        {uploadedSummary && (
-          <div className="uploaded-summary">{uploadedSummary}</div>
+        {attachments.length > 0 && (
+          <div className="attachments-list">
+            {attachments.map((att, i) => (
+              <div key={att.file_id + i} className="attachment-chip">
+                <span>{att.summary}</span>
+                <button
+                  type="button"
+                  className="attachment-remove"
+                  onClick={() => removeAttachment(i)}
+                  aria-label="移除附件"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
         )}
         <textarea
           className="input-text"
@@ -65,7 +90,7 @@ export default function InputArea({
         <div className="input-actions">
           <div className="input-actions-left">
             <FileUploadArea
-              onUploaded={(summary) => setUploadedSummary(summary)}
+              onUploaded={handleUploaded}
               disabled={disabled || isRunning}
             />
             <label className="thinking-toggle-inline">

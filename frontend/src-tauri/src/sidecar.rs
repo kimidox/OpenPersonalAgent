@@ -67,13 +67,39 @@ impl SidecarManager {
         let (program, args) = resolve_backend_command(port, &token)?;
         log::info!("[sidecar] 命令: {program} {}", args.join(" "));
 
-        let mut child = Command::new(&program)
-            .args(&args)
+        // BACKEND_DEV 模式：Tauri 在 frontend/ 下运行，但 Python 模块在项目根目录
+        // 需要把 current_dir 切到项目根（frontend 的父级）并确保 PYTHONPATH 包含根目录
+        let is_backend_dev = std::env::var("BACKEND_DEV").is_ok();
+        let project_root = if is_backend_dev {
+            // CARGO_MANIFEST_DIR = .../frontend/src-tauri → ../../ 即项目根
+            let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let root = manifest.join("..").join("..").canonicalize().ok();
+            log::info!("[sidecar] BACKEND_DEV 模式，项目根: {:?}", root);
+            root
+        } else {
+            None
+        };
+
+        let mut cmd = Command::new(&program);
+        cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        if let (true, Some(root)) = (is_backend_dev, project_root.as_ref()) {
+            cmd.current_dir(root);
+            // PYTHONPATH = 项目根 + 现有值
+            let existing_pythonpath = std::env::var("PYTHONPATH").unwrap_or_default();
+            let mut paths: Vec<String> = vec![root.to_string_lossy().into_owned()];
+            if !existing_pythonpath.is_empty() {
+                paths.push(existing_pythonpath);
+            }
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            cmd.env("PYTHONPATH", paths.join(sep));
+            log::info!("[sidecar] 设置 PYTHONPATH={}", paths.join(sep));
+        }
+
+        let mut child = cmd.spawn()?;
 
         // 拿 stdout/stderr 句柄后立即归还 child（pipe 已取走）
         let stdout = child.stdout.take().expect("stdout piped");
@@ -305,12 +331,12 @@ fn resolve_backend_command(
     }
 
     if std::env::var("BACKEND_DEV").is_ok() {
-        // 开发模式：python -m uvicorn backend_service.app:app --host 127.0.0.1 --port PORT --token TOKEN --dev
+        // 开发模式：直接调用 backend_service.app 的 main()（它内部 parse_args 处理 --token/--dev）
+        // 工作目录是 frontend/，所以需要 PYTHONPATH 指向项目根目录（../）
         let program = std::env::var("PYTHON").unwrap_or_else(|_| "python".to_string());
         let args = vec![
             "-m".to_string(),
-            "uvicorn".to_string(),
-            "backend_service.app:app".to_string(),
+            "backend_service.app".to_string(),
             "--host".to_string(),
             "127.0.0.1".to_string(),
             "--port".to_string(),

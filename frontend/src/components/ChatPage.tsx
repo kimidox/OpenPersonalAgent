@@ -3,6 +3,8 @@ import { useChatStore, type DisplayMessage } from "@/store/chat";
 import { api, APIError } from "@/api/client";
 import { WSClient } from "@/api/ws";
 import { useStream } from "@/hooks/useStream";
+import type { FileAttachment } from "@/types/api";
+import { buildQueryWithFiles } from "@/utils/fileTags";
 import ConversationSidebar from "./ConversationSidebar";
 import MessageList from "./MessageList";
 import InputArea from "./InputArea";
@@ -20,6 +22,8 @@ export default function ChatPage() {
     loadConversations,
     selectConversation,
     createConversation,
+    deleteConversation,
+    updateConversationTitle,
     appendUserMessage,
     startAssistantMessage,
     newAssistantMessage,
@@ -41,7 +45,7 @@ export default function ChatPage() {
 
   // handleSend 必须在 useStream 之前定义（useStream 的 onSendMessage 依赖它）
   const handleSend = useCallback(
-    async (query: string) => {
+    async (query: string, attachments?: FileAttachment[]) => {
       if (!currentConversationId) {
         setSendError("请先选择或创建会话");
         return;
@@ -49,11 +53,15 @@ export default function ChatPage() {
       if (!query.trim()) return;
 
       setSendError(null);
-      appendUserMessage(query);
+
+      // 构造带 <Files> 标签的完整 query：文件内容嵌入标签内
+      const fullQuery = buildQueryWithFiles(query, attachments);
+      // store 中存完整 query（含标签），渲染时由 MessageItem 解析剥离
+      appendUserMessage(fullQuery);
 
       try {
         const resp = await api.sendMessage(currentConversationId, {
-          query,
+          query: fullQuery,
           enable_thinking: enableThinking,
           queued_ok: true,
           source: "main",
@@ -263,6 +271,8 @@ export default function ChatPage() {
         loading={loadingConversations}
         onSelect={selectConversation}
         onNew={handleNewConversation}
+        onDelete={deleteConversation}
+        onRename={updateConversationTitle}
       />
       <main className="chat-main">
         <header className="chat-header">

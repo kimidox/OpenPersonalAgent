@@ -50,7 +50,6 @@ def send_message(
         source=body.source,
         query=body.query,
         enable_thinking=body.enable_thinking,
-        uploaded_files_content=body.uploaded_files_content,
     )
     # 注入 executor / on_complete / on_error（由 stream_bridge 构造）
     ctx.executor = bridge.build_executor(ctx)

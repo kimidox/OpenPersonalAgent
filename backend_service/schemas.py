@@ -34,6 +34,10 @@ class CreateConversationResponse(BaseModel):
     title: str
 
 
+class UpdateConversationTitleRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+
+
 # =====================================================================
 # 消息发送
 # =====================================================================

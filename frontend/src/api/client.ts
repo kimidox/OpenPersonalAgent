@@ -190,6 +190,11 @@ export const api = {
     ),
   deleteConversation: (id: string) =>
     request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
+  updateConversationTitle: (id: string, title: string) =>
+    request<ConversationSummary>(`/api/conversations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
 
   // 消息
   sendMessage: (conversationId: string, body: SendMessageRequest) =>

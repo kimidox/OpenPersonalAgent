@@ -19,7 +19,8 @@ export interface DisplayMessage {
   // 本地生成的唯一 id（用于 React key）
   localId: string;
   role: "user" | "assistant" | "system" | "tool";
-  // 用户消息：直接文本；assistant 消息：分 thinking / content / toolCalls 三段；tool 消息：工具结果文本
+  // 用户消息：可能含 <Files> 标签的完整 query（渲染时由 MessageItem 解析剥离）；
+  // assistant 消息：分 thinking / content / toolCalls 三段；tool 消息：工具结果文本
   content: string;
   thinking?: string;
   toolCalls?: { raw: string; result?: unknown; done: boolean }[];
@@ -47,6 +48,7 @@ interface ChatState {
   selectConversation: (id: string) => Promise<void>;
   createConversation: () => Promise<string>;
   deleteConversation: (id: string) => Promise<void>;
+  updateConversationTitle: (id: string, title: string) => Promise<void>;
   clearMessages: () => void;
 
   // 实时消息操作（由 useStream 调用）
@@ -125,6 +127,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({ currentConversationId: null, currentConversation: null, messages: [] });
     }
     await get().loadConversations();
+  },
+
+  updateConversationTitle: async (id, title) => {
+    const updated = await api.updateConversationTitle(id, title);
+    // 更新列表中的会话标题
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.conversation_id === id ? { ...c, title: updated.title } : c,
+      ),
+      // 如果是当前会话，也更新详情
+      currentConversation:
+        s.currentConversation?.conversation_id === id
+          ? { ...s.currentConversation, title: updated.title }
+          : s.currentConversation,
+    }));
   },
 
   clearMessages: () => set({ messages: [] }),

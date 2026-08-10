@@ -194,8 +194,7 @@ class StreamBridge:
             # 设置会话上下文
             agent.set_conversation_id(ctx.conversation_id)
             agent.set_enable_thinking(ctx.enable_thinking)
-            if ctx.uploaded_files_content is not None:
-                agent.set_uploaded_files_content(ctx.uploaded_files_content)
+            # 文件内容已通过 <Files> 标签嵌入 query 中，无需单独设置
             # 调用主入口
             return agent.run(
                 ctx.query,

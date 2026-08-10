@@ -85,8 +85,10 @@ async def upload_file(
     try:
         from document_parser.parser_factory import parse_file
         result = parse_file(info.stored_path)
-        parsed_text = getattr(result, "text", "") or ""
-        parsed_pages = getattr(result, "page_count", 0) or 0
+        # ParseResult 的文本在 content 属性，不是 text
+        parsed_text = result.content or ""
+        # page_count 不是 ParseResult 标准字段，从 metadata 中尝试获取
+        parsed_pages = result.metadata.get("page_count", 0) or 0
     except Exception as e:  # noqa: BLE001
         # 解析失败不阻断上传，但记录到 detail
         parsed_text = f"[解析失败: {e}]"

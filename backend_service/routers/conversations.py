@@ -14,6 +14,7 @@ from backend_service.schemas import (
     ConversationSummary,
     CreateConversationRequest,
     CreateConversationResponse,
+    UpdateConversationTitleRequest,
 )
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -91,15 +92,57 @@ def delete_conversation(
             detail="Memory 未就绪",
         )
     try:
-        # 优先调用 memory 的删除接口（若存在）
-        delete_fn = getattr(memory, "delete_conversation", None)
-        if callable(delete_fn):
-            delete_fn(conversation_id)
-        else:
-            # 回退：标记为已删除（无显式接口时不操作）
-            pass
+        # Memory 抽象基类已定义 clear_conversation（@abstractmethod）：删除会话行 + 全部消息
+        memory.clear_conversation(conversation_id)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"删除会话失败: {e}",
+        )
+
+
+@router.patch("/{conversation_id}", response_model=ConversationSummary)
+def update_conversation_title(
+    conversation_id: str,
+    body: UpdateConversationTitleRequest,
+    agent=Depends(require_skill_agent),
+    memory=Depends(get_memory),
+) -> ConversationSummary:
+    """修改会话标题。"""
+    if memory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Memory 未就绪",
+        )
+    try:
+        # 先检查会话是否存在
+        conversations = agent.list_saved_conversations()
+        target = next(
+            (c for c in conversations if c.conversation_id == conversation_id),
+            None,
+        )
+        if target is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"会话不存在: {conversation_id}",
+            )
+
+        # 调用 memory 更新标题
+        update_fn = getattr(memory, "update_conversation_title", None)
+        if callable(update_fn):
+            update_fn(conversation_id, body.title)
+        else:
+            # 回退：直接在领域对象上更新
+            setattr(target, "title", body.title)
+
+        # 返回更新后的摘要
+        updated = _conv_to_summary(target)
+        updated.title = body.title
+        return updated
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"修改会话标题失败: {e}",
         )

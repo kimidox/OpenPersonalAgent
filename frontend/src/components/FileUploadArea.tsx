@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
 import { api, APIError } from "@/api/client";
+import type { FileAttachment } from "@/types/api";
 import "./FileUploadArea.css";
 
 interface Props {
-  onUploaded: (summary: string) => void;
+  onUploaded: (attachment: FileAttachment) => void;
   disabled?: boolean;
 }
 
@@ -17,13 +18,23 @@ export default function FileUploadArea({ onUploaded, disabled }: Props) {
     setError(null);
     try {
       const data = await api.uploadFile(file);
-      // 把解析文本注入 SkillAgent，供下一次 run 使用
-      await api.setUploadedContent(data.parsed_text);
+      // 注意：不再在这里调用 api.setUploadedContent()。
+      // 文件解析文本应随本次用户消息一起通过 sendMessage.uploaded_files_content 发送，
+      // 避免残留在 SkillAgent 单例中污染其他会话。
       const summary =
         data.parsed_pages > 0
           ? `📎 ${data.original_name}（${data.parsed_pages} 页）`
           : `📎 ${data.original_name}`;
-      onUploaded(summary);
+      const attachment: FileAttachment = {
+        file_id: data.file_id,
+        original_name: data.original_name,
+        file_size: data.file_size,
+        mime_type: data.mime_type,
+        parsed_pages: data.parsed_pages,
+        summary,
+        parsed_text: data.parsed_text,
+      };
+      onUploaded(attachment);
     } catch (err) {
       const msg = err instanceof APIError || err instanceof Error ? err.message : String(err);
       setError(msg);

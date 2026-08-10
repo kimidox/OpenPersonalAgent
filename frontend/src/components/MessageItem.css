@@ -1,10 +1,15 @@
 .message-item {
   margin: 16px 0;
   display: flex;
+  width: 100%;
 }
 
 .message-item.user {
   justify-content: flex-end;
+}
+
+.message-item.assistant {
+  justify-content: flex-start;
 }
 
 .message-bubble {
@@ -78,6 +83,7 @@
   background: var(--user-bubble);
   color: var(--user-bubble-text);
   border-bottom-right-radius: var(--radius-sm);
+  margin-left: auto;
 }
 
 .user-bubble .message-content {
@@ -89,6 +95,7 @@
   border: 1px solid var(--border);
   border-bottom-left-radius: var(--radius-sm);
   max-width: 85%;
+  margin-right: auto;
 }
 
 .message-content {
@@ -182,4 +189,61 @@
   font-size: 12px;
   border-radius: var(--radius-md);
   font-weight: 500;
+}
+
+.attachments-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.file-attachment-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(4px);
+  min-width: 220px;
+}
+
+.file-attachment-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-sm);
+  font-size: 18px;
+}
+
+.file-attachment-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-attachment-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-attachment-meta {
+  font-size: 11px;
+  color: inherit;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

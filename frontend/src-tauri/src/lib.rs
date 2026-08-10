@@ -78,12 +78,87 @@ async fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> R
     Ok(())
 }
 
+/// 加载 .env 文件。
+///
+/// 加载顺序（后者覆盖前者同名变量）：
+/// 1) dotenvy 标准查找：从当前工作目录向上递归，会命中 `frontend/.env`（dev）或 exe 旁的 `.env`（prod）
+/// 2) 项目根目录 `.env`：通过 `CARGO_MANIFEST_DIR`（= frontend/src-tauri）推导 `../../.env`
+/// 3) 打包兜底：exe 同目录下的 `.env`
+///
+/// 设计说明：`dotenvy::dotenv()` 一旦在 `frontend/.env` 找到文件就停止向上，
+/// 导致项目根 `.env` 里的 WINDOW_WIDTH 等共享配置不生效；因此这里显式补一次根目录加载。
+fn load_dotenv() {
+    use std::env;
+    use std::path::{Path, PathBuf};
+
+    // 1) 标准 dotenvy 查找（就近原则，保证 frontend/.env 的 VITE_* 先被吸收）
+    let _ = dotenvy::dotenv();
+
+    // 2) 显式加载项目根目录的 .env（共享配置：窗口尺寸、模型、TTS...）
+    //    CARGO_MANIFEST_DIR = "d:/.../PersonalWindowGLM/frontend/src-tauri"
+    //    → 往上两级就是项目根
+    if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
+        let root_env: PathBuf = Path::new(&manifest_dir)
+            .parent()        // frontend/
+            .and_then(|p| p.parent())  // 项目根/
+            .map(|p| p.join(".env"))
+            .unwrap_or_else(|| PathBuf::from(".env"));
+        if root_env.is_file() {
+            log::debug!("[tauri] 加载项目根 .env: {}", root_env.display());
+            let _ = dotenvy::from_path(&root_env);
+        }
+    }
+
+    // 3) prod 兜底：当前 exe 所在目录
+    if let Ok(exe_path) = env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let candidate: PathBuf = exe_dir.join(".env");
+            if candidate.is_file() {
+                let _ = dotenvy::from_path(&candidate);
+            }
+        }
+    }
+}
+
+/// 从环境变量解析窗口尺寸，失败时回退到默认值。
+fn parse_window_size_from_env() -> (f64, f64, f64, f64) {
+    use std::env;
+
+    // 默认值（与 tauri.conf.json 保持一致的兜底）
+    const DEFAULT_WIDTH: f64 = 1200.0;
+    const DEFAULT_HEIGHT: f64 = 800.0;
+    const DEFAULT_MIN_WIDTH: f64 = 800.0;
+    const DEFAULT_MIN_HEIGHT: f64 = 600.0;
+
+    let parse = |key: &str, fallback: f64| -> f64 {
+        env::var(key)
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .map(|v| if v <= 0.0 { fallback } else { v })
+            .unwrap_or(fallback)
+    };
+
+    let width = parse("WINDOW_WIDTH", DEFAULT_WIDTH);
+    let height = parse("WINDOW_HEIGHT", DEFAULT_HEIGHT);
+    let min_width = parse("WINDOW_MIN_WIDTH", DEFAULT_MIN_WIDTH);
+    let min_height = parse("WINDOW_MIN_HEIGHT", DEFAULT_MIN_HEIGHT);
+
+    (width, height, min_width, min_height)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    load_dotenv();
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_secs()
         .init();
 
+    let (win_w, win_h, win_min_w, win_min_h) = parse_window_size_from_env();
+    log::info!(
+        "[tauri] 窗口配置：{}x{} (最小 {}x{})",
+        win_w, win_h, win_min_w, win_min_h
+    );
     log::info!("[tauri] 启动 PersonalWindowGLM 外壳");
 
     let sidecar = Arc::new(SidecarManager::new());
@@ -116,6 +191,33 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 let sidecar_for_health = sidecar.clone();
                 let backend_for_health = backend.clone();
+
+                // 动态设置主窗口尺寸（优先读取 .env 配置，缺失则回退到 tauri.conf.json 默认值）
+                if let Some(win) = app.get_webview_window("main") {
+                    // LogicalSize 使用逻辑像素，匹配用户在 Windows 显示设置中的"分辨率"直觉
+                    let logical_size = tauri::LogicalSize {
+                        width: win_w,
+                        height: win_h,
+                    };
+                    let min_logical_size = tauri::LogicalSize {
+                        width: win_min_w,
+                        height: win_min_h,
+                    };
+
+                    let _ = win.set_min_size(Some(min_logical_size));
+                    let _ = win.set_size(logical_size);
+
+                    let scale_factor = win
+                        .current_monitor()
+                        .ok()
+                        .flatten()
+                        .map(|m| m.scale_factor())
+                        .unwrap_or(1.0);
+                    log::info!(
+                        "[tauri] 主窗口尺寸已应用: {}x{} (min {}x{}, scale={})",
+                        win_w, win_h, win_min_w, win_min_h, scale_factor
+                    );
+                }
 
                 // 启动后端 sidecar（异步）
                 let app_handle_spawn = app_handle.clone();
