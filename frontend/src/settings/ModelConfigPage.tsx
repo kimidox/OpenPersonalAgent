@@ -209,7 +209,11 @@ export default function ModelConfigPage() {
               >
                 <span
                   className={`config-active-dot ${data.active_id === c.id ? "" : "inactive"}`}
-                  title={data.active_id === c.id ? "当前激活" : "未激活"}
+                  title={data.active_id === c.id ? "当前激活" : "未激活，点击切换连接"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (c.id && data.active_id !== c.id) handleSetActive(c.id);
+                  }}
                 />
                 <div className="config-list-main">
                   <div className="config-list-title">{c.name || "(未命名)"}</div>

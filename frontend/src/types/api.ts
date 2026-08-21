@@ -19,7 +19,18 @@ export interface MessageRecord {
   role: string;
   content: string;
   timestamp?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: MessageMetadata;
+}
+
+export interface MessageMetadata {
+  type?: string; // "think" | "tool_call" | "plan" | "assistant"
+  name?: string; // tool name
+  args?: string; // tool args JSON string
+  tool_call_id?: string;
+  reasoning_content?: string; // thinking/reasoning content (tool_call scenario)
+  token_usage?: Record<string, unknown>;
+  files?: unknown[];
+  [key: string]: unknown;
 }
 
 export interface SendMessageRequest {

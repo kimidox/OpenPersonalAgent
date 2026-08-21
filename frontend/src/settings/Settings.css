@@ -594,11 +594,26 @@
 }
 
 .config-active-dot {
+  position: relative;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--success);
   flex-shrink: 0;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.config-active-dot:hover {
+  transform: scale(1.4);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.config-active-dot::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
 }
 
 .config-active-dot.inactive {

@@ -273,7 +273,16 @@ def _load_multi_config_from_file() -> MultiLLMConfig:
         multi_config = _migrate_old_format(raw)
         _save_multi_config_to_file(multi_config)
         return multi_config
-    return MultiLLMConfig.from_dict(raw)
+    multi_config = MultiLLMConfig.from_dict(raw)
+    # 修复历史数据：为空 id 的配置项补生成 id（否则前端无法按 id 切换激活）
+    repaired = False
+    for c in multi_config.configs:
+        if not c.id:
+            c.id = generate_config_id()
+            repaired = True
+    if repaired:
+        _save_multi_config_to_file(multi_config)
+    return multi_config
 
 
 def _save_multi_config_to_file(multi_config: MultiLLMConfig) -> None:
@@ -322,6 +331,8 @@ def add_config(config_item: LLMConfigItem) -> str:
         str: 新添加配置项的 ID。
     """
     multi_config = get_current_multi_config()
+    if not config_item.id:
+        config_item.id = generate_config_id()
     multi_config.configs.append(config_item)
     set_multi_config(multi_config)
     return config_item.id

@@ -12,7 +12,6 @@ import { api, APIError } from "@/api/client";
 import type {
   ConversationSummary,
   ConversationDetail,
-  MessageRecord,
 } from "@/types/api";
 
 export interface DisplayMessage {
@@ -90,22 +89,127 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ loadingMessages: true, currentConversationId: id, error: null });
     try {
       const detail = await api.getConversation(id);
-      const messages: DisplayMessage[] = detail.messages
+      const displayMessages: DisplayMessage[] = [];
+      // 暂存前一条 metadata.type==="think" 的独立消息内容
+      // 后端保存：先保存一条 role=assistant + metadata.type=think 的独立消息，
+      // 紧接着保存真正的 assistant 回复。加载时需要把 think 消息合并进下一条 assistant。
+      let pendingThinking: string | null = null;
+
+      for (const m of detail.messages) {
+        const role = (m.role as "user" | "assistant" | "system" | "tool") ?? "assistant";
+        const metadata = m.metadata ?? {};
+        const metaType = metadata.type as string | undefined;
+        const rawContent = m.content;
+        const contentStr =
+          typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+
         // 跳过仅用于保存 tool_calls 元数据、没有实际文本的 assistant 记录，
         // 避免历史加载后出现大量空 assistant 卡片打乱排版。
-        .filter(
-          (m) =>
-            !(m.role === "assistant" && !m.content && m.metadata?.type === "tool_call"),
-        )
-        .map((m: MessageRecord) => ({
+        if (role === "assistant" && !rawContent && metaType === "tool_call") {
+          // 但如果有 reasoning_content，先累积到 pendingThinking，等待后续 assistant
+          const reasoning = metadata.reasoning_content;
+          if (typeof reasoning === "string" && reasoning) {
+            pendingThinking = (pendingThinking ?? "") + reasoning;
+          }
+          continue;
+        }
+
+        if (role === "assistant") {
+          // 1) 如果是独立的 think 消息（metadata.type==="think"）：
+          //    暂存其内容到 pendingThinking，不创建独立卡片。
+          if (metaType === "think") {
+            if (contentStr) {
+              pendingThinking = (pendingThinking ?? "") + contentStr;
+            }
+            continue;
+          }
+
+          // 2) 构建 thinking：优先使用 pendingThinking（独立 think 消息累积），
+          //    否则回退 metadata.reasoning_content（tool_call 前 reasoning 内联保存）。
+          let thinking: string | undefined;
+          if (pendingThinking) {
+            thinking = pendingThinking;
+            pendingThinking = null;
+          } else if (typeof metadata.reasoning_content === "string" && metadata.reasoning_content) {
+            thinking = metadata.reasoning_content;
+          }
+
+          // 3) 还原 toolCalls：metadata.type==="tool_call" 时从 name/args 构造
+          let toolCalls: DisplayMessage["toolCalls"] | undefined;
+          if (metaType === "tool_call") {
+            const toolName = typeof metadata.name === "string" ? metadata.name : "";
+            let argsStr = "";
+            const rawArgs = metadata.args;
+            if (typeof rawArgs === "string") {
+              argsStr = rawArgs;
+            } else if (rawArgs != null) {
+              try {
+                argsStr = JSON.stringify(rawArgs);
+              } catch {
+                argsStr = String(rawArgs);
+              }
+            }
+            if (toolName || argsStr) {
+              const raw = toolName
+                ? argsStr
+                  ? `调用工具 \`${toolName}\` · ${argsStr}`
+                  : `调用工具 \`${toolName}\``
+                : argsStr;
+              toolCalls = [{ raw, done: true }];
+            }
+          }
+
+          displayMessages.push({
+            localId: nextLocalId(),
+            role: "assistant",
+            content: contentStr,
+            thinking,
+            toolCalls,
+            timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+          });
+          continue;
+        }
+
+        if (role === "tool") {
+          // tool 消息：追加独立的 tool 结果卡片，kind 从 metadata.type/name 推导
+          const metaKind = typeof metadata.type === "string" ? metadata.type : undefined;
+          const nameHint = typeof metadata.name === "string" ? metadata.name : undefined;
+          const kind = nameHint ?? metaKind ?? "tool";
+          displayMessages.push({
+            localId: nextLocalId(),
+            role: "tool",
+            content: contentStr,
+            toolResultKind: kind,
+            timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+          });
+          continue;
+        }
+
+        // user / system
+        displayMessages.push({
           localId: nextLocalId(),
-          role: (m.role as "user" | "assistant" | "system" | "tool") ?? "assistant",
-          content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+          role,
+          content: contentStr,
           timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
-        }));
+        });
+      }
+
+      // 兜底：如果最后一条消息是独立 think，没有对应的 assistant 回复，
+      // 也创建一条空 assistant 卡片保留 thinking（例如异常中断场景）。
+      if (pendingThinking) {
+        displayMessages.push({
+          localId: nextLocalId(),
+          role: "assistant",
+          content: "",
+          thinking: pendingThinking,
+          aborted: true,
+          timestamp: Date.now(),
+        });
+      }
+
       set({
         currentConversation: detail,
-        messages,
+        messages: displayMessages,
         loadingMessages: false,
       });
     } catch (err) {

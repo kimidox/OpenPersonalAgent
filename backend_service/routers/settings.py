@@ -110,6 +110,15 @@ def add_llm_config(body: LLMConfigItem) -> LLMConfigItem:
     return body
 
 
+@router.put("/llm/active", response_model=dict)
+def set_active_llm(body: SetActiveLLMRequest) -> dict:
+    from llm.llm_config_manager import set_active_config
+    ok = set_active_config(body.config_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="配置不存在")
+    return {"active_id": body.config_id}
+
+
 @router.put("/llm/{config_id}", response_model=LLMConfigItem)
 def update_llm_config(config_id: str, body: LLMConfigItem) -> LLMConfigItem:
     from llm.llm_config_manager import update_config, LLMConfigItem as DomainItem
@@ -138,15 +147,6 @@ def delete_llm_config(config_id: str) -> None:
     ok = delete_config(config_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="配置不存在")
-
-
-@router.put("/llm/active", response_model=dict)
-def set_active_llm(body: SetActiveLLMRequest) -> dict:
-    from llm.llm_config_manager import set_active_config
-    ok = set_active_config(body.config_id)
-    if not ok:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="配置不存在")
-    return {"active_id": body.config_id}
 
 
 def _llm_item_to_dict(item: Any) -> dict:
