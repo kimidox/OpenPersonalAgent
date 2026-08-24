@@ -57,8 +57,15 @@ export interface TokenUsageData {
   usage: Record<string, unknown> | { raw: string };
 }
 
+export interface AwaitUserSpec {
+  question: string;
+  context?: string;
+  choices?: string[];
+  raw?: string;
+}
+
 export interface AwaitUserData {
-  spec: Record<string, unknown> | { raw: string };
+  spec: AwaitUserSpec | Record<string, unknown> | { raw: string };
 }
 
 export interface PlanData {

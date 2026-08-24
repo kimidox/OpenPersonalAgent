@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { DisplayMessage } from "@/store/chat";
+import type { AwaitUserSpec } from "@/types/events";
 import MessageItem from "./MessageItem";
 import AwaitUserCard from "./AwaitUserCard";
 import "./MessageList.css";
@@ -22,6 +23,15 @@ export default function MessageList({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const lastAwaiting = messages.some((m) => m.awaitingUser);
+  // 从最后一条 awaitingUser=true 的消息中提取 spec
+  const lastAwaitSpec: AwaitUserSpec | null = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].awaitingUser && messages[i].awaitUserSpec) {
+        return messages[i].awaitUserSpec;
+      }
+    }
+    return null;
+  })() ?? null;
 
   // 自动滚动到底部（仅在用户已滚动到底时）
   useEffect(() => {
@@ -59,7 +69,7 @@ export default function MessageList({
           <div className="run-error-inline">{runError}</div>
         )}
         {lastAwaiting && (
-          <AwaitUserCard onReply={onReplyAwait} />
+          <AwaitUserCard spec={lastAwaitSpec} onReply={onReplyAwait} />
         )}
       </div>
     </div>

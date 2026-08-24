@@ -28,13 +28,19 @@ def main() -> None:
     print("[dev_backend] 启动后端: http://127.0.0.1:8765 (dev 模式，无 token)")
     print("[dev_backend] API 文档: http://127.0.0.1:8765/docs")
     print("[dev_backend] 前端访问: http://localhost:1420 (vite dev server)")
-    uvicorn.run(
+    # 显式构造 Server 并存入 app.state，供 /api/quit 触发优雅退出
+    # （Tauri BACKEND_EXTERNAL 模式点"退出程序"时，经 /api/quit 停止本进程
+    #  及其悬浮球子进程，否则 PyCharm 调试后端会残留）
+    config = uvicorn.Config(
         app,
         host=args.host,
         port=args.port,
         log_level="info",
         reload=False,  # PyCharm 调试时禁用 reload（reload 会 fork 子进程，断点失效）
     )
+    server = uvicorn.Server(config)
+    app.state.uvicorn_server = server
+    server.run()
 
 
 if __name__ == "__main__":

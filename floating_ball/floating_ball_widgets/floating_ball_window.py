@@ -384,43 +384,41 @@ class FloatingBallWindow(QWidget):
             self._send(MessageType.START_RECORDING)
 
     def _on_quit(self) -> None:
-        """退出应用：终止所有相关进程"""
-        import os
-        import subprocess
+        """退出应用：发 QUIT_APPLICATION 通知 backend，由 Tauri 统一终止全部进程。
 
+        注意：不要在这里直接 taskkill 后端进程树——那样只会杀掉 backend，
+        Tauri 主进程仍存活，其健康巡检会把 backend（连带新悬浮球）自动重启，
+        表现为"点了退出应用但进程都还在"。正确链路：
+        球 → backend(_emit_quit) → WS 广播 floating_ball.quit
+        → 前端 invoke quit_app → Rust stop sidecar(taskkill /F /T) + app.exit(0)。
+        """
         self._logger.info("悬浮球请求退出应用...")
-        self._logger.info(f"主进程 PID: {self._main_pid}")
 
-        # 先清理 Live2D 组件
+        # 清理 Live2D 组件
         if self._live2d_widget:
             try:
                 self._live2d_widget.cleanup()
                 self._live2d_widget.close()
-                self._live2d_widget = None  # 释放引用
                 self._logger.info("Live2D 组件已清理并释放引用")
             except Exception as e:
                 self._logger.error(f"清理 Live2D 组件失败: {e}")
-                self._live2d_widget = None  # 即使失败也置空引用
+            finally:
+                self._live2d_widget = None
 
-        # 先关闭聊天窗口和悬浮球窗口
+        # 通知 backend 退出整个应用（backend 广播 WS 事件给 Tauri 前端）
+        self._send(MessageType.QUIT_APPLICATION)
+        # 确保消息经 IPC feeder 线程刷入管道后再退出进程，避免消息丢失
+        try:
+            self._to_main.close()
+            self._to_main.join_thread()
+        except Exception as e:
+            self._logger.warning(f"关闭 IPC 发送队列失败: {e}")
+
+        # 关闭聊天窗口和悬浮球窗口并退出本进程
+        # （backend 与本进程最终由 Tauri Rust 端 taskkill /F /T 统一终止）
         if self._chat_window:
             self._chat_window.close()
         self.close()
-
-        # 再终止主进程及其子进程（使用 /T 终止进程树）
-        try:
-            if self._main_pid and self._main_pid != os.getpid():
-                result = subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(self._main_pid)],
-                    check=False,
-                    capture_output=True,
-                    text=True
-                )
-                self._logger.info(f"终止主进程树 {self._main_pid}: {result.stdout} {result.stderr}")
-        except Exception as e:
-            self._logger.error(f"终止主进程失败: {e}")
-
-        # 悬浮球进程退出
         self._logger.info("悬浮球进程退出")
         QApplication.quit()
 

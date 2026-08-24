@@ -94,6 +94,9 @@ class HealthResponse(BaseModel):
     active_runs: int
     queue_size: int
     ws_clients: int
+    # 悬浮球请求退出应用（quit_application）后置 True，
+    # Tauri 健康巡检读到后停止 sidecar 并退出（WS 断线时的兜底通道）
+    quit_requested: bool = False
 
 
 class ReadyResponse(BaseModel):

@@ -13,6 +13,7 @@ import type {
   ConversationSummary,
   ConversationDetail,
 } from "@/types/api";
+import type { AwaitUserSpec } from "@/types/events";
 
 export interface DisplayMessage {
   // 本地生成的唯一 id（用于 React key）
@@ -32,6 +33,8 @@ export interface DisplayMessage {
   aborted?: boolean;
   // 是否等待用户回复
   awaitingUser?: boolean;
+  // ask_user 工具的 spec 数据（问题、选项、上下文）
+  awaitUserSpec?: AwaitUserSpec | null;
 }
 
 interface ChatState {
@@ -59,6 +62,8 @@ interface ChatState {
   completeAssistantMessage: () => void;
   // 追加一条独立的工具结果卡片
   appendToolResultMessage: (content: string, kind?: string) => void;
+  // 清除所有消息的 awaitingUser 标记（用户回复 ask_user 后隐藏卡片）
+  clearAwaitingUser: () => void;
   setMessages: (msgs: DisplayMessage[]) => void;
 }
 
@@ -342,6 +347,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
           timestamp: Date.now(),
         },
       ],
+    }));
+  },
+
+  clearAwaitingUser: () => {
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.awaitingUser ? { ...m, awaitingUser: false, awaitUserSpec: null } : m,
+      ),
     }));
   },
 

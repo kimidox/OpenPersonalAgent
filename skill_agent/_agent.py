@@ -151,6 +151,9 @@ class SkillAgent:
         self._runtime_confirm_messages: list[dict] = []  # 当时的消息列表快照
         # 运行时确认后继续执行的标志
         self._from_runtime_confirm_continue: bool = False
+        # ask_user 等待恢复相关状态（区别于运行时确认：ask_user 由 LLM 工具调用触发）
+        self._ask_user_confirm_pending: bool = False  # 是否有待恢复的 ask_user
+        self._ask_user_confirm_messages: list[dict] = []  # ask_user 触发时的消息快照
         # 状态机
         self._state = ConversationState.IDLE
         # 双层循环：Steering 消息队列（用户中途干预）
@@ -767,16 +770,14 @@ class SkillAgent:
         try:
             model = get_chat_model(enable_thinking=self._enable_thinking)
 
-            # 将上传文件内容追加到用户消息（传递 enable_vision）
-            user_content = self._consume_uploaded_files_content(
-                user_query.strip(),
+            # _append_model_messages 内部会消费上传文件内容，这里无需提前处理
+            messages: list[dict[str, Any]] = []
+            self._append_model_messages(
+                messages,
+                system_prompt=f"你是一个友好的助手。请直接用简洁的语言回答用户问题。\n\n{self.get_base_info()}",
+                user_query=user_query.strip(),
                 enable_vision=model.enable_vision,
             )
-
-            messages = [
-                {"role": "system", "content": f"你是一个友好的助手。请直接用简洁的语言回答用户问题。\n\n{self.get_base_info()}"},
-                {"role": "user", "content": user_content},
-            ]
 
             # 使用流式 API 进行回复
             def stream_callback(content: str, msg_type: str) -> None:
@@ -803,7 +804,7 @@ class SkillAgent:
                 log_callback(json.dumps(asdict(result.token_usage), ensure_ascii=False), "token_usage")
 
             if self.memory is not None:
-                self.memory.append_message(self._conversation_id, "user", user_content)
+                # user 消息已在 _append_model_messages 中持久化，这里只追加 assistant 回复
                 self.memory.append_message(self._conversation_id, "assistant", reply)
 
             logger.debug("直接回复完成，回复长度: %s", len(reply))
@@ -1306,8 +1307,11 @@ class SkillAgent:
             格式化的结果字符串
         """
         if success:
-            if len(content) > 2000:
-                content = content[:2000] + "\n\n…（内容已截断）"
+            if len(content) > config.TOOL_OUTPUT_MAX_LENGTH:
+                if config.TOOL_TRUNCATE_SHOW_DETAILS:
+                    content = content[:config.TOOL_OUTPUT_MAX_LENGTH] + f"\n\n…（内容已截断：原始长度 {len(content)} 字符，显示 {config.TOOL_OUTPUT_MAX_LENGTH} 字符）"
+                else:
+                    content = content[:config.TOOL_OUTPUT_MAX_LENGTH] + "\n\n…（内容已截断）"
             return f"""✅ 操作成功
 
 {content}
@@ -1434,11 +1438,20 @@ class SkillAgent:
 
         Side effects:
             清空并重建 messages 列表；消费 _uploaded_files_content 缓存；
-            将用户消息追加到 memory。
+            若 memory 存在，将用户消息追加到 memory。
         """
-        assert self.memory is not None
         conversation_id = self._conversation_id
-        prior = _history_without_system(self.memory.get_messages(conversation_id))
+        prior: list[dict[str, Any]] = []
+        if self.memory is not None:
+            prior = [
+                m for m in _history_without_system(self.memory.get_messages(conversation_id))
+                # plan_confirm 以 tool 角色持久化，但没有对应的 assistant(tool_calls) 消息，
+                # 发送给 LLM 会违反 OpenAI tool calling 协议，因此构建上下文时过滤掉。
+                if not (
+                    m.get("role") == "tool"
+                    and m.get("metadata", {}).get("type") == "plan_confirm"
+                )
+            ]
         messages.clear()
         messages.append({"role": "system", "content": system_prompt})
         messages.extend(prior)
@@ -1453,7 +1466,8 @@ class SkillAgent:
             user_query.strip(),
             enable_vision=enable_vision,
         )
-        self.memory.append_message(conversation_id, "user", user_content, metadata=metadata)
+        if self.memory is not None:
+            self.memory.append_message(conversation_id, "user", user_content, metadata=metadata)
         messages.append({"role": "user", "content": user_content})
 
     def _persist_after_tool_turn(
@@ -1926,9 +1940,8 @@ class SkillAgent:
                 user_query, tool_catalog_text, log_callback, model.enable_vision,
             )
             if early_return is not None:
-                # 等待用户确认计划前，先把用户原始 query 持久化
-                if self.memory is not None:
-                    self.memory.append_message(self._conversation_id, "user", user_query.strip())
+                # 用户原始 query 的持久化统一由下方 _append_model_messages 处理，
+                # 避免在提前返回分支中重复追加。
                 return {"action": "return", "value": early_return}
 
         tools = model.build_skill_agent_tools_initial()
@@ -1938,15 +1951,14 @@ class SkillAgent:
         logger.debug("初始工具集已准备，包含 request_tool_details + CONTROL 工具")
         logger.debug("原子工具将按需通过 request_tool_details 获取")
 
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_query.strip()},
-        ]
+        messages: list[dict[str, Any]] = []
+        self._append_model_messages(
+            messages,
+            system_prompt=system_prompt,
+            user_query=user_query,
+            enable_vision=model.enable_vision,
+        )
         active_skill_text, active_skill_ids = self._recover_active_skills()
-
-        # 进入主循环前持久化用户 query（NO_PLAN 模式已在 _direct_reply 中保存）
-        if self.memory is not None and plan_mode != PlanMode.NO_PLAN:
-            self.memory.append_message(self._conversation_id, "user", user_query.strip())
 
         return {
             "action": "continue",
@@ -2155,6 +2167,57 @@ class SkillAgent:
         logger.debug("用户输入了其他内容，清除运行时确认状态")
         self._reset_runtime_confirm_state()
         return {"action": "clear"}
+
+    def _handle_ask_user_resume(self, user_query, log_callback, emit_token_usage_fn):
+        """处理上一轮 ask_user 等待后的用户回复，继续主循环推理。
+
+        与 _handle_runtime_confirmation（危险命令/包安装确认）不同，
+        ask_user 由 LLM 工具调用触发，用户回复即为对该问题的回答。
+        将用户回复作为 user 消息注入到 ask_user 触发时的消息快照之后，
+        让 LLM 基于完整上下文（含 ask_user 的 tool 结果 + 用户回答）继续推理，
+        而不是把回复当作全新对话输入重新分类/规划/再次询问。
+
+        Args:
+            user_query: 用户对 ask_user 的回复。
+            log_callback: 前端日志回调。
+            emit_token_usage_fn: 发送 token 用量回调。
+
+        Returns:
+            dict: 与 _handle_runtime_confirmation 同构的结果字典：
+                - {"action": "no_pending"}: 无待恢复的 ask_user，正常流程
+                - {"action": "skip_to_main_loop", "messages": ..., "model": ...,
+                   "tools": ..., "active_skill_text": ..., "active_skill_ids": ...}:
+                   用户已回答，注入回复后直接进入主循环继续推理
+        """
+        if not self._ask_user_confirm_pending:
+            return {"action": "no_pending"}
+
+        logger.debug("检测到 ask_user 待恢复，用户回复: %s", user_query[:50])
+        messages = self._ask_user_confirm_messages
+        user_content = user_query.strip()
+        # 用户回答作为 user 消息注入，LLM 结合 ask_user 的 tool 结果理解回答并继续推进
+        messages.append({"role": "user", "content": user_content})
+        if self.memory is not None:
+            self.memory.append_message(self._conversation_id, "user", user_content)
+
+        # 重置待恢复状态
+        self._ask_user_confirm_pending = False
+        self._ask_user_confirm_messages = []
+
+        # 初始化主循环所需的工具和模型（与 skip_to_main_loop 分支保持一致）
+        model = get_chat_model(enable_thinking=self._enable_thinking)
+        tools = model.build_skill_agent_tools_initial()
+        self._supplied_tool_definitions = {}
+        active_skill_text, active_skill_ids = self._recover_active_skills()
+
+        return {
+            "action": "skip_to_main_loop",
+            "messages": messages,
+            "active_skill_text": active_skill_text,
+            "active_skill_ids": active_skill_ids,
+            "model": model,
+            "tools": tools,
+        }
 
     def _format_and_send_tool_result(self, fname, args, result, log_callback, emit_token_usage_fn):
         """Format tool execution result and send to frontend via log_callback.
@@ -2672,6 +2735,9 @@ class SkillAgent:
             )
             if log_callback:
                 log_callback(_ask_user_ui_log_payload(args), "await_user")
+            # 保存待恢复状态：用户回复后由 _handle_ask_user_resume 注入对话继续推理
+            self._ask_user_confirm_pending = True
+            self._ask_user_confirm_messages = list(messages)
             _emit_token_usage()
             logger.debug("等待用户回复 (ask_user)")
             return {"action": "return", "value": SKILL_AGENT_AWAITING_USER_REPLY}
@@ -2750,6 +2816,7 @@ class SkillAgent:
             # 如果上一轮触发了运行时确认，根据用户回复直接处理，不发送给 LLM
             # AI-BRANCH-MARKER: 运行时确认续跑分支 — 根据上一轮确认状态决定是直接进入主循环还是重新分类
             _rt_confirm_result = self._handle_runtime_confirmation(user_query, log_callback, _emit_token_usage)
+            _skip_to_main_loop = False
             if _rt_confirm_result["action"] == "return":
                 return _rt_confirm_result["value"]
             elif _rt_confirm_result["action"] == "skip_to_main_loop":
@@ -2759,9 +2826,21 @@ class SkillAgent:
                 model = _rt_confirm_result["model"]
                 tools = _rt_confirm_result["tools"]
                 _skip_to_main_loop = True
-            else:
-                # "no_pending" or "clear"
-                _skip_to_main_loop = False
+
+            # ask_user 待恢复处理：上一轮 LLM 调用 ask_user 后，本轮用户回复即为回答，
+            # 注入回复后直接进入主循环继续推理（不重新分类/规划）
+            # AI-BRANCH-MARKER: ask_user 续跑分支 — 用户回答注入后跳过输入分类直接进入主循环
+            if not _skip_to_main_loop:
+                _ask_user_resume = self._handle_ask_user_resume(user_query, log_callback, _emit_token_usage)
+                if _ask_user_resume["action"] == "return":
+                    return _ask_user_resume["value"]
+                elif _ask_user_resume["action"] == "skip_to_main_loop":
+                    messages = _ask_user_resume["messages"]
+                    active_skill_text = _ask_user_resume["active_skill_text"]
+                    active_skill_ids = _ask_user_resume["active_skill_ids"]
+                    model = _ask_user_resume["model"]
+                    tools = _ask_user_resume["tools"]
+                    _skip_to_main_loop = True
 
             # 如果从运行时确认继续，跳过计划检测和输入分类，直接进入主循环
             # AI-BRANCH-MARKER: 输入分类分支 — 根据用户输入类型(text/plan_confirm/plan_reject)决定后续流程

@@ -53,6 +53,8 @@ class FloatingBallManager:
         self._ipc_sender: BatchMessageSender | None = None
         self._ipc_monitor: IPCPerformanceMonitor | None = None
         self._main_pid: int = os.getpid()
+        # 悬浮球请求退出应用（quit_application）→ /api/health 暴露给 Tauri 巡检兜底
+        self._quit_requested: bool = False
 
     # ------------------------------------------------------------------
     # 依赖注入
@@ -224,6 +226,11 @@ class FloatingBallManager:
         """悬浮球子进程是否在运行。"""
         return self._process is not None and self._process.is_alive()
 
+    @property
+    def quit_requested(self) -> bool:
+        """悬浮球是否已请求退出整个应用（供 /api/health 暴露给 Tauri 巡检）。"""
+        return self._quit_requested
+
     def get_stats(self) -> Any:
         """获取 IPC 性能统计。"""
         if self._ipc_monitor is not None:
@@ -294,6 +301,8 @@ class FloatingBallManager:
             self._stop_recording()
         elif msg_type == MessageType.QUIT_APPLICATION:
             # 通知 Tauri 关闭应用（禁止 os._exit backend 进程）
+            # 置 quit_requested 供 /api/health 兜底（WS 断线时 Tauri 巡检也能感知）
+            self._quit_requested = True
             self._emit_quit()
         elif msg_type == MessageType.CHAT_SEND_MESSAGE:
             content = msg.get("content", "")

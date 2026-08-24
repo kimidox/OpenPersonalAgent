@@ -30,6 +30,7 @@ export default function ChatPage() {
     updateAssistantMessage,
     completeAssistantMessage,
     appendToolResultMessage,
+    clearAwaitingUser,
     setMessages,
   } = store;
 
@@ -53,6 +54,9 @@ export default function ChatPage() {
       if (!query.trim()) return;
 
       setSendError(null);
+
+      // 回复 ask_user 时清除旧消息的 awaitingUser 标记，隐藏待回复卡片
+      clearAwaitingUser();
 
       // 构造带 <Files> 标签的完整 query：文件内容嵌入标签内
       const fullQuery = buildQueryWithFiles(query, attachments);
@@ -80,6 +84,7 @@ export default function ChatPage() {
       enableThinking,
       appendUserMessage,
       startAssistantMessage,
+      clearAwaitingUser,
     ],
   );
 
@@ -153,33 +158,6 @@ export default function ChatPage() {
       onSendMessage: handleSend,
       onTurnStart: handleTurnStart,
       onToolResult: handleToolResult,
-      // 阶段 5/6：悬浮球触发的系统事件 → Tauri invoke 控制 native 窗口
-      onWindowShow: () => {
-        console.log("[ChatPage] 收到 window.show 事件（悬浮球请求显示主窗口）");
-        // Tauri 模式：invoke('show_main_window') → Rust 调 webview.show()+setFocus()
-        // 浏览器 dev 模式：window.focus() 兜底
-        if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-          import("@tauri-apps/api/core")
-            .then(({ invoke }) => invoke("show_main_window"))
-            .catch((err) => console.error("[ChatPage] show_main_window 失败:", err));
-        } else {
-          try {
-            window.focus();
-          } catch {
-            /* noop */
-          }
-        }
-      },
-      onFloatingBallQuit: () => {
-        console.log("[ChatPage] 收到 floating_ball.quit 事件（悬浮球请求退出应用）");
-        // Tauri 模式：invoke('quit_app') → Rust stop sidecar + app.exit(0)
-        // 浏览器 dev 模式：仅记录日志（不打断开发）
-        if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-          import("@tauri-apps/api/core")
-            .then(({ invoke }) => invoke("quit_app"))
-            .catch((err) => console.error("[ChatPage] quit_app 失败:", err));
-        }
-      },
     });
 
   // 把 run 状态同步到 store 的 assistant 消息
@@ -226,6 +204,7 @@ export default function ChatPage() {
       thinking: runState.thinking,
       toolCalls: runState.toolCalls,
       awaitingUser: runState.awaitingUser,
+      awaitUserSpec: runState.awaitUserSpec,
       aborted: runState.aborted,
     });
 

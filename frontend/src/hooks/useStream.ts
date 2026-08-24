@@ -20,6 +20,7 @@ import type {
   PlanData,
   TokenUsageData,
   AwaitUserData,
+  AwaitUserSpec,
   LLMStateData,
   LLMWarningData,
   WSEvent,
@@ -43,6 +44,7 @@ export interface RunState {
   isRunning: boolean;
   isPaused: boolean;
   awaitingUser: boolean;
+  awaitUserSpec: AwaitUserSpec | null;
   tokenUsage: TokenUsageData["usage"] | null;
   plan: string | null;
   errorMessage: string | null;
@@ -77,17 +79,10 @@ interface UseStreamOptions {
   }) => void;
   // 工具执行结果通知外部追加独立 tool 卡片
   onToolResult?: (content: string, kind: string) => void;
-  // 系统事件回调（阶段 5：悬浮球触发）
-  onWindowShow?: () => void;
-  onFloatingBallQuit?: () => void;
 }
 
 export function useStream(options: UseStreamOptions): UseStreamReturn {
-  const { ws, onSendMessage, onTurnStart, onToolResult, onWindowShow, onFloatingBallQuit } = options;
-
-  // 系统事件回调 ref（避免 effect 依赖变化）
-  const sysHandlersRef = useRef({ onWindowShow, onFloatingBallQuit });
-  sysHandlersRef.current = { onWindowShow, onFloatingBallQuit };
+  const { ws, onSendMessage, onTurnStart, onToolResult } = options;
 
   const [state, setState] = useState<RunState>({
     runId: null,
@@ -97,6 +92,7 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
     isRunning: false,
     isPaused: false,
     awaitingUser: false,
+    awaitUserSpec: null,
     tokenUsage: null,
     plan: null,
     errorMessage: null,
@@ -241,7 +237,20 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
 
   const handleAwaitUser = useCallback((event: WSEvent<AwaitUserData>) => {
     if (state.runId !== event.run_id) return;
-    setState((s) => ({ ...s, awaitingUser: true }));
+    const rawSpec = event.data.spec;
+    let spec: AwaitUserSpec | null = null;
+    if (rawSpec && typeof rawSpec === "object") {
+      const s = rawSpec as AwaitUserSpec;
+      spec = {
+        question: typeof s.question === "string" ? s.question : "",
+        context: typeof s.context === "string" ? s.context : undefined,
+        choices: Array.isArray(s.choices) ? s.choices.filter((c) => typeof c === "string") : undefined,
+        raw: typeof s.raw === "string" ? s.raw : undefined,
+      };
+    } else if (typeof rawSpec === "string") {
+      spec = { question: "", raw: rawSpec };
+    }
+    setState((s) => ({ ...s, awaitingUser: true, awaitUserSpec: spec }));
   }, [state.runId]);
 
   const handlePlan = useCallback((event: WSEvent<PlanData>) => {
@@ -261,6 +270,8 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
         ...s,
         isRunning: false,
         awaitingUser: event.data.awaiting_user,
+        // message.complete 时如果 awaiting_user 为 false，清空 spec
+        awaitUserSpec: event.data.awaiting_user ? s.awaitUserSpec : null,
       }));
     },
     [typewriter],
@@ -289,6 +300,7 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
       isRunning: true,
       isPaused: false,
       awaitingUser: false,
+      awaitUserSpec: null,
       tokenUsage: null,
       plan: null,
       errorMessage: null,
@@ -373,9 +385,8 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
       ws.on("error", (e) => handlersRef.current.handleError(e as WSEvent<{ message?: string }>)),
       ws.on("llm.state", (e) => handlersRef.current.handleLLMState(e as WSEvent<LLMStateData>)),
       ws.on("llm.warning", (e) => handlersRef.current.handleLLMWarning(e as WSEvent<LLMWarningData>)),
-      // 系统事件（阶段 5：悬浮球触发，conversation_id 为空，广播给全部客户端）
-      ws.on("window.show", () => sysHandlersRef.current.onWindowShow?.()),
-      ws.on("floating_ball.quit", () => sysHandlersRef.current.onFloatingBallQuit?.()),
+      // 系统事件（window.show / floating_ball.quit）由 App 层常驻 WS 统一处理，
+      // 不在会话级 WS 上重复订阅
     ];
 
     // WS 状态变化 → 断线期间暂停打字机
@@ -400,7 +411,7 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
 
   const replyToAwait = useCallback(
     async (message: string) => {
-      setState((s) => ({ ...s, awaitingUser: false }));
+      setState((s) => ({ ...s, awaitingUser: false, awaitUserSpec: null }));
       await onSendMessage(message);
     },
     [onSendMessage],

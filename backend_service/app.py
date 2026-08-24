@@ -257,6 +257,9 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         )
         started_at = getattr(app.state, "started_at", 0.0)
         uptime_s = (time.time() - started_at) if started_at else 0.0
+        # 悬浮球退出请求（Tauri 健康巡检兜底通道）
+        floating_ball = components.floating_ball if components is not None else None
+        quit_requested = bool(getattr(floating_ball, "quit_requested", False))
         return HealthResponse(
             status="ok",
             uptime_s=uptime_s,
@@ -267,6 +270,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             active_runs=1 if run_coordinator.is_busy() else 0,
             queue_size=run_coordinator.queue_size(),
             ws_clients=ws_manager.total_clients(),
+            quit_requested=quit_requested,
         )
 
     @app.get("/api/ready", response_model=ReadyResponse, tags=["health"])
@@ -276,6 +280,26 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             status_code=status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"ready": is_ready},
         )
+
+    @app.post("/api/quit", tags=["health"])
+    async def request_quit() -> dict:
+        """请求后端优雅退出（Tauri quit_app 统一调用）。
+
+        - BACKEND_EXTERNAL 模式（PyCharm 调试后端）：这是终止后端的唯一手段，
+          否则 Tauri 退出后外部后端进程会残留。
+        - sidecar 模式：与 taskkill 互补，让 DB / 调度器 / 悬浮球先做清理。
+
+        实现：置 uvicorn Server.should_exit → 停止接受新连接并关闭 WS
+        → lifespan 清理（shutdown_backend_components 会 stop 悬浮球子进程）
+        → 进程退出。延迟 0.3s 置位，让本响应先发出去。
+        """
+        server = getattr(app.state, "uvicorn_server", None)
+        if server is None:
+            return {"status": "no-server"}
+        asyncio.get_running_loop().call_later(
+            0.3, setattr, server, "should_exit", True
+        )
+        return {"status": "quitting"}
 
     # 业务路由
     app.include_router(conversations_router.router)
@@ -299,13 +323,12 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     import uvicorn
     app = create_app(args)
-    uvicorn.run(
-        app,
-        host=args.host,
-        port=args.port,
-        log_level="info",
-        # lifespan 在 uvicorn 管理
-    )
+    # 显式构造 Server 并存入 app.state，供 /api/quit 触发优雅退出
+    # （uvicorn.run 内部就是 Server(config).run()，行为等价）
+    config = uvicorn.Config(app, host=args.host, port=args.port, log_level="info")
+    server = uvicorn.Server(config)
+    app.state.uvicorn_server = server
+    server.run()
 
 
 if __name__ == "__main__":
