@@ -2214,6 +2214,8 @@ class SkillAgent:
                 auto_end_msg = self._check_repeated_write_success(command, str(result))
                 if auto_end_msg:
                     logger.debug(f"检测到重复写入，自动结束: {auto_end_msg}")
+                    # 补发 TURN_START：自动结束文案作为独立卡片渲染，与持久化（独立 assistant 消息）一致
+                    self._emit_event(AgentEventType.TURN_START, token_usage=self._token_usage.total_tokens)
                     if log_callback:
                         try:
                             log_callback(auto_end_msg, "assistant")
@@ -2532,6 +2534,8 @@ class SkillAgent:
                     )
                     logger.warning("触发自动终止: %s", auto_finish_msg)
 
+                    # 补发 TURN_START：自动结束文案作为独立卡片渲染，与持久化（独立 assistant 消息）一致
+                    self._emit_event(AgentEventType.TURN_START, token_usage=self._token_usage.total_tokens)
                     if log_callback:
                         log_callback(auto_finish_msg, "assistant")
                     if self.memory is not None:
@@ -2650,6 +2654,9 @@ class SkillAgent:
                 conversation_id = self._conversation_id
                 metadata = {"token_usage": asdict(self._token_usage)}
                 self.memory.append_message(conversation_id, "assistant", str(final), metadata=metadata)
+            # 最终回复持久化为独立 assistant 消息；补发 TURN_START 让前端
+            # 把含本工具调用的流式卡片定稿并新建卡片，保证流式渲染与历史加载一致
+            self._emit_event(AgentEventType.TURN_START, token_usage=self._token_usage.total_tokens)
             if log_callback:
                 log_callback(str(final), "assistant")
             _emit_token_usage()

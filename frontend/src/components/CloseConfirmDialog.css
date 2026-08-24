@@ -1,0 +1,141 @@
+/* 关闭确认弹窗（复用全局主题变量，独立前缀 ccd- 避免与设置页 modal 冲突） */
+
+.ccd-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: ccdFadeIn 0.15s ease-out;
+}
+
+@keyframes ccdFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.ccd-dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  padding: 24px;
+  width: 380px;
+  max-width: 90vw;
+  animation: ccdSlideIn 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes ccdSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.ccd-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 4px 0;
+}
+
+.ccd-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 16px 0;
+}
+
+.ccd-error {
+  font-size: 13px;
+  color: #e5484d;
+  background: rgba(229, 72, 77, 0.08);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.ccd-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ccd-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.ccd-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.ccd-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ccd-option-danger:hover:not(:disabled) {
+  border-color: #e5484d;
+  box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.12);
+}
+
+.ccd-option-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ccd-option-danger .ccd-option-name {
+  color: #e5484d;
+}
+
+.ccd-option-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.ccd-cancel {
+  width: 100%;
+  margin-top: 12px;
+  padding: 9px 0;
+  font-size: 14px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.ccd-cancel:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.ccd-cancel:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

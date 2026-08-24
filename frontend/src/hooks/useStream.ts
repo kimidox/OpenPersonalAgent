@@ -67,8 +67,14 @@ export interface UseStreamReturn {
 interface UseStreamOptions {
   ws: WSClient | null;
   onSendMessage: (query: string) => Promise<void>;
-  // 每轮模型发言开始时通知外部新建 assistant 卡片；currentContent 为上一轮已打字完成的内容
-  onTurnStart?: (currentContent: string) => void;
+  // 每轮模型发言开始时通知外部新建 assistant 卡片；
+  // turn 为上一轮已累积的完整状态（content/thinking/toolCalls），
+  // 供外部把上一张卡片补全后再开新卡（否则工具调用会在轮次边界丢失）
+  onTurnStart?: (turn: {
+    content: string;
+    thinking: string;
+    toolCalls: ToolCallInfo[];
+  }) => void;
   // 工具执行结果通知外部追加独立 tool 卡片
   onToolResult?: (content: string, kind: string) => void;
   // 系统事件回调（阶段 5：悬浮球触发）
@@ -173,8 +179,14 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
           typewriter.fullText.trim() || state.thinking.trim() || state.toolCalls.length > 0;
         if (hasContent) {
           typewriter.complete();
-          // 用 fullText 而不是 shownText，避免打字机尚未播完时旧卡片内容丢失
-          onTurnStart?.(typewriter.fullText);
+          // 用 fullText 而不是 shownText，避免打字机尚未播完时旧卡片内容丢失；
+          // thinking/toolCalls 必须一并带出：同步 effect 可能尚未把最后一帧写入 store，
+          // 只回传 content 会导致上一张卡片的工具调用在轮次边界丢失（渲染为空卡片）
+          onTurnStart?.({
+            content: typewriter.fullText,
+            thinking: state.thinking,
+            toolCalls: state.toolCalls,
+          });
           typewriter.reset();
         }
         setState((s) => ({ ...s, thinking: "", toolCalls: [] }));

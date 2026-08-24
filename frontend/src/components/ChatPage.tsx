@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatStore, type DisplayMessage } from "@/store/chat";
 import { api, APIError } from "@/api/client";
 import { WSClient } from "@/api/ws";
-import { useStream } from "@/hooks/useStream";
+import { useStream, type ToolCallInfo } from "@/hooks/useStream";
 import type { FileAttachment } from "@/types/api";
 import { buildQueryWithFiles } from "@/utils/fileTags";
 import ConversationSidebar from "./ConversationSidebar";
@@ -127,9 +127,14 @@ export default function ChatPage() {
   }, [currentConversationId, setMessages]);
 
   const handleTurnStart = useCallback(
-    (currentContent: string) => {
-      // 先把上一轮 assistant 卡片的 content 落盘，再新建一张空卡片
-      updateAssistantMessage({ content: currentContent });
+    (turn: { content: string; thinking: string; toolCalls: ToolCallInfo[] }) => {
+      // 轮次边界：把上一轮 assistant 卡片的完整状态（content/thinking/toolCalls）
+      // 落盘后再新建空卡片；只落 content 会让含工具调用的卡片渲染为空
+      updateAssistantMessage({
+        content: turn.content,
+        thinking: turn.thinking,
+        toolCalls: turn.toolCalls,
+      });
       newAssistantMessage();
     },
     [updateAssistantMessage, newAssistantMessage],
@@ -183,7 +188,8 @@ export default function ChatPage() {
     runId: string | null;
     content: string;
     thinking: string;
-  }>({ runId: null, content: "", thinking: "" });
+    toolCalls: ToolCallInfo[] | undefined;
+  }>({ runId: null, content: "", thinking: "", toolCalls: undefined });
   useEffect(() => {
     if (!runState.runId) return;
     const storeMessages = useChatStore.getState().messages;
@@ -196,19 +202,23 @@ export default function ChatPage() {
         runId: runState.runId,
         content: "",
         thinking: "",
+        toolCalls: undefined,
       };
     }
 
     const contentChanged = lastSyncRef.current.content !== typedContent;
     const thinkingChanged = lastSyncRef.current.thinking !== runState.thinking;
+    // toolCalls 每次更新都产生新数组引用，引用比较即可
+    const toolCallsChanged = lastSyncRef.current.toolCalls !== runState.toolCalls;
 
-    // 运行中仅当内容/思考发生变化时同步；结束时必须同步并标记完成
-    if (!contentChanged && !thinkingChanged && runState.isRunning) return;
+    // 运行中仅当内容/思考/工具调用发生变化时同步；结束时必须同步并标记完成
+    if (!contentChanged && !thinkingChanged && !toolCallsChanged && runState.isRunning) return;
 
     lastSyncRef.current = {
       runId: runState.runId,
       content: typedContent,
       thinking: runState.thinking,
+      toolCalls: runState.toolCalls,
     };
 
     updateAssistantMessage({
