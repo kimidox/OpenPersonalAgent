@@ -51,14 +51,9 @@ MODEL_CONFIGS = {
 
 def get_model_dir() -> Path:
     """获取模型存储目录"""
-    # 尝试从 resource_path 获取路径
-    try:
-        from resource_path import paths
-        model_dir = paths.personal_data_dir / "model"
-    except ImportError:
-        # 如果 resource_path 不可用，使用默认路径
-        model_dir = Path(__file__).parent / "PersonalData" / "model"
-    
+    from resource_path import paths
+
+    model_dir = paths.personal_data_dir / "model"
     model_dir.mkdir(parents=True, exist_ok=True)
     return model_dir
 

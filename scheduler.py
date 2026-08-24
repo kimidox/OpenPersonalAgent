@@ -1,14 +1,10 @@
 """TaskScheduler：周期检查 scheduled_tasks 并触发。
 
 迁移说明（见 frontend-tauri-refactor.md 3.8 节）：
-- 新增 `runner` / `bridge` / `skill_agent` 参数，用于后端服务模式（无 UI）。
-- 保留 `main_window` 参数，用于 Flet 旧路径（阶段 6 前）。
-- 二者互斥：若 `runner` 与 `bridge` 与 `skill_agent` 均提供，走后端路径；
-  否则回退到 main_window 路径。
-- `is_agent_busy`：后端路径读 `runner.is_busy()`；旧路径读 `main_window.is_agent_busy()`。
+- `runner` / `bridge` / `skill_agent` 参数用于后端服务模式（无 UI）。
+- `is_agent_busy` 读 `runner.is_busy()`。
 - `create_conversation_for_scheduled_task`：
-  - 后端路径：`skill_agent.start_new_conversation()` + `runner.submit(RunContext)`。
-  - 旧路径：`main_window.create_conversation_for_scheduled_task(task)`。
+  `skill_agent.start_new_conversation()` + `runner.submit(RunContext)`。
 """
 from __future__ import annotations
 
@@ -29,7 +25,7 @@ logger = get_module_logger("scheduler")
 
 
 class _TaskDeferred(Exception):
-    """任务延迟触发（如主窗口工作线程忙碌），保持 pending 状态等待下个检查周期。"""
+    """任务延迟触发（如 RunCoordinator 忙碌），保持 pending 状态等待下个检查周期。"""
 
 
 class TaskScheduler:
@@ -38,14 +34,12 @@ class TaskScheduler:
     def __init__(
         self,
         tray_icon=None,
-        main_window=None,
         *,
-        runner: RunCoordinator | None = None,
-        bridge: StreamBridge | None = None,
-        skill_agent: SkillAgent | None = None,
+        runner: RunCoordinator,
+        bridge: StreamBridge,
+        skill_agent: SkillAgent,
     ) -> None:
         self._tray_icon = tray_icon
-        self._main_window = main_window
         self._runner = runner
         self._bridge = bridge
         self._skill_agent = skill_agent
@@ -54,11 +48,7 @@ class TaskScheduler:
         self._lock = threading.Lock()
         self._timer_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        # 后端模式标记
-        self._backend_mode = runner is not None and bridge is not None and skill_agent is not None
-        logger.info(
-            f"TaskScheduler 初始化完成 (mode={'backend' if self._backend_mode else 'legacy'})"
-        )
+        logger.info("TaskScheduler 初始化完成（backend 模式）")
 
     # ------------------------------------------------------------------
     # 启停
@@ -171,43 +161,11 @@ class TaskScheduler:
             logger.error(f"发送任务 {task.task_id} 通知失败: {e}")
 
     # ------------------------------------------------------------------
-    # agent_conversation 触发（双路径）
+    # agent_conversation 触发
     # ------------------------------------------------------------------
 
     def _trigger_agent_conversation(self, task: ScheduledTask) -> None:
-        if self._backend_mode:
-            self._trigger_agent_conversation_backend(task)
-        else:
-            self._trigger_agent_conversation_legacy(task)
-
-    def _trigger_agent_conversation_legacy(self, task: ScheduledTask) -> None:
-        """旧路径：经 main_window.create_conversation_for_scheduled_task。"""
-        if self._main_window is None:
-            logger.error(f"无法触发 agent_conversation 任务 {task.task_id}: 主窗口引用未设置")
-            return
-
-        callback = getattr(self._main_window, 'create_conversation_for_scheduled_task', None)
-        if not callable(callback):
-            logger.error(
-                f"无法触发 agent_conversation 任务 {task.task_id}: "
-                "主窗口缺少 create_conversation_for_scheduled_task 方法"
-            )
-            return
-
-        is_busy = getattr(self._main_window, 'is_agent_busy', None)
-        if callable(is_busy) and is_busy():
-            raise _TaskDeferred(
-                f"主窗口工作线程忙碌，任务 {task.task_id} 延迟到下个检查周期"
-            )
-
-        try:
-            callback(task)
-            logger.info(f"任务 {task.task_id} agent_conversation 已触发（legacy）")
-        except Exception as e:
-            logger.exception(f"触发任务 {task.task_id} agent_conversation 失败: {e}")
-
-    def _trigger_agent_conversation_backend(self, task: ScheduledTask) -> None:
-        """新路径：直接调 RunCoordinator.submit，事件经 WS 广播。
+        """直接调 RunCoordinator.submit，事件经 WS 广播。
 
         流程：
         1. 检查 run_coordinator.is_busy() → 忙则 _TaskDeferred

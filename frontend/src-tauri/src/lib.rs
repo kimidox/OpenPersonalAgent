@@ -67,6 +67,15 @@ fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 前端请求隐藏主窗口（关闭确认弹窗的"最小化到托盘"/"悬浮窗模式"选项）。
+#[tauri::command]
+fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// 前端请求退出整个应用（floating_ball.quit 事件 → 前端 invoke）。
 #[tauri::command]
 async fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
@@ -238,11 +247,12 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
-            // 关闭主窗口时最小化到托盘而非退出（托盘后台模式）
+            // 关闭主窗口时先询问用户去向：完全退出 / 悬浮窗模式 / 最小化到托盘
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
-                    let _ = window.hide();
+                    // 阻止默认关闭，通知前端弹出确认弹窗，由用户选择后 invoke 对应命令
                     api.prevent_close();
+                    let _ = window.app_handle().emit("close-requested", ());
                 }
             }
         })
@@ -250,6 +260,7 @@ pub fn run() {
             get_backend_url,
             restart_backend,
             show_main_window,
+            hide_main_window,
             quit_app,
         ])
         .run(tauri::generate_context!())

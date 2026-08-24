@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import ChatPage from "./components/ChatPage";
+import CloseConfirmDialog from "./components/CloseConfirmDialog";
 import SettingsPage from "./settings/SettingsPage";
 import { onConnectionChange } from "./api/client";
 
@@ -29,6 +30,8 @@ export default function App() {
         </button>
       </nav>
       {page === "chat" ? <ChatPage /> : <SettingsPage onBack={() => setPage("chat")} />}
+      {/* 关闭主窗口确认弹窗（Tauri 拦截 CloseRequested 后触发） */}
+      <CloseConfirmDialog />
     </div>
   );
 }

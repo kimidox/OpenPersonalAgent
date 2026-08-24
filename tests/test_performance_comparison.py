@@ -41,7 +41,7 @@ def test_single_process_startup() -> dict:
     logger.info("=" * 60)
     
     # 导入单进程原型
-    from ui_flet.floating_ball_thread_prototype import QtThreadManager
+    from floating_ball.floating_ball_thread_prototype import QtThreadManager
     
     # 记录启动前内存
     start_time = time.time()
@@ -115,7 +115,7 @@ def test_dual_process_startup() -> dict:
     
     try:
         from multiprocessing import get_context, Queue
-        from ui_flet.floating_ball_process import run_floating_ball_process
+        from floating_ball.floating_ball_process import run_floating_ball_process
         
         ctx = get_context("spawn")
         to_ball = ctx.Queue()
@@ -124,7 +124,7 @@ def test_dual_process_startup() -> dict:
         # 启动子进程
         process = ctx.Process(
             target=run_floating_ball_process,
-            args=(to_ball, from_ball, main_pid, None, False, None, 200, 200, False),
+            args=(to_ball, from_ball, main_pid, False, None, 200, 200, False),
             name="FloatingBallProcess",
             daemon=False,
         )

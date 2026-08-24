@@ -33,8 +33,9 @@ a = Analysis(
     pathex=[str(PROJECT_ROOT)],
     binaries=[],
     datas=[
-        # 数据资源（配置/技能/数据库 schema 等）
-        ('PersonalData', 'PersonalData'),
+        # 数据资源（技能/图标）
+        # 注意: PersonalData 不打包——用户数据统一在 %APPDATA%/OpenPersonalAgent/PersonalData，
+        # 运行时按需创建，避免把开发机的 venv/模型/日志/数据库塞进安装包
         ('Skills', 'Skills'),
         ('application.ico', '.'),
     ],
@@ -59,10 +60,10 @@ a = Analysis(
         'backend_service.routers.floating_ball',
         'backend_service.routers.ws',
         # 悬浮球子进程（multiprocessing spawn 重新 import）
-        'ui_flet.floating_ball_ipc',
-        'ui_flet.floating_ball_process',
-        'ui_flet.ipc_optimizer',
-        'ui_flet.live2d_model_manager',
+        'floating_ball.floating_ball_ipc',
+        'floating_ball.floating_ball_process',
+        'floating_ball.ipc_optimizer',
+        'floating_ball.live2d_model_manager',
         # 后端核心
         'skill_agent',
         'skill_agent._agent',
@@ -115,12 +116,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        # 排除 Flet（已下线，避免打包体积膨胀）
-        'flet',
-        'flet_core',
-        'flet_runtime',
-    ],
+    excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

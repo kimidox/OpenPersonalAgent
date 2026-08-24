@@ -139,7 +139,7 @@ class TimeoutManager:
         # 发送IPC告警通知
         if self._state_update_callback:
             try:
-                # 通过EventBus 发布 LLM 状态告警事件，避免 llm→ui_flet 反向依赖
+                # 通过EventBus 发布 LLM 状态告警事件，避免 llm→UI 反向依赖
                 # UI 层通过订阅 EventType.LLM_ERROR 事件来构造和发送 IPC 告警消息
                 try:
                     from events.event_bus import EventBus

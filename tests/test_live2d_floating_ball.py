@@ -13,7 +13,7 @@ _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from ui_flet.floating_ball_process import run_floating_ball_process
+from floating_ball.floating_ball_process import run_floating_ball_process
 from logger import get_logger
 
 
@@ -205,7 +205,6 @@ def test_ipc_preservation():
     print("  - to_main_queue: Queue")
     print("  - from_main_queue: Queue")
     print("  - main_pid: int")
-    print("  - flet_pid: int | None")
 
     print("\nIPC 功能（在 FloatingBallWindow 中）:")
     print("  - 消息轮询 (_poll_ipc)")
@@ -263,7 +262,7 @@ def run_all_tests():
         print("  ✓ 所有错误都有详细日志记录")
         print("  ✓ IPC 通信逻辑完整保留")
         print("\n运行建议:")
-        print("  - 测试默认悬浮球: python -m ui_flet.floating_ball_process")
+        print("  - 测试默认悬浮球: python -m floating_ball.floating_ball_process")
         print("  - 测试 Live2D: 配置有效的模型路径并启用 Live2D")
         print("\n")
 

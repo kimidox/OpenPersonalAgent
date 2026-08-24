@@ -1,7 +1,7 @@
 """
 悬浮球进程 Live2D 集成测试
 
-从 ui_flet/floating_ball_process.py 提取的测试代码
+从 floating_ball/floating_ball_process.py 提取的测试代码
 """
 import os
 import tempfile
@@ -184,7 +184,7 @@ def test_live2d_integration() -> None:
     logger.info("所有集成逻辑测试完成")
     logger.info("=" * 60)
     logger.info("提示: 实际运行时，可以使用以下命令测试不同场景:")
-    logger.info("  - 测试默认悬浮球: python -m ui_flet.floating_ball_process")
+    logger.info("  - 测试默认悬浮球: python -m floating_ball.floating_ball_process")
     logger.info("  - 测试 Live2D: 需要提供有效的模型路径和配置")
 
 

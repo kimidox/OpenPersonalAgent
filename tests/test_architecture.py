@@ -20,7 +20,7 @@ class TestConstantsModule:
 
     def test_size_constants_values(self):
         """验证尺寸常量值正确"""
-        from ui_flet.floating_ball_widgets._constants import (
+        from floating_ball.floating_ball_widgets._constants import (
             BALL_SIZE, BALL_MARGIN,
             CHAT_WIDTH, CHAT_HEIGHT, CHAT_MIN_WIDTH, CHAT_MIN_HEIGHT,
         )
@@ -33,7 +33,7 @@ class TestConstantsModule:
 
     def test_string_color_constants(self):
         """验证字符串颜色常量格式"""
-        from ui_flet.floating_ball_widgets._constants import (
+        from floating_ball.floating_ball_widgets._constants import (
             DEFAULT_BG_COLOR,
             DEFAULT_TEXT_COLOR,
             DEFAULT_BORDER_COLOR,
@@ -44,7 +44,7 @@ class TestConstantsModule:
 
     def test_qcolor_constants_initial_none(self):
         """验证 QColor 常量初始为 None（延迟初始化）"""
-        from ui_flet.floating_ball_widgets._constants import (
+        from floating_ball.floating_ball_widgets._constants import (
             DEFAULT_PRIMARY_COLOR,
             DEFAULT_HOVER_COLOR,
         )
@@ -57,7 +57,7 @@ class TestConstantsModule:
 
     def test_init_qcolor_constants_creates_qcolor(self):
         """验证 init_qcolor_constants() 正确初始化 QColor"""
-        from ui_flet.floating_ball_widgets import _constants as _const
+        from floating_ball.floating_ball_widgets import _constants as _const
         _const.init_qcolor_constants()
         assert _const.DEFAULT_PRIMARY_COLOR is not None
         assert _const.DEFAULT_HOVER_COLOR is not None
@@ -68,7 +68,7 @@ class TestConstantsModule:
 
     def test_init_qcolor_constants_idempotent(self):
         """验证 init_qcolor_constants() 多次调用安全（幂等）"""
-        from ui_flet.floating_ball_widgets import _constants as _const
+        from floating_ball.floating_ball_widgets import _constants as _const
         _const.init_qcolor_constants()
         first = _const.DEFAULT_PRIMARY_COLOR
         _const.init_qcolor_constants()
@@ -91,15 +91,16 @@ class TestEventBusDecoupling:
         assert hasattr(EventType, 'LLM_ERROR')
         assert EventType.LLM_ERROR.value == "llm_error"
 
-    def test_basechatmodel_no_direct_ui_flet_import(self):
-        """验证 BaseChatModel 不再直接导入 ui_flet 模块"""
+    def test_basechatmodel_no_direct_ui_import(self):
+        """验证 BaseChatModel 不直接导入 UI 模块（floating_ball 等）"""
         content = (ROOT / "llm" / "BaseChatModel.py").read_text(encoding='utf-8')
         # 排除注释中的引用
         import_lines = [
             line for line in content.splitlines()
-            if 'ui_flet' in line and not line.strip().startswith('#')
+            if ('ui_flet' in line or 'floating_ball' in line)
+            and not line.strip().startswith('#')
         ]
-        assert len(import_lines) == 0, f"发现 ui_flet 导入: {import_lines}"
+        assert len(import_lines) == 0, f"发现 UI 模块导入: {import_lines}"
 
 
 class TestLayerDependencyRules:

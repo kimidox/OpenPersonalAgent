@@ -1,8 +1,4 @@
-"""后端组件生命周期：SkillAgent / Executor / Memory / TaskScheduler 的初始化与关闭。
-
-抽取自 ui_flet/views/main_window.py:_init_backend_components。
-阶段 2：TaskScheduler 迁入后端服务（backend 模式）。
-"""
+"""后端组件生命周期：SkillAgent / Executor / Memory / TaskScheduler 的初始化与关闭。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -93,7 +89,6 @@ def init_backend_components() -> BackendComponents:
         try:
             components.task_scheduler = TaskScheduler(
                 tray_icon=None,           # 托盘移交 Tauri（阶段 6）
-                main_window=None,         # 后端无 UI
                 runner=run_coordinator,
                 bridge=stream_bridge,
                 skill_agent=components.skill_agent,

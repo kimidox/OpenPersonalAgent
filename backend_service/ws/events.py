@@ -65,7 +65,6 @@ EVENT_FLOATING_BALL_QUIT = "floating_ball.quit"
 
 
 # log_callback msg_type → stream.delta chunk_type 映射
-# 复刻 ui_flet/views/main_window_mixins/worker_thread_mixin.py 的处理逻辑
 _MSG_TYPE_TO_CHUNK_TYPE = {
     "assistant": "content",
     "think": "think",
@@ -134,7 +133,7 @@ def from_log_callback(
     """把 SkillAgent log_callback 的 (message, msg_type) 转为 WS 事件。
 
     Returns:
-        WSEvent 或 None（无法识别的 msg_type 跳过，与原 Flet 行为一致）。
+        WSEvent 或 None（无法识别的 msg_type 跳过）。
     """
     # 兜底：把未映射的 "content" 也视为 assistant 流式内容
     # （SkillAgent 通常已映射，但防止直接调用方遗漏）
@@ -222,7 +221,7 @@ def from_log_callback(
                 "message": warning_data.get("message", ""),
             },
         )
-    # msg_type=mode / info / 其他：与原 Flet 行为一致，跳过
+    # msg_type=mode / info / 其他：跳过
     return None
 
 

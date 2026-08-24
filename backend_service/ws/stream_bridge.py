@@ -54,7 +54,7 @@ class StreamBridge:
     def set_skill_agent(self, agent: Any) -> None:
         """lifespan 完成 SkillAgent 初始化后调用。
 
-        同时注册 AgentEvent 回调（覆盖原 Flet 的 set_event_callback）。
+        同时注册 AgentEvent 回调（set_event_callback）。
         """
         self._skill_agent = agent
         if agent is not None and hasattr(agent, "set_event_callback"):

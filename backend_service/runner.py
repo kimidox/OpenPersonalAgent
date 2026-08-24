@@ -1,7 +1,7 @@
 """RunCoordinator：全局 run 锁 + 请求队列（见 3.10 节）。
 
 新架构下三路（Tauri 主窗口 / 悬浮球 / 调度器）可能并发 POST /messages。
-SkillAgent 单例非线程安全，原 Flet 仅靠单 worker 串行隐式保证，需显式策略。
+SkillAgent 单例非线程安全，需显式并发策略。
 
 并发模型：
 - 同一时刻最多一个活跃 run（_current_run）。

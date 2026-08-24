@@ -174,11 +174,18 @@ impl SidecarManager {
     }
 
     /// 停止 sidecar。
+    ///
+    /// Windows 下后端被强杀时 Python 的 shutdown 钩子不会执行，
+    /// 悬浮球等 spawn 出来的孙进程会残留（无父进程存活监测），
+    /// 因此先用 `taskkill /F /T` 终止整个进程树，失败再回退 `child.kill()`。
     pub async fn stop(&self) {
         let mut guard = self.child.lock().await;
         if let Some(mut child) = guard.take() {
             log::info!("[sidecar] 停止后端进程");
-            let _ = child.kill().await;
+            let tree_killed = kill_process_tree(&mut child).await;
+            if !tree_killed {
+                let _ = child.kill().await;
+            }
         }
         *self.current.lock().await = None;
     }
@@ -289,6 +296,55 @@ fn parse_marker(
         token,
         ready: true,
     })
+}
+
+/// 终止 child 及其全部子孙进程（Windows：taskkill /F /T）。
+///
+/// 返回 true 表示进程树已终止（child 已收尸）；false 表示需回退 child.kill()。
+/// CREATE_NO_WINDOW 防止 taskkill（console 程序）在无控制台的 GUI 进程下闪黑框。
+async fn kill_process_tree(child: &mut Child) -> bool {
+    let Some(pid) = child.id() else {
+        return false;
+    };
+
+    #[cfg(windows)]
+    {
+        // tokio::process::Command 在 Windows 上原生提供 creation_flags 方法
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let result = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        match result {
+            Ok(status) if status.success() => {
+                log::info!("[sidecar] 进程树 {pid} 已终止");
+                // 树已终止，等待 child 退出回收句柄（不再需要 kill）
+                let _ = child.wait().await;
+                true
+            }
+            Ok(status) => {
+                log::warn!("[sidecar] taskkill 退出码异常: {status}，回退 child.kill()");
+                false
+            }
+            Err(e) => {
+                log::warn!("[sidecar] taskkill 执行失败: {e}，回退 child.kill()");
+                false
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        // 非 Windows：child.kill() 本身会向进程组发信号（kill_on_drop + 进程组语义）
+        let _ = pid;
+        false
+    }
 }
 
 /// 选一个空闲端口（bind 0 后立即释放，交给后端重新绑定）。

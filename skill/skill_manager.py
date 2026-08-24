@@ -195,7 +195,9 @@ def generate_skill_markdown_template(skill_id: str, name: str, description: str,
 class SkillManager:
     """Markdown格式Skill管理器"""
 
-    def __init__(self, skills_dir: str = "PersonalData/Skills/user_defined") -> None:
+    def __init__(self, skills_dir: str | None = None) -> None:
+        if skills_dir is None:
+            skills_dir = str(paths.get_skills_dir() / "user_defined")
         self.skills_dir = skills_dir
         self._ensure_skills_dir()
 

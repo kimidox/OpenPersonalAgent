@@ -3,7 +3,6 @@
 重构后入口切换为后端服务启动器（见 frontend-tauri-refactor.md 3.7 节）：
 - Tauri 外壳启动后由 Rust 侧拉起 Python sidecar（本模块）
 - 本模块直接调 `backend_service.app:main()` 跑 uvicorn
-- 旧 Flet 入口 `ui_flet.main.run_app` 已下线
 
 开发模式可独立运行：
     python main.py --port 8765 --dev

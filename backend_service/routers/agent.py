@@ -52,7 +52,7 @@ class BaseInfoResponse(BaseModel):
 def get_thinking(agent=Depends(require_skill_agent)) -> ThinkingModeResponse:
     """获取当前思考模式状态。
 
-    SkillAgent 无 getter，从内部属性读取（与原 Flet 一致）。
+    SkillAgent 无 getter，从内部属性读取。
     """
     enabled = bool(getattr(agent, "_enable_thinking", False))
     return ThinkingModeResponse(enabled=enabled)

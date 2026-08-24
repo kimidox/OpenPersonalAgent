@@ -1,12 +1,11 @@
 """悬浮球子进程托管（阶段 5）。
 
-把 ui_flet/main.py 的 _start/_stop/_poll_floating_ball_process 整体迁入，
-父进程由 Flet 主进程改为 backend_service（uvicorn）。
+由 backend_service（uvicorn）作为父进程托管悬浮球子进程
+（PySide6，代码位于 floating_ball/ 包）。
 
-关键改动（见 frontend-tauri-refactor.md 3.5 节与调研报告第 8 节）：
-- 去掉 Flet PID 探测（_cached_flet_pid 失效，父进程不再是 Flet）。
-- 球→backend 消息不再经 page.run_task 调度到 Flet 主线程，
-  改为直接在 _poll_loop 线程内处理（调 run_coordinator / recorder / stream_bridge）。
+关键设计（见 frontend-tauri-refactor.md 3.5 节与调研报告第 8 节）：
+- 球→backend 消息直接在 _poll_loop 线程内处理
+  （调 run_coordinator / recorder / stream_bridge）。
 - QUIT_APPLICATION 不再 os._exit(backend)，改为发 floating_ball.quit WS 事件通知 Tauri。
 - backend→球事件（LLM_STATE_UPDATE / CHAT_RECEIVE_MESSAGE）由 StreamBridge._emit 分流转发。
 - 子进程入口 run_floating_ball_process / FloatingBallWindow / IPC 协议保持不变。
@@ -21,13 +20,13 @@ from typing import Any
 import config
 from logger import get_logger
 from resource_path import paths
-from ui_flet.floating_ball_ipc import (
+from floating_ball.floating_ball_ipc import (
     MessageType,
     make_llm_state_update_message,
     make_llm_state_warning_message,
 )
-from ui_flet.floating_ball_process import run_floating_ball_process
-from ui_flet.ipc_optimizer import BatchMessageSender, IPCPerformanceMonitor
+from floating_ball.floating_ball_process import run_floating_ball_process
+from floating_ball.ipc_optimizer import BatchMessageSender, IPCPerformanceMonitor
 
 
 class FloatingBallManager:
@@ -121,14 +120,12 @@ class FloatingBallManager:
 
         show_immediately = not prestart
 
-        # flet_pid 不再适用（父进程是 backend），传 None
         self._process = ctx.Process(
             target=run_floating_ball_process,
             args=(
                 self._from_ball,
                 self._to_ball,
                 self._main_pid,
-                None,  # flet_pid=None（迁移后无 Flet 原生进程）
                 live2d_enabled,
                 live2d_model_path,
                 live2d_width,
@@ -447,7 +444,7 @@ class FloatingBallManager:
         if not live2d_enabled or not live2d_model_name:
             return None
         try:
-            from ui_flet.live2d_model_manager import _find_model3_json
+            from floating_ball.live2d_model_manager import _find_model3_json
 
             model_dir = paths.personal_data_dir / "2DLiveFiles" / live2d_model_name
             model_json_path = _find_model3_json(model_dir)

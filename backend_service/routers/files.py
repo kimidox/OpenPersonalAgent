@@ -1,6 +1,6 @@
 """文件上传与解析路由。
 
-复刻 ui_flet/utils/file_upload_manager.py 的逻辑：
+流程：
 1. 文件保存到 FileStorage（document_parser/file_storage.py）
 2. 解析通过 ParserFactory（document_parser/parser_factory.py）
 3. 设置到 SkillAgent.set_uploaded_files_content
@@ -52,7 +52,7 @@ class CleanupResponse(BaseModel):
 
 def _get_storage() -> Any:
     from document_parser.file_storage import FileStorage
-    # 与原 Flet 一致：默认 storage_dir（PersonalData 下）
+    # 默认 storage_dir（PersonalData 下）
     return FileStorage()
 
 
