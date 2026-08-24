@@ -76,14 +76,14 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 前端请求退出整个应用（floating_ball.quit 事件 → 前端 invoke）。
+/// 前端请求退出整个应用（floating_ball.quit 事件 / 关闭确认弹窗"退出程序" → 前端 invoke）。
 #[tauri::command]
 async fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     log::info!("[tauri] 用户请求退出应用");
     // 先 clone Arc 再 await，避免 tauri::State 跨 await 的 Send 问题
     let sidecar = state.sidecar.clone();
-    sidecar.stop().await;
-    app.exit(0);
+    let backend = state.backend.clone();
+    quit_everything(&sidecar, &backend, &app).await;
     Ok(())
 }
 
@@ -347,11 +347,22 @@ async fn health_watch_loop(
             continue;
         }
         let url = format!("{base_url}/api/health");
-        match reqwest_get(&url).await {
-            Ok(true) => {
+        match http_request_json("GET", &url, "").await {
+            Ok(body) => {
                 consecutive_failures = 0;
+                // 悬浮球退出请求（WS floating_ball.quit 的兜底通道）：
+                // 前端 WS 断线/未连接时，巡检也能感知并退出整个应用
+                if body
+                    .get("quit_requested")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    log::info!("[tauri] 后端上报退出请求（悬浮球退出应用），退出整个应用");
+                    quit_everything(&sidecar, &backend, &app).await;
+                    return;
+                }
             }
-            Ok(false) | Err(_) => {
+            Err(_) => {
                 consecutive_failures += 1;
                 log::warn!(
                     "[tauri] 健康检查失败 ({consecutive_failures}/{MAX_HEALTH_FAILURES})"
@@ -382,9 +393,14 @@ async fn health_watch_loop(
     }
 }
 
-/// 简易 GET（避免引入 reqwest 依赖，用 tokio 的 process 调 curl 兜底不优雅，
+/// 简易 HTTP 请求 + JSON 解析（避免引入 reqwest 依赖，用 tokio 的 process 调 curl 兜底不优雅，
 /// 这里用 std::net + HTTP/1.0 手写最小请求；仅本机 127.0.0.1，足够）。
-async fn reqwest_get(url: &str) -> Result<bool, String> {
+/// 返回解析后的 JSON body；连接失败 / 非 200 / 解析失败均视为 Err。
+async fn http_request_json(
+    method: &str,
+    url: &str,
+    token: &str,
+) -> Result<serde_json::Value, String> {
     // 解析 http://127.0.0.1:PORT/api/health
     let parsed = url
         .strip_prefix("http://")
@@ -395,9 +411,11 @@ async fn reqwest_get(url: &str) -> Result<bool, String> {
         .ok_or_else(|| "缺少端口".to_string())?;
     let port: u16 = port_str.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
     let path = format!("/{path}");
+    let method_owned = method.to_string();
+    let token_owned = token.to_string();
 
     let host_owned = host.to_string();
-    tokio::task::spawn_blocking(move || -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
         use std::io::{Read, Write};
         use std::net::TcpStream;
         use std::time::Duration;
@@ -406,21 +424,89 @@ async fn reqwest_get(url: &str) -> Result<bool, String> {
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .map_err(|e| e.to_string())?;
-        let req = format!(
-            "GET {path} HTTP/1.0\r\nHost: {host_owned}\r\nConnection: close\r\n\r\n"
+        let mut req = format!(
+            "{method_owned} {path} HTTP/1.0\r\nHost: {host_owned}\r\nConnection: close\r\n"
         );
+        if !token_owned.is_empty() {
+            req.push_str(&format!("X-Backend-Token: {token_owned}\r\n"));
+        }
+        if method_owned == "POST" {
+            req.push_str("Content-Length: 0\r\n");
+        }
+        req.push_str("\r\n");
         stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
         let mut buf = Vec::with_capacity(256);
         stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-        let status_line = std::str::from_utf8(&buf)
-            .map_err(|e| e.to_string())?
-            .lines()
-            .next()
-            .unwrap_or("");
-        Ok(status_line.contains("200 OK"))
+        let text = String::from_utf8_lossy(&buf);
+        let status_line = text.lines().next().unwrap_or("");
+        if !status_line.contains("200 OK") {
+            return Err(format!("非 200 状态: {status_line}"));
+        }
+        // HTTP/1.0 响应：头与 body 以空行分隔
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b)
+            .unwrap_or_default();
+        serde_json::from_str(body).map_err(|e| format!("JSON 解析失败: {e}"))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 退出应用统一流程（quit_app 命令 / 托盘退出 / 健康巡检兜底共用）：
+/// 1. POST /api/quit 请求后端优雅退出——BACKEND_EXTERNAL 模式（PyCharm 调试后端）
+///    下这是终止后端（连同悬浮球子进程，经 lifespan 清理）的唯一手段，
+///    否则 Tauri 退出后外部后端进程会残留；sidecar 模式下让 DB/调度器先清理。
+/// 2. 等待后端退出（sidecar 模式查进程存活；外部模式轮询 /api/health 失联）。
+/// 3. sidecar 模式 taskkill /F /T 强杀进程树兜底（外部模式 stop 为 no-op）。
+/// 4. app.exit(0)。
+async fn quit_everything(
+    sidecar: &Arc<SidecarManager>,
+    backend: &Arc<RwLock<BackendInfo>>,
+    app: &tauri::AppHandle,
+) {
+    let (base_url, token) = {
+        let b = backend.read().await;
+        (b.base_url.clone(), b.token.clone())
+    };
+
+    // 1. 请求优雅退出（best-effort）
+    let mut requested = false;
+    if !base_url.is_empty() {
+        let url = format!("{base_url}/api/quit");
+        match http_request_json("POST", &url, &token).await {
+            Ok(_) => {
+                requested = true;
+                log::info!("[tauri] 后端已收到优雅退出请求");
+            }
+            Err(e) => {
+                log::warn!("[tauri] 请求后端优雅退出失败: {e}");
+            }
+        }
+    }
+
+    // 2. 等待后端自行退出（最多 ~5s），让 lifespan 完成清理
+    if requested {
+        let external = std::env::var("BACKEND_EXTERNAL").is_ok();
+        let health_url = format!("{base_url}/api/health");
+        for _ in 0..20 {
+            let alive = if external {
+                http_request_json("GET", &health_url, &token).await.is_ok()
+            } else {
+                sidecar.check_alive().await.unwrap_or(true)
+            };
+            if !alive {
+                log::info!("[tauri] 后端已退出");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+
+    // 3. sidecar 模式兜底强杀（外部模式 no-op）
+    sidecar.stop().await;
+    // 4. 退出 Tauri
+    app.exit(0);
 }
 
 fn show_backend_error_dialog(app: &tauri::AppHandle, msg: &str) {
@@ -454,10 +540,10 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             "quit" => {
                 let state: tauri::State<AppState> = app.state();
                 let sidecar = state.sidecar.clone();
+                let backend = state.backend.clone();
                 let handle = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    sidecar.stop().await;
-                    handle.exit(0);
+                    quit_everything(&sidecar, &backend, &handle).await;
                 });
             }
             _ => {}

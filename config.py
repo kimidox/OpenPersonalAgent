@@ -92,11 +92,11 @@ if SKILL_AGENT_MAX_STEPS < 1:
 # 替代 max_steps 硬性步数限制，支持复杂任务的灵活执行
 _mtb = get_config("MAX_TOKEN_BUDGET")
 try:
-    MAX_TOKEN_BUDGET = int(_mtb) if _mtb not in (None, "") else 200000
+    MAX_TOKEN_BUDGET = int(_mtb) if _mtb not in (None, "") else 1000000
 except (TypeError, ValueError):
-    MAX_TOKEN_BUDGET = 200000
+    MAX_TOKEN_BUDGET = 1000000
 if MAX_TOKEN_BUDGET < 1000:
-    MAX_TOKEN_BUDGET = 200000
+    MAX_TOKEN_BUDGET = 1000000
 
 # LLM API 调用重试配置
 _llm_max_retries = get_config("LLM_MAX_RETRIES")

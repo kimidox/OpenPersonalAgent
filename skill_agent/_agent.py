@@ -2864,6 +2864,9 @@ class SkillAgent:
             # 内层循环：由 ToolCall/Steering 消息驱动
             _inner_loop_active = True
 
+            # 最终返回值：用户停止/token 超限等 break 路径不会赋值，必须预初始化
+            _last_return_value = None
+
             # 标记外层循环是否应强制退出（致命错误等）
             _outer_exit = False
 
