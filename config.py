@@ -107,6 +107,19 @@ except (TypeError, ValueError):
 if LLM_MAX_RETRIES < 0:
     LLM_MAX_RETRIES = 3
 
+# Agent 主循环连续 LLM 通信错误上限：超过后终止 run（避免 LLM 服务不可用时无限重试）
+_llm_consecutive_error_limit = get_config("LLM_CONSECUTIVE_ERROR_LIMIT")
+try:
+    LLM_CONSECUTIVE_ERROR_LIMIT = (
+        int(_llm_consecutive_error_limit)
+        if _llm_consecutive_error_limit not in (None, "")
+        else 3
+    )
+except (TypeError, ValueError):
+    LLM_CONSECUTIVE_ERROR_LIMIT = 3
+if LLM_CONSECUTIVE_ERROR_LIMIT < 1:
+    LLM_CONSECUTIVE_ERROR_LIMIT = 3
+
 
 def _env_bool(raw, default: bool) -> bool:
     if raw is None or str(raw).strip() == "":

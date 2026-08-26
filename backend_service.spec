@@ -1,18 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec：生成 backend_service.exe（Tauri sidecar）。
+"""PyInstaller spec：生成 backend_service.exe（Tauri sidecar，onedir 模式）。
 
-阶段 6 打包流程（见 frontend-tauri-refactor.md 3.6 节）：
-1. PyInstaller 生成 backend_service.exe（本 spec）
-2. 复制到 frontend/src-tauri/binaries/backend_service-x86_64-pc-windows-msvc.exe
-3. cd frontend && npm run tauri build
+打包流程（详见项目根 PACKAGING_GUIDE.md）：
+1. PyInstaller 生成 dist-sidecar/backend_service/（exe + _internal/，本 spec）
+2. cd frontend && npm run tauri build
+   （tauri.conf.json 的 bundle.resources 会把 dist-sidecar/backend_service/
+     整个目录打进安装包，Rust sidecar 从安装目录的 backend_service/ 拉起后端）
 
-产物名约定（Tauri externalBin 要求平台后缀）：
-- Windows: backend_service-x86_64-pc-windows-msvc.exe
-- macOS:   backend_service-x86_64-apple-darwin
-- Linux:   backend_service-x86_64-unknown-linux-gnu
-
-构建命令：
-    pyinstaller backend_service.spec --noconfirm --distpath dist-sidecar
+或直接一键打包：
+    powershell -File build_release.ps1
 
 注意：
 - 悬浮球子进程（PySide6 + live2d-py）代码与后端打包在一起，

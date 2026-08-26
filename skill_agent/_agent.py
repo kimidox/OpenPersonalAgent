@@ -2870,6 +2870,14 @@ class SkillAgent:
             # 标记外层循环是否应强制退出（致命错误等）
             _outer_exit = False
 
+            # 连续 LLM 通信错误计数：LLM 服务不可用时（连接失败/超时等），
+            # 非致命错误会 continue 重试；连续超过上限则终止 run，
+            # 避免无限重试导致前端一直处于"运行中"且停止按钮无法生效
+            _consecutive_llm_errors = 0
+            _max_consecutive_llm_errors = getattr(
+                config, "LLM_CONSECUTIVE_ERROR_LIMIT", 3
+            )
+
             while True:
                 # 致命错误等强制退出
                 if _outer_exit:
@@ -2972,6 +2980,10 @@ class SkillAgent:
                     # 发出 TURN_END 事件
                     self._emit_event(AgentEventType.TURN_END, result_type=llm_result.result_type, token_usage=self._token_usage.total_tokens)
 
+                    # 成功获得 LLM 响应（非 error），清零连续错误计数
+                    if llm_result.result_type != "error":
+                        _consecutive_llm_errors = 0
+
                     # AI-BRANCH-MARKER: 内层循环三路分支 — text(return)/tool_call(continue)/max_tokens(steering)
                     # Handle text response
                     if llm_result.result_type in ("text", "truncated"):
@@ -3008,6 +3020,18 @@ class SkillAgent:
                             _last_return_value = err
                             _inner_loop_active = False
                             _outer_exit = True  # 标记外层循环也应退出
+                            break
+                        # 连续非致命错误超限：LLM 服务持续不可用（如 llama.cpp 未启动），
+                        # 终止 run 而非无限重试，保证 message.complete 能送达前端
+                        _consecutive_llm_errors += 1
+                        if _consecutive_llm_errors >= _max_consecutive_llm_errors:
+                            logger.warning(
+                                "连续 LLM 通信错误 %d 次（上限 %d），终止 run",
+                                _consecutive_llm_errors, _max_consecutive_llm_errors,
+                            )
+                            _last_return_value = err
+                            _inner_loop_active = False
+                            _outer_exit = True
                             break
                         # 非致命错误继续内层循环，让 LLM 有机会恢复
                         continue

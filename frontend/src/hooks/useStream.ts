@@ -62,6 +62,9 @@ export interface UseStreamReturn {
   typedContent: string;
   isTyping: boolean;
   completeTyping: () => void;
+  // 用户点击停止时调用：无论后端是否及时结束 run，前端立即退出运行态
+  // （LLM 通信报错时后端可能阻塞在长超时的 SDK 调用中，message.complete 迟迟不到）
+  stopRun: () => void;
   // 等待用户输入时调用（await.user 后用户回复 → 重新调 sendMessage）
   replyToAwait: (message: string) => Promise<void>;
 }
@@ -103,6 +106,9 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
 
   // run_id 守卫（防止 message.complete 重复处理）
   const completedRuns = useRef(new Set<string>());
+  // 用户强制停止的 run 集合：后端可能仍阻塞在 LLM 调用中，
+  // 迟到的流式事件（stream.delta 等）应被忽略
+  const forceStoppedRuns = useRef(new Set<string>());
   // 当前 run 是否处于断线重连期间
   const pausedRef = useRef(false);
   // 当前 run 的 turn 计数（用于区分第一次和后续 turn.start）
@@ -123,6 +129,8 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
   const handleStreamDelta = useCallback(
     (event: WSEvent<StreamDeltaData>) => {
       const { msg_type, content: chunk } = event.data;
+      // 用户已强制停止的 run：忽略迟到的流式增量（后端阻塞调用恢复后仍会推送）
+      if (forceStoppedRuns.current.has(event.run_id)) return;
       console.debug("[useStream] stream.delta", {
         msg_type,
         chunk_len: chunk?.length,
@@ -290,6 +298,7 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
     // 新 run 启动：重置状态
     console.debug("[useStream] agent.start", { run_id: event.run_id });
     completedRuns.current.delete(event.run_id);
+    forceStoppedRuns.current.delete(event.run_id);
     turnCountRef.current = 0;
     typewriter.reset();
     setState({
@@ -409,6 +418,20 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
   // 对外 API
   // ------------------------------------------------------------------
 
+  // 用户点击停止：前端立即退出运行态并标记 aborted。
+  // 后端 stop_event 只能在 LLM 调用间隙被检测到；若 worker 阻塞在
+  // 长超时的 SDK 调用/退避重试中，message.complete 会延迟很久才到达，
+  // 前端不能依赖它来复位 UI。已停止 run 的迟到增量由 forceStoppedRuns 拦截。
+  const stopRun = useCallback(() => {
+    setState((s) => {
+      if (s.runId) {
+        forceStoppedRuns.current.add(s.runId);
+      }
+      return { ...s, isRunning: false, aborted: true };
+    });
+    typewriter.complete();
+  }, [typewriter]);
+
   const replyToAwait = useCallback(
     async (message: string) => {
       setState((s) => ({ ...s, awaitingUser: false, awaitUserSpec: null }));
@@ -422,6 +445,7 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
     typedContent: typewriter.shownText,
     isTyping: typewriter.isTyping,
     completeTyping: typewriter.complete,
+    stopRun,
     replyToAwait,
   };
 }

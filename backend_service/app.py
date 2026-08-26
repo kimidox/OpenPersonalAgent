@@ -236,10 +236,21 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
     # 中间件
     app.add_middleware(TokenAuthMiddleware)
-    # CORS：开发期允许 Vite dev server 跨域
+    # CORS：允许各运行模式的前端源跨域
+    # - http://localhost:5173 / 1420：浏览器 dev（Vite）
+    # - tauri://localhost：macOS 打包（WKWebView）
+    # - http://tauri.localhost：Windows 打包（WebView2）
+    # - http://localhost：Linux 打包（WebKitGTK）
+    # 缺一会导致打包后前端所有 REST 请求被 CORS 预检拦截（400 Disallowed CORS origin）
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://localhost:1420", "tauri://localhost"],
+        allow_origins=[
+            "http://localhost:5173",
+            "http://localhost:1420",
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "http://localhost",
+        ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -1,655 +1,184 @@
-# 打包优化指南
+# 打包指南（Tauri + Python Sidecar）
 
-本文档详细介绍 PersonalWindowGLM 项目的打包流程、优化技巧和常见问题解答。
+本文档介绍 PersonalWindowGLM 当前的打包方式。项目已重构为 **Tauri 2 + React 前端 + Python 后端 sidecar** 架构，旧的纯 PyInstaller 单体打包（`PersonalWindowGLM.spec` / 单文件模式 / `build.bat`）已废弃移除。
 
 ---
 
 ## 目录
 
-1. [打包概述](#打包概述)
-2. [打包方式对比](#打包方式对比)
-3. [打包流程详解](#打包流程详解)
-4. [模型外置机制](#模型外置机制)
-5. [UPX压缩配置](#upx压缩配置)
-6. [依赖优化](#依赖优化)
-7. [打包体积分析](#打包体积分析)
-8. [常见问题解答](#常见问题解答)
+1. [架构与产物](#架构与产物)
+2. [前置要求](#前置要求)
+3. [一键打包](#一键打包)
+4. [手动分步打包](#手动分步打包)
+5. [不进安装包的内容](#不进安装包的内容)
+6. [打包后验证清单](#打包后验证清单)
+7. [常见问题](#常见问题)
 
 ---
 
-## 打包概述
+## 架构与产物
 
-PersonalWindowGLM 使用 PyInstaller 进行打包，支持两种打包模式：
+打包分两级：
 
-- **目录模式 (onedir)**: 生成包含exe和依赖文件的目录
-- **单文件模式 (onefile)**: 生成单个exe文件
+```
+第 1 级：PyInstaller（onedir）            第 2 级：Tauri（NSIS 安装包）
+┌────────────────────────────┐    ┌──────────────────────────────────┐
+│ dist-sidecar/backend_service/ │   │ PersonalWindowGLM_0.1.0_x64-setup.exe │
+│  ├─ backend_service.exe      │ →  │  ├─ PersonalWindowGLM.exe（Rust 外壳+React 前端）│
+│  └─ _internal/（Python 运行时 │    │  └─ backend_service/（第 1 级产物整个目录）    │
+│      + 全部依赖 + Skills）    │    │     （经 tauri.conf.json resources 打入） │
+└────────────────────────────┘    └──────────────────────────────────┘
+```
 
-### 打包工具
+启动链（安装后）：
 
-- **build.bat**: Windows打包脚本，提供交互式打包选项
-- **PersonalWindowGLM.spec**: 目录模式打包配置
-- **PersonalWindowGLM_onefile.spec**: 单文件模式打包配置
+1. Tauri 主进程启动，[sidecar.rs](./frontend/src-tauri/src/sidecar.rs) 从安装目录 `backend_service/backend_service.exe` 以 `--port {动态端口} --token {随机token}` 拉起后端
+2. 后端完成初始化后在 stdout 输出 `BACKEND_READY {"port":...,"token":...,"pid":...}`，Rust 解析握手（上限 15s）
+3. 后端再 spawn 悬浮球子进程（PySide6 + live2d-py，打包在同一 exe 内）
+4. 前端通过 HTTP REST（命令）+ WebSocket（流式事件）与后端通信
 
-### 打包特点
+关键文件：
 
-| 特性 | 说明 |
+| 文件 | 作用 |
 |------|------|
-| 模型外置 | ASR/TTS模型不打包，运行时下载 |
-| UPX压缩 | 支持UPX压缩减小体积 |
-| 依赖优化 | 排除不必要的Python模块 |
-| 用户数据隔离 | 打包exe使用独立用户数据目录 |
+| [backend_service.spec](./backend_service.spec) | PyInstaller 配置（onedir，含 hiddenimports 清单） |
+| [tauri.conf.json](./frontend/src-tauri/tauri.conf.json) | `bundle.resources` 把后端目录打入安装包 |
+| [sidecar.rs](./frontend/src-tauri/src/sidecar.rs) | 后端进程生命周期（拉起/握手/健康检查/重启/清理） |
+| [build_release.ps1](./build_release.ps1) | 一键打包脚本 |
 
----
+## 前置要求
 
-## 打包方式对比
-
-### 目录模式 (onedir)
-
-**优点**:
-- 启动速度快（无需解压）
-- 支持UPX压缩
-- 更新方便（可替换单个文件）
-- 调试容易（可查看依赖文件）
-
-**缺点**:
-- 分发需要整个目录
-- 文件数量多
-
-**适用场景**:
-- 本地部署
-- 日常使用
-- 需要快速启动
-
-### 单文件模式 (onefile)
-
-**优点**:
-- 单exe文件，便于分发
-- 无需额外依赖文件
-
-**缺点**:
-- 启动较慢（需解压到临时目录）
-- 不支持UPX压缩（启动会更慢）
-- 每次启动都有解压开销
-
-**适用场景**:
-- 远程分发
-- 便携使用
-- 不在乎启动速度
-
-### 推荐选择
-
-| 场景 | 推荐方式 |
-|------|----------|
-| 本地使用 | 目录模式 + UPX |
-| 分发给他人 | 单文件模式 |
-| 开发测试 | 目录模式 |
-| 生产部署 | 目录模式 + UPX |
-
----
-
-## 打包流程详解
-
-### 步骤1: 环境准备
-
-#### 安装PyInstaller
+| 工具 | 版本 | 说明 |
+|------|------|------|
+| Python | 3.11 | 需已安装 `requirements.txt` 全部依赖 + `pyinstaller` |
+| Node.js | 18+ | `frontend/node_modules` 已安装（`npm install`） |
+| Rust | MSVC 工具链 | `stable-x86_64-pc-windows-msvc` |
+| NSIS | 自动下载 | Tauri 首次打包时自动下载，无需手动安装 |
 
 ```bash
-pip install pyinstaller
+pip install pyinstaller          # 若未安装
 ```
 
-#### 安装UPX（可选）
+> UPX 压缩为可选项（spec 中 `upx=True`，未安装时自动跳过）。实测：后端目录 870MB 经 NSIS(lzma) 压缩后安装包约 167MB；UPX 只影响磁盘占用不影响安装包大小。
 
-UPX可以压缩exe和dll文件，减小打包体积约30-50%。
+## 一键打包
 
-**下载地址**: https://github.com/upx/upx/releases
-
-**安装方法**:
-
-1. 下载最新版本（如 `upx-4.2.2-win64.zip`）
-2. 解压到任意目录，例如 `C:\upx`
-3. 将UPX目录添加到系统PATH环境变量
-
-**添加PATH环境变量**:
-- 右键"此电脑" → 属性 → 高级系统设置 → 环境变量
-- 在"系统变量"中找到"Path"，点击编辑
-- 添加UPX目录路径（如 `C:\upx`）
-
-**验证安装**:
-```bash
-upx --version
+```powershell
+powershell -File build_release.ps1
 ```
 
-### 步骤2: 清理临时文件
+脚本依次执行：PyInstaller 打包后端 → `npm run tauri build` 产出 NSIS 安装包。
 
-打包前建议清理临时文件，避免打包不必要的文件：
+后端代码无改动时可跳过第 1 步加速：
 
-```bash
-# 清理Python缓存
-python -c "import pathlib; [p.unlink() for p in pathlib.Path('.').rglob('*.py[co]')]"
-python -c "import pathlib; [p.rmdir() for p in pathlib.Path('.').rglob('__pycache__')]"
-
-# 或使用build.bat自动清理
-build.bat
+```powershell
+powershell -File build_release.ps1 -SkipBackend
 ```
 
-### 步骤3: 运行打包脚本
+产物位置：
 
-#### 使用build.bat（推荐）
+```
+frontend/src-tauri/target/release/bundle/nsis/PersonalWindowGLM_0.1.0_x64-setup.exe
+```
+
+> 脚本结束时会在控制台列出产物路径和体积。
+
+## 手动分步打包
+
+### 第 1 步：PyInstaller 打包后端（项目根目录）
 
 ```bash
-build.bat
+python -m PyInstaller backend_service.spec --noconfirm --distpath dist-sidecar
 ```
 
-交互式选择：
-- 选项1: 目录模式（启用UPX）- 推荐
-- 选项2: 单文件模式
-- 选项3: 目录模式（禁用UPX）
+产物：`dist-sidecar/backend_service/{backend_service.exe, _internal/}`（约 870MB，含 PySide6/OpenCV/onnxruntime/pandas 等全部依赖与内置 Skills）。
 
-#### 手动执行PyInstaller
+### 第 2 步：Tauri 构建安装包
 
 ```bash
-# 目录模式
-pyinstaller PersonalWindowGLM.spec --clean
-
-# 单文件模式
-pyinstaller PersonalWindowGLM_onefile.spec --clean
+cd frontend
+npm run tauri build
 ```
 
-### 步骤4: 检查打包结果
+`tauri.conf.json` 中相关配置：
 
-#### 目录模式
-
-```
-dist/
-└── OpenPersonalAgent/
-    ├── OpenPersonalAgent.exe    # 主程序
-    ├── _internal/               # 内部依赖
-    │   ├── Python311.dll
-    │   ├── PySide6/
-    │   └── ...
-    ├── PersonalData/
-    │   ├── data/
-    │   └── Skills/
-    ├── Skills/
-    ├── ui/
-    └── .env
+```json
+"bundle": {
+  "targets": ["nsis"],
+  "resources": {
+    "../../dist-sidecar/backend_service": "backend_service/"
+  }
+}
 ```
 
-#### 单文件模式
+> **顺序必须先 1 后 2**：Tauri 构建时校验 resources 路径存在，若 `dist-sidecar/backend_service` 尚未生成会直接报错 `resource path doesn't exist`。
 
-```
-dist/
-└── OpenPersonalAgent.exe    # 单exe文件
-```
-
-### 步骤5: 测试打包结果
+### 开发期调试（不打包）
 
 ```bash
-# 目录模式
-cd dist/OpenPersonalAgent
-OpenPersonalAgent.exe
+# 前端 Tauri dev + 后端 dev 模式（Rust 直接拉 python）
+cd frontend && npm run tauri:dev
 
-# 单文件模式
-dist/OpenPersonalAgent.exe
+# 后端 PyInstaller 产物 + tauri dev（验证打包后的后端行为）
+python -m PyInstaller backend_service.spec --noconfirm --distpath dist-sidecar
+cd frontend && npm run dev     # 另开终端，Rust 侧无 BACKEND_DEV 时自动找 dist-sidecar 产物
 ```
 
----
+## 不进安装包的内容
 
-## 模型外置机制
+| 内容 | 位置 | 说明 |
+|------|------|------|
+| 用户数据/数据库/日志 | `%APPDATA%/OpenPersonalAgent/` | 运行时按需创建，开发/打包同一份数据 |
+| `.env` 应用配置 | `%APPDATA%/OpenPersonalAgent/.env` | **不打包**（避免泄露开发机密钥）；首次在设置页保存后生成 |
+| ASR/TTS 模型（~430MB） | `%APPDATA%/OpenPersonalAgent/model/` | 首次使用语音功能时自动下载，见 [MODEL_DOWNLOAD.md](./MODEL_DOWNLOAD.md) |
+| llama.cpp server | 用户自备 | 本地 Qwen3 模式需自行部署（须带 `--jinja`），或配置云端 API |
 
-### 为什么模型外置？
+## 打包后验证清单
 
-| 原因 | 说明 |
-|------|------|
-| 体积过大 | ASR+TTS模型约430MB |
-| 按需下载 | 用户可能不需要语音功能 |
-| 版本更新 | 模型可独立更新，无需重新打包 |
-| 分发便捷 | 减小分发体积 |
+在干净 Windows 环境（无 Python/Node）安装后逐项验证：
 
-### 模型列表
+1. 安装启动 → 后端 sidecar 随启随停，托盘后台模式正常
+2. 流式对话 / 思考 / 工具调用 / await_user 卡片 / token 用量显示正常
+3. 悬浮球 + Live2D 正常显示
+4. 强杀后端进程 → Tauri 弹窗并自动重启（上限 3 次/会话）
+5. 悬浮球菜单"退出应用" → 任务管理器确认后端、悬浮球、Tauri 进程全部消失
+6. 首用语音功能触发模型下载到 `%APPDATA%/OpenPersonalAgent/model/`
 
-| 模型 | 类型 | 大小 | 用途 |
-|------|------|------|------|
-| sherpa-onnx-paraformer-zh-int8 | ASR | ~80 MB | 中文语音识别 |
-| sherpa-onnx-vits-zh-ll | TTS | ~150 MB | 中文语音合成 |
-| vits-melo-tts-zh_en | TTS | ~200 MB | 中英文语音合成 |
+## 常见问题
 
-### 模型存储位置
+### Q1: 安装后启动弹"后端启动失败"？
 
-#### 开发模式
+看弹窗附带的 `[backend:stdout]` 日志行：
+- `ModuleNotFoundError` → spec 缺 hiddenimport，补到 [backend_service.spec](./backend_service.spec) 的 `hiddenimports`
+- `找不到后端可执行文件: backend_service/backend_service.exe` → 安装目录资源缺失，检查 `tauri.conf.json` 的 `resources` 配置
 
-```
-PersonalWindowGLM/
-└── PersonalData/
-    └── model/
-        ├── sherpa-onnx-paraformer-zh-int8-2025-10-07/
-        ├── sherpa-onnx-vits-zh-ll/
-        └── vits-melo-tts-zh_en/
-```
+### Q2: 等待 marker 超时（15s）？
 
-#### 打包模式
+冒烟测试本机约 4s 出 marker。若持续超时，手动运行安装目录的 `backend_service\backend_service.exe --port 18799 --token test` 观察 stdout：能否正常输出 `BACKEND_READY {...}`。
 
-```
-%APPDATA%/OpenPersonalAgent/
-└── model/
-    ├── sherpa-onnx-paraformer-zh-int8-2025-10-07/
-    ├── sherpa-onnx-vits-zh-ll/
-    └── vits-melo-tts-zh_en/
-```
+### Q3: tauri build 报 `resource path doesn't exist`？
 
-### 模型下载方式
-
-#### 方式1: 程序自动下载
+先执行第 1 步 PyInstaller 打包（构建顺序必须 PyInstaller → Tauri）。
 
-首次使用语音功能时，程序自动检测并下载模型：
-- `ASR_AUTO_DOWNLOAD=true`（默认启用）
-- `TTS_AUTO_DOWNLOAD=true`（默认启用）
+### Q4: 安装包体积太大？
 
-#### 方式2: 使用下载脚本
+后端 `_internal/` 约 870MB 是依赖现状（PySide6/OpenCV/onnxruntime-gpu/pandas/scipy）。可行优化：
+- 安装 `onnxruntime`（CPU 版）替代 `onnxruntime-gpu`，可省数百 MB（前提是不需要 GPU 推理）
+- spec 的 `excludes` 排除未用模块
+- UPX 压缩（影响启动速度，慎用）
 
-```bash
-# 下载所有模型
-python download_models.py --all
-
-# 仅下载ASR模型
-python download_models.py --asr
+### Q5: 杀毒软件误报？
 
-# 仅下载TTS模型
-python download_models.py --tts zh
-```
+PyInstaller + 未签名 exe 常见误报。正式分发需代码签名证书。
 
-#### 方式3: 手动下载
+### Q6: 如何调试打包问题？
 
-从GitHub下载并解压到模型目录：
-- ASR: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-int8-2025-10-07.tar.bz2
-- TTS (zh): https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-vits-zh-ll.tar.bz2
-- TTS (zh_en): https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts-zh_en.tar.bz2
-
-### 打包后模型部署
-
-如果需要预先部署模型：
-
-1. 下载模型到开发目录
-2. 打包程序
-3. 将模型目录复制到用户数据目录：
-
-```bash
-# 复制模型到打包后的用户数据目录
-xcopy /E /I PersonalData\model "%APPDATA%\OpenPersonalAgent\model"
-```
-
----
-
-## UPX压缩配置
-
-### UPX简介
-
-UPX (Ultimate Packer for eXecutables) 是一个开源的可执行文件压缩工具，可以压缩exe、dll等文件。
-
-### 压缩效果
-
-| 文件类型 | 原始大小 | 压缩后大小 | 压缩率 |
-|----------|----------|------------|--------|
-| exe文件 | 10 MB | 3-4 MB | 60-70% |
-| dll文件 | 5 MB | 2-3 MB | 40-60% |
-| 总体效果 | 150 MB | 100-120 MB | 30-50% |
-
-### spec文件配置
-
-#### PersonalWindowGLM.spec（目录模式）
-
-```python
-# UPX压缩配置
-upx_enable = True  # 启用UPX压缩
-upx_dir = None     # UPX目录路径，None表示使用PATH中的UPX
-
-# EXE配置
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name='OpenPersonalAgent',
-    upx=upx_enable,  # 启用UPX
-    ...
-)
-
-# COLLECT配置
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    upx=upx_enable,  # 启用UPX
-    upx_exclude=[
-        # 排除已压缩的文件
-        '*.png',
-        '*.jpg',
-        '*.onnx',
-        '*.gz',
-        '*.zip',
-    ],
-    ...
-)
-```
-
-#### PersonalWindowGLM_onefile.spec（单文件模式）
-
-```python
-# 单文件模式默认禁用UPX
-upx_enable = False  # 禁用UPX（避免启动过慢）
-```
-
-### UPX排除配置
-
-以下文件类型不建议UPX压缩：
-
-| 文件类型 | 原因 |
-|----------|------|
-| *.png, *.jpg | 已压缩的图片 |
-| *.onnx | 已压缩的模型文件 |
-| *.gz, *.zip | 已压缩的压缩包 |
-| *.mp3, *.mp4 | 已压缩的音视频 |
-
-### UPX安装问题
-
-#### 问题1: UPX未安装
-
-**错误信息**: `UPX is not available`
-
-**解决方案**:
-1. 下载并安装UPX
-2. 或在spec文件中设置 `upx_enable = False`
-
-#### 问题2: UPX不在PATH中
-
-**解决方案**:
-- 在spec文件中指定UPX路径：
-```python
-upx_dir = r'C:\upx'  # 指定UPX目录
-```
-
-#### 问题3: UPX压缩失败
-
-**解决方案**:
-- 检查UPX版本是否兼容
-- 尝试禁用UPX压缩
-- 检查文件是否被其他程序占用
-
----
-
-## 依赖优化
-
-### 排除不必要的模块
-
-spec文件中已配置排除以下模块：
-
-#### Python标准库
-
-```python
-excludes=[
-    'tkinter',        # Tkinter GUI（不使用）
-    'unittest',       # 单元测试
-    'pytest',         # 测试框架
-    'sphinx',         # 文档生成
-    'IPython',        # IPython交互
-    'jupyter',        # Jupyter notebook
-    'setuptools',     # 包管理
-    'pip',            # 包安装
-    'wheel',          # 包构建
-    'email',          # 邮件处理
-    'html',           # HTML解析
-    'xml',            # XML解析
-    ...
-]
-```
-
-#### 大型第三方库
-
-```python
-excludes=[
-    'matplotlib',     # 绑图库（不使用）
-    'scipy',          # 科学计算（不使用）
-    'sympy',          # 符号计算（不使用）
-    'nose',           # 测试框架
-    'coverage',       # 代码覆盖
-    'pylint',         # 代码检查
-    'flake8',         # 代码检查
-    ...
-]
-```
-
-### 优化效果
-
-| 优化措施 | 减少体积 |
-|----------|----------|
-| 排除tkinter | ~10 MB |
-| 排除matplotlib | ~30 MB |
-| 排除scipy | ~20 MB |
-| 排除测试框架 | ~5 MB |
-| 总计 | ~50-70 MB |
-
-### 添加必要模块
-
-确保以下模块被正确包含：
-
-```python
-hiddenimports=[
-    'PySide6.QtWidgets',
-    'PySide6.QtCore',
-    'PySide6.QtGui',
-    'sqlalchemy.dialects.sqlite',
-    'openai',
-    'jieba',
-    'sounddevice',
-    'numpy',
-    ...
-]
-```
-
-### 数据文件打包
-
-只打包必要的数据文件：
-
-```python
-datas=[
-    ('ui/styles/ui_skill_agent_styles.css', 'ui/styles'),
-    ('application.ico', '.'),
-    ('PersonalData/data', 'PersonalData/data'),
-    ('PersonalData/Skills', 'PersonalData/Skills'),
-    ('.env', '.'),
-    ('Skills', 'Skills'),
-]
-```
-
-**排除的数据目录**:
-- `PersonalData/model/` - 模型文件（外置）
-- `PersonalData/logs/` - 运行时日志
-- `PersonalData/records/` - 用户录音
-- `PersonalData/tts/` - TTS输出音频
-
----
-
-## 打包体积分析
-
-### 体积组成
-
-| 组成部分 | 目录模式 | 单文件模式 |
-|----------|----------|------------|
-| 主exe | ~10 MB | ~150 MB |
-| PySide6 | ~50 MB | 包含在exe中 |
-| Python运行时 | ~20 MB | 包含在exe中 |
-| 其他依赖 | ~30 MB | 包含在exe中 |
-| 数据文件 | ~10 MB | 包含在exe中 |
-| **总计** | ~120-150 MB | ~150-180 MB |
-
-### UPX压缩效果
-
-| 模式 | 无UPX | 有UPX | 压缩率 |
-|------|-------|-------|--------|
-| 目录模式 | 150 MB | 100 MB | ~33% |
-| 单文件模式 | 150 MB | 不推荐 | - |
-
-### 体积对比（含模型）
-
-| 情况 | 体积 |
-|------|------|
-| 打包结果（无模型） | ~100-150 MB |
-| 打包结果 + ASR模型 | +80 MB |
-| 打包结果 + 中文TTS | +150 MB |
-| 打包结果 + 所有模型 | +430 MB |
-
-**结论**: 模型外置可减少约430MB打包体积。
-
----
-
-## 常见问题解答
-
-### Q1: 打包后程序无法启动？
-
-**可能原因**:
-1. 缺少必要的依赖模块
-2. 数据文件未正确打包
-3. 配置文件路径问题
-
-**解决方案**:
-1. 检查spec文件中的`hiddenimports`
-2. 检查spec文件中的`datas`
-3. 使用控制台模式调试：
-```python
-# 在spec文件中设置
-console=True
-```
-
-### Q2: 打包体积过大？
-
-**解决方案**:
-1. 启用UPX压缩
-2. 检查是否包含不必要的模块
-3. 确保模型文件已外置
-4. 清理临时文件后重新打包
-
-### Q3: UPX压缩失败？
-
-**可能原因**:
-1. UPX未安装或不在PATH中
-2. UPX版本不兼容
-3. 文件被其他程序占用
-
-**解决方案**:
-1. 安装UPX并添加到PATH
-2. 更新UPX到最新版本
-3. 关闭占用文件的程序
-4. 禁用UPX压缩
-
-### Q4: 单文件模式启动慢？
-
-**原因**: 单文件模式需要解压到临时目录
-
-**解决方案**:
-1. 使用目录模式
-2. 单文件模式不建议启用UPX（会更慢）
-
-### Q5: 打包后找不到配置文件？
-
-**原因**: 打包exe使用独立的用户数据目录
-
-**解决方案**:
-配置文件位于 `%APPDATA%/OpenPersonalAgent/.env`
-
-### Q6: 如何更新打包后的程序？
-
-**目录模式**:
-- 直接替换exe文件或整个目录
-
-**单文件模式**:
-- 替换整个exe文件
-
-### Q7: 打包后模型下载失败？
-
-**可能原因**:
-1. 网络问题
-2. GitHub访问受限
-
-**解决方案**:
-1. 手动下载模型文件
-2. 使用代理或镜像站点
-3. 运行 `python download_models.py --check` 检查状态
-
-### Q8: 如何减小打包体积？
-
-**优化措施**:
-1. 启用UPX压缩（减少30-50%）
-2. 模型外置（减少430MB）
-3. 排除不必要的模块（减少50MB）
-4. 清理临时文件
-
-### Q9: 打包时出现警告？
-
-**常见警告**:
-- `WARNING: lib not found` - 可以忽略
-- `WARNING: hidden import not found` - 检查是否必要
-
-**处理建议**:
-- 运行程序测试功能是否正常
-- 如果功能正常，可以忽略警告
-
-### Q10: 如何调试打包问题？
-
-**调试步骤**:
-1. 使用控制台模式查看错误信息
-2. 检查日志文件 `%APPDATA%/OpenPersonalAgent/logs/`
-3. 使用PyInstaller的`--debug`选项
-
-```bash
-pyinstaller PersonalWindowGLM.spec --clean --debug
-```
-
----
-
-## 附录
-
-### A. spec文件完整配置
-
-详见项目文件：
-- `PersonalWindowGLM.spec` - 目录模式配置
-- `PersonalWindowGLM_onefile.spec` - 单文件模式配置
-
-### B. 相关文档
-
-- [MODEL_DOWNLOAD.md](./MODEL_DOWNLOAD.md) - 模型下载说明
-- [readme_CN.md](./readme_CN.md) - 项目中文说明
-
-### C. 打包命令参考
-
-```bash
-# 基本打包
-pyinstaller PersonalWindowGLM.spec
-
-# 清理后打包
-pyinstaller PersonalWindowGLM.spec --clean
-
-# 调试模式打包
-pyinstaller PersonalWindowGLM.spec --debug
-
-# 控制台模式打包（用于调试）
-# 需修改spec文件：console=True
-
-# 查看打包分析
-pyinstaller PersonalWindowGLM.spec --log-level DEBUG
-```
+- 后端日志：`%APPDATA%/OpenPersonalAgent/PersonalData/logs/`
+- Rust 侧日志：控制台启动 `PersonalWindowGLM.exe` 查看 `[backend:stdout]` / `[backend:stderr]` 输出
+- spec 打 debug 包：`console=True` 已保留（marker 走 stdout，不能关；stdio 均为管道不会闪黑框）
 
 ---
 
 ## 更新日志
 
-### v3.0.0
-- 模型外置机制，大幅减小打包体积
-- 新增UPX压缩支持
-- 优化依赖排除配置
-- 新增build.bat交互式打包脚本
-- 新增PACKAGING_GUIDE.md打包指南
-
----
-
-**如有其他问题，请提交Issue或查看项目文档。**
+- v4.0.0（2026-08）：移除旧纯 PyInstaller 单体打包（PersonalWindowGLM.spec / onefile / build.bat）；确立 Tauri NSIS + PyInstaller onedir sidecar 两级打包；新增 build_release.ps1 一键脚本

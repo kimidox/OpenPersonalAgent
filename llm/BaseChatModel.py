@@ -64,6 +64,37 @@ __all__ = [
 ]
 
 
+def _is_rate_limit_error(e: Exception) -> bool:
+    """判断异常是否为 429 限流错误（含 OpenRouter 等聚合服务的流中错误）。
+
+    OpenRouter 的流中 429 以普通 APIError 抛出（str 仅含 "Provider returned
+    error"，不含状态码），状态码需从 e.body.code 中识别。
+    """
+    if isinstance(e, RateLimitError):
+        return True
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        code = body.get("code")
+        if code == 429 or str(code) == "429":
+            return True
+        inner = body.get("error")
+        if isinstance(inner, dict):
+            inner_code = inner.get("code")
+            if inner_code == 429 or str(inner_code) == "429":
+                return True
+    return "429" in str(e) or "rate limit" in str(e).lower()
+
+
+def _rate_limit_backoff(retry_count: int) -> float:
+    """429 限流的重试退避时长（秒）。
+
+    限流窗口通常按分钟计（如 OpenRouter 免费档约 20 请求/分钟），
+    短退避（秒级）的密集重试会持续打满窗口形成重试风暴，
+    因此使用 15/30/60 秒的长退避等待窗口恢复。
+    """
+    return min(15 * retry_count, 60)
+
+
 class BaseChatModel(
     ABC,
     ClientManager,
@@ -414,13 +445,35 @@ class BaseChatModel(
         # 最终防线：校验并修复所有 messages 中的 tool_calls
         messages = _sanitize_messages_for_api(messages)
 
-        # LLM API 调用重试逻辑（最多 LLM_MAX_RETRIES 次，指数退避）
+        # LLM API 调用重试逻辑（最多 LLM_MAX_RETRIES 次）
+        # 429 限流使用长退避（15/30/60s）等待限流窗口恢复，其他错误沿用指数退避
         import config as _cfg
         _max_retries = getattr(_cfg, 'LLM_MAX_RETRIES', 3)
         _retry_count = 0
-        _last_error = None
 
-        while _retry_count <= _max_retries:
+        # 工具调用流式回调：将工具调用增量数据通过 stream_callback 发送
+        def on_tool_call_chunk_wrapper(chunk_data: dict) -> None:
+            """处理工具调用增量数据的回调函数
+
+            Args:
+                chunk_data: 包含工具调用增量信息的字典，包含：
+                    - name_chunk: 工具名称增量片段
+                    - arguments_chunk: 参数增量片段
+                    - accumulated_name: 已累积的工具名称
+                    - accumulated_arguments: 已累积的参数
+                    - tool_call_index: 工具调用索引
+                    - is_complete: 是否已完成（流结束）
+            """
+            # 只在完成时发送完整信息，避免流式过程中频繁发送
+            if chunk_data.get("is_complete"):
+                name = chunk_data.get("accumulated_name", "")
+                arguments = chunk_data.get("accumulated_arguments", "")
+                if name:
+                    # 格式：调用工具 `{name}` · {arguments}
+                    stream_callback(f"调用工具 `{name}` · {arguments}", "tool_call")
+
+        while True:
+            # === 阶段1：建立流式请求（create 错误在此重试） ===
             try:
                 # 转换状态为 SENDING_REQUEST，记录开始时间
                 self._transition_communication_state(
@@ -444,17 +497,13 @@ class BaseChatModel(
 
                 # 请求已发送，启动等待响应超时检测
                 self._start_timeout_timer(self.WAITING_FOR_RESPONSE_TIMEOUT, "waiting_for_response")
-                # 成功建立连接，跳出重试循环
-                break
 
             except (RateLimitError, APIConnectionError) as e:
                 # 可重试错误：速率限制、网络连接问题
-                _last_error = e
                 _retry_count += 1
                 if _retry_count <= _max_retries:
-                    _backoff = min(2 ** _retry_count, 10)  # 指数退避，最大 10 秒
-                    import logging
-                    logging.getLogger("BaseChatModel").warning(
+                    _backoff = _rate_limit_backoff(_retry_count) if _is_rate_limit_error(e) else min(2 ** _retry_count, 10)
+                    logger.warning(
                         "LLM API 可重试错误 (%d/%d): %s, %d秒后重试",
                         _retry_count, _max_retries, type(e).__name__, _backoff,
                     )
@@ -467,12 +516,10 @@ class BaseChatModel(
                 # 不可重试错误：参数错误、认证失败等
                 return self._handle_api_error(e, stream_callback)
             except Exception as e:
-                _last_error = e
                 _retry_count += 1
                 if _retry_count <= _max_retries:
                     _backoff = min(2 ** _retry_count, 10)
-                    import logging
-                    logging.getLogger("BaseChatModel").warning(
+                    logger.warning(
                         "LLM API 未知错误 (%d/%d): %s, %d秒后重试",
                         _retry_count, _max_retries, type(e).__name__, _backoff,
                     )
@@ -481,38 +528,62 @@ class BaseChatModel(
                 else:
                     return self._handle_api_error(e, stream_callback)
 
-        # 创建带状态转换的流式回调包装函数
-        wrapped_stream_callback = self._create_streaming_wrapped_callback(stream_callback)
+            # === 阶段2：处理流式响应（流中限流/连接错误在此重试） ===
+            # 记录是否已向前端输出内容：流中错误仅在未输出内容时才可安全重试（避免内容重复）
+            _streamed_any = [False]
+            _base_wrapped_callback = self._create_streaming_wrapped_callback(stream_callback)
 
-        # 工具调用流式回调：将工具调用增量数据通过 stream_callback 发送
-        def on_tool_call_chunk_wrapper(chunk_data: dict) -> None:
-            """处理工具调用增量数据的回调函数
+            def _tracked_stream_callback(content: str, msg_type: str) -> None:
+                _streamed_any[0] = True
+                _base_wrapped_callback(content, msg_type)
 
-            Args:
-                chunk_data: 包含工具调用增量信息的字典，包含：
-                    - name_chunk: 工具名称增量片段
-                    - arguments_chunk: 参数增量片段
-                    - accumulated_name: 已累积的工具名称
-                    - accumulated_arguments: 已累积的参数
-                    - tool_call_index: 工具调用索引
-                    - is_complete: 是否已完成（流结束）
-            """
-            # 只在完成时发送完整信息，避免流式过程中频繁发送
-            if chunk_data.get("is_complete"):
-                name = chunk_data.get("accumulated_name", "")
-                arguments = chunk_data.get("accumulated_arguments", "")
-                if name:
-                    # 格式：调用工具 `{name}` · {arguments}
-                    stream_callback(f"调用工具 `{name}` · {arguments}", "tool_call")
+            # 每次重试必须使用全新的 StreamParser（旧实例已累积部分流数据）
+            parser = StreamParser(
+                stream_callback=_tracked_stream_callback,
+                messages=messages,
+                estimate_tokens=self._estimate_tokens_from_messages,
+                on_tool_call_chunk=on_tool_call_chunk_wrapper,
+            )
 
-        parser = StreamParser(
-            stream_callback=wrapped_stream_callback,
-            messages=messages,
-            estimate_tokens=self._estimate_tokens_from_messages,
-            on_tool_call_chunk=on_tool_call_chunk_wrapper,  # 新增：传递工具调用流式回调
-        )
-
-        return self._process_stream_result(parser, stream, stream_callback)
+            try:
+                result = parser.process_stream(stream)
+                # 流正常结束，转换状态为 COMMUNICATION_ENDED
+                self._transition_communication_state(LLMCommunicationState.COMMUNICATION_ENDED)
+                return result
+            except Exception as e:
+                # 流中限流/连接错误（如 OpenRouter 流中 429 "Provider returned error"）：
+                # 尚未向前端输出任何内容时，等待后重建整个请求重试
+                _retryable = (
+                    not _streamed_any[0]
+                    and _retry_count < _max_retries
+                    and (isinstance(e, APIConnectionError) or _is_rate_limit_error(e))
+                )
+                if _retryable:
+                    _retry_count += 1
+                    _backoff = _rate_limit_backoff(_retry_count) if _is_rate_limit_error(e) else min(2 ** _retry_count, 10)
+                    logger.warning(
+                        "流中可重试错误 (%d/%d): %s, %d秒后重试整个请求",
+                        _retry_count, _max_retries, type(e).__name__, _backoff,
+                    )
+                    self._transition_communication_state(
+                        LLMCommunicationState.COMMUNICATION_ENDED,
+                        error_message=str(e)
+                    )
+                    _time.sleep(_backoff)
+                    continue  # 回到阶段1：重新 create 流
+                error_msg = f"流式响应处理错误: {e}"
+                if _is_rate_limit_error(e):
+                    error_msg += "（模型服务限流 429，请稍后重试或切换模型）"
+                stream_callback(error_msg, "assistant")
+                # 异常时转换状态为 COMMUNICATION_ENDED
+                self._transition_communication_state(
+                    LLMCommunicationState.COMMUNICATION_ENDED,
+                    error_message=error_msg
+                )
+                return StreamResult.from_error(error_msg)
+            finally:
+                # 方法返回前重置状态为 IDLE
+                self._transition_communication_state(LLMCommunicationState.IDLE)
 
     def async_stream_request_llm_with_tools(
         self,

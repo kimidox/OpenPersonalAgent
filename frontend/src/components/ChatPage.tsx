@@ -152,7 +152,7 @@ export default function ChatPage() {
     [appendToolResultMessage],
   );
 
-  const { state: runState, typedContent, isTyping, completeTyping, replyToAwait } =
+  const { state: runState, typedContent, isTyping, stopRun, replyToAwait } =
     useStream({
       ws,
       onSendMessage: handleSend,
@@ -227,9 +227,12 @@ export default function ChatPage() {
     if (!currentConversationId) return;
     try {
       await api.stopConversation(currentConversationId);
-      completeTyping();
     } catch (err) {
       console.error("[ChatPage] 停止失败:", err);
+    } finally {
+      // LLM 通信报错时后端可能阻塞在长超时的 SDK 调用中，message.complete 迟迟不到；
+      // 无论后端是否及时响应，前端立即退出运行态，避免停止按钮"点了没反应"
+      stopRun();
     }
   }
 

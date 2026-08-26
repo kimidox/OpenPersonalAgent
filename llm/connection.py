@@ -42,7 +42,14 @@ class ClientManager:
             OpenAI: 已初始化的 OpenAI 客户端。
         """
         if self._client is None:
-            self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            # max_retries=0：禁用 SDK 层隐藏重试，重试策略统一由应用层
+            # （stream_request_llm_with_tools 的重试循环）控制，
+            # 避免两层重试叠加在限流期间放大请求数（重试风暴）
+            self._client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                max_retries=0,
+            )
         return self._client
 
 
@@ -286,7 +293,7 @@ class ErrorHandlingMixin:
         elif isinstance(error, AuthenticationError):
             error_msg = f"API认证失败: {error}"
         elif isinstance(error, RateLimitError):
-            error_msg = f"API请求频率超限: {error}"
+            error_msg = f"API请求频率超限: {error}（模型服务限流 429，请稍后重试或切换模型）"
         elif isinstance(error, APIConnectionError):
             error_msg = f"API连接失败: {error}"
         elif isinstance(error, APIError):
