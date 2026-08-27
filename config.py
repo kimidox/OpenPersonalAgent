@@ -452,6 +452,11 @@ OMNIPARSER_MODEL_PATH = _omniparser_path if _omniparser_path not in (None, "") e
 _live2d_enabled = get_config("LIVE2D_ENABLED")
 LIVE2D_ENABLED = _env_bool(_live2d_enabled, False)
 
+# 是否在应用启动时自动加载 Live2D 模型（关闭后悬浮球以默认圆形启动，
+# 可在设置页点击"加载模型"手动加载）
+_live2d_auto_load = get_config("LIVE2D_AUTO_LOAD")
+LIVE2D_AUTO_LOAD = _env_bool(_live2d_auto_load, True)
+
 # Live2D 模型名称（对应 PersonalData/2DLiveFiles 下的模型目录名）
 _live2d_model = get_config("LIVE2D_MODEL_NAME")
 LIVE2D_MODEL_NAME = _live2d_model if _live2d_model not in (None, "") else ""

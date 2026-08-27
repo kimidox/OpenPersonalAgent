@@ -194,9 +194,7 @@ def run_floating_ball_process(
     log_perf("默认悬浮球创建完成")
 
     if show_immediately:
-        ball.show()
-        ball.raise_()
-        ball.activateWindow()
+        ball.show_ball()
         log_perf("默认悬浮球窗口显示完成")
         logger.info(
             f"悬浮球窗口显示信息: "

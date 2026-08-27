@@ -383,16 +383,59 @@ def get_voice_settings() -> VoiceSettingsResponse:
 
 class Live2DSettingsResponse(BaseModel):
     enabled: bool
+    auto_load: bool
     model_name: str
     width: int
     height: int
 
 
+def _live2d_bool(key: str, default: bool) -> bool:
+    return config._env_bool(config.get_config(key), default)
+
+
+def _live2d_int(key: str, default: int) -> int:
+    raw = config.get_config(key)
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 @router.get("/live2d", response_model=Live2DSettingsResponse)
 def get_live2d_settings() -> Live2DSettingsResponse:
+    """实时读取 .env 中的 Live2D 配置（保存后立即反映，不依赖模块级常量）。"""
     return Live2DSettingsResponse(
-        enabled=bool(getattr(config, "LIVE2D_ENABLED", False)),
-        model_name=getattr(config, "LIVE2D_MODEL_NAME", ""),
-        width=int(getattr(config, "LIVE2D_BALL_WIDTH", 200)),
-        height=int(getattr(config, "LIVE2D_BALL_HEIGHT", 200)),
+        enabled=_live2d_bool("LIVE2D_ENABLED", False),
+        auto_load=_live2d_bool("LIVE2D_AUTO_LOAD", True),
+        model_name=config.get_config("LIVE2D_MODEL_NAME") or "",
+        width=_live2d_int("LIVE2D_BALL_WIDTH", 200),
+        height=_live2d_int("LIVE2D_BALL_HEIGHT", 200),
+    )
+
+
+class Live2DModelItem(BaseModel):
+    name: str
+    dir_name: str
+
+
+class Live2DModelsResponse(BaseModel):
+    models: list[Live2DModelItem]
+
+
+@router.get("/live2d/models", response_model=Live2DModelsResponse)
+def get_live2d_models() -> Live2DModelsResponse:
+    """扫描 PersonalData/2DLiveFiles 目录返回可用模型列表。"""
+    from floating_ball.live2d_model_manager import scan_models
+
+    infos = scan_models()
+    return Live2DModelsResponse(
+        models=[
+            Live2DModelItem(
+                name=info.name,
+                dir_name=info.model_dir.name,
+            )
+            for info in infos
+        ]
     )

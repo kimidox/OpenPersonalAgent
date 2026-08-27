@@ -77,9 +77,20 @@ def set_theme(
     return {"theme": body.theme}
 
 
+class RestartBallRequest(BaseModel):
+    live2d: bool | None = None
+
+
 @router.post("/restart")
-def restart_ball(mgr: Any = Depends(require_floating_ball_manager)) -> dict[str, bool]:
-    """重启悬浮球子进程（先 stop 再 start）。"""
+def restart_ball(
+    body: RestartBallRequest | None = None,
+    mgr: Any = Depends(require_floating_ball_manager),
+) -> dict[str, bool]:
+    """重启悬浮球子进程（先 stop 再 start）。
+
+    body.live2d: 强制指定是否以 Live2D 模式重启（None=按当前配置）。
+    """
     mgr.stop()
-    started = mgr.start(prestart=False)  # 重启后立即显示
+    force_live2d = body.live2d if body is not None else None
+    started = mgr.start(prestart=False, force_live2d=force_live2d)  # 重启后立即显示
     return {"restarted": started}

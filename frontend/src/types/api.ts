@@ -155,9 +155,19 @@ export interface VoiceSettingsResponse {
 
 export interface Live2DSettingsResponse {
   enabled: boolean;
+  auto_load: boolean;
   model_name: string;
   width: number;
   height: number;
+}
+
+export interface Live2DModelItem {
+  name: string;
+  dir_name: string;
+}
+
+export interface Live2DModelsResponse {
+  models: Live2DModelItem[];
 }
 
 // ---------------------------------------------------------------------

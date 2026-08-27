@@ -123,11 +123,12 @@ class FloatingBallManager:
     # 启停
     # ------------------------------------------------------------------
 
-    def start(self, prestart: bool = True) -> bool:
+    def start(self, prestart: bool = True, force_live2d: bool | None = None) -> bool:
         """启动悬浮球子进程。
 
         Args:
             prestart: True=预启动（窗口初始隐藏），False=立即显示。
+            force_live2d: 强制指定是否以 Live2D 模式启动（None=按配置）。
 
         Returns:
             True 表示启动成功。
@@ -154,11 +155,17 @@ class FloatingBallManager:
             )
             self._logger.info("IPC 批量消息发送器已初始化")
 
-        # Live2D 配置读取（复刻原 _start_floating_ball_process）
-        live2d_enabled = getattr(config, "LIVE2D_ENABLED", False)
-        live2d_model_name = getattr(config, "LIVE2D_MODEL_NAME", "")
-        live2d_width = getattr(config, "LIVE2D_BALL_WIDTH", 200)
-        live2d_height = getattr(config, "LIVE2D_BALL_HEIGHT", 200)
+        # Live2D 配置读取（实时读取 .env，保存后无需重启后端即可生效）
+        live2d_enabled, live2d_model_name, live2d_width, live2d_height = (
+            self._read_live2d_config()
+        )
+        # force_live2d：设置页"加载模型"按钮强制以 Live2D 模式重启
+        if force_live2d is not None:
+            live2d_enabled = force_live2d
+        else:
+            # 未开启"启动时自动加载"时，悬浮球以默认圆形启动
+            if not config._env_bool(config.get_config("LIVE2D_AUTO_LOAD"), True):
+                live2d_enabled = False
         live2d_model_path = self._resolve_live2d_model_path(
             live2d_enabled, live2d_model_name
         )
@@ -490,6 +497,28 @@ class FloatingBallManager:
     # ------------------------------------------------------------------
     # Live2D 模型路径解析
     # ------------------------------------------------------------------
+
+    def _read_live2d_config(self) -> tuple[bool, str, int, int]:
+        """实时读取 .env 中的 Live2D 配置。
+
+        不使用 config 模块级常量（导入时固化，保存后不更新），
+        改为 get_config 实时读取，保证设置保存后重启悬浮球即可生效。
+        """
+        enabled = config._env_bool(config.get_config("LIVE2D_ENABLED"), False)
+        model_name = config.get_config("LIVE2D_MODEL_NAME") or ""
+
+        def _read_int(key: str, default: int) -> int:
+            raw = config.get_config(key)
+            if raw in (None, ""):
+                return default
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return default
+
+        width = _read_int("LIVE2D_BALL_WIDTH", 200)
+        height = _read_int("LIVE2D_BALL_HEIGHT", 200)
+        return enabled, model_name, width, height
 
     def _resolve_live2d_model_path(
         self, live2d_enabled: bool, live2d_model_name: str

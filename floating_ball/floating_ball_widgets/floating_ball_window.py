@@ -157,7 +157,7 @@ class FloatingBallWindow(QWidget):
         self.move(x, y)
 
     def _init_live2d(self) -> None:
-        """初始化 Live2D 组件"""
+        """初始化 Live2D 组件（顶层透明窗口模式）"""
         try:
             # 检查模型路径是否有效
             if not self._live2d_model_path:
@@ -175,20 +175,29 @@ class FloatingBallWindow(QWidget):
 
             self._logger.info(f"正在初始化 Live2D 组件: {self._live2d_model_path}")
 
-            # 创建 Live2D 组件实例
+            # 创建 Live2D 组件实例（顶层窗口，鼠标事件委托回本窗口处理）
+            # 重要：QOpenGLWidget 作为子组件嵌入时，部分显卡上 GL 内容
+            # 无法合成到透明窗口（窗口在但不可见），必须作为顶层窗口使用
+            # （与 live2d-py 官方 demo 的透明窗口模式一致）
             self._live2d_widget = Live2DWidget(
                 model_path=self._live2d_model_path,
-                parent=self
+                event_delegate=self,
             )
+            self._live2d_widget.setWindowFlags(
+                Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+                | Qt.WindowType.Tool
+            )
+            self._live2d_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            self._live2d_widget.setStyleSheet("background:transparent")
+            self._live2d_widget.resize(self._live2d_width, self._live2d_height)
 
-            # 设置组件大小和位置（填充整个窗口）
-            self._live2d_widget.setGeometry(0, 0, self._live2d_width, self._live2d_height)
-            self._live2d_widget.show()
+            # 放到屏幕右下角（控制窗口保持同步，作为聊天窗口定位基准）
+            self._position_live2d_window()
 
             self._logger.info(
-                f"Live2D 组件已初始化: {self._live2d_model_path}, "
+                f"Live2D 组件已初始化（顶层窗口模式）: {self._live2d_model_path}, "
                 f"大小: {self._live2d_width}x{self._live2d_height}, "
-                f"可见性: {self._live2d_widget.isVisible()}, "
                 f"几何: {self._live2d_widget.geometry()}"
             )
             # 强制重绘以触发 initializeGL/paintGL
@@ -206,6 +215,49 @@ class FloatingBallWindow(QWidget):
                 except Exception:
                     pass
             self._live2d_widget = None
+
+    def _position_live2d_window(self) -> None:
+        """将 Live2D 顶层窗口放到屏幕右下角"""
+        if self._live2d_widget is None:
+            return
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        geometry = screen.availableGeometry()
+        x = geometry.width() - self._live2d_width - BALL_MARGIN
+        y = geometry.height() - self._live2d_height - BALL_MARGIN
+        self._live2d_widget.move(x, y)
+        # 控制窗口（本窗口）保持同步，作为聊天窗口定位基准
+        self.move(x, y)
+
+    def show_ball(self) -> None:
+        """显示悬浮球（Live2D 模式显示 GL 窗口，否则显示默认球窗口）"""
+        if self._live2d_widget is not None:
+            self._live2d_widget.show()
+            self._live2d_widget.raise_()
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
+    def hide_ball(self) -> None:
+        """隐藏悬浮球"""
+        if self._live2d_widget is not None:
+            self._live2d_widget.hide()
+        else:
+            self.hide()
+
+    def _sync_pos(self, pos: QPoint) -> None:
+        """Live2D 顶层窗口拖动后同步本窗口位置（聊天窗口跟随）"""
+        self.move(pos)
+        if self._chat_window and self._chat_window.isVisible():
+            self._chat_window.update_position(pos)
+
+    def _ball_pos(self) -> QPoint:
+        """当前悬浮球可见位置（Live2D 模式取 GL 窗口位置）"""
+        if self._live2d_widget is not None:
+            return self._live2d_widget.pos()
+        return self.pos()
 
     def _init_ipc_poll(self) -> None:
         """启动定时器，轮询主进程发来的消息"""
@@ -240,10 +292,11 @@ class FloatingBallWindow(QWidget):
             self._logger.info("聊天窗口已隐藏")
         else:
             # 更新聊天窗口位置（贴着悬浮球左上角）
-            self._chat_window.update_position(self.pos())
+            ball_pos = self._ball_pos()
+            self._chat_window.update_position(ball_pos)
             self._chat_window.show()
             self._toggle_chat_action.setText("收起聊天窗口")
-            self._logger.info(f"聊天窗口已显示，悬浮球位置: {self.pos()}")
+            self._logger.info(f"聊天窗口已显示，悬浮球位置: {ball_pos}")
 
     # ----------------- 绘制 -----------------
 
@@ -482,13 +535,13 @@ class FloatingBallWindow(QWidget):
             QApplication.quit()
         elif msg_type == MessageType.SHOW_WINDOW:
             # 显示悬浮球窗口（预启动模式）
-            self.show()
+            self.show_ball()
             self._logger.info("悬浮球窗口已显示（预启动模式）")
         elif msg_type == MessageType.HIDE_WINDOW:
             # 隐藏悬浮球窗口（预启动模式）
             if self._chat_window:
                 self._chat_window.hide()
-            self.hide()
+            self.hide_ball()
             self._logger.info("悬浮球窗口已隐藏（预启动模式）")
         elif msg_type == MessageType.SET_THEME:
             color = msg.get("color", "#3B82F6")

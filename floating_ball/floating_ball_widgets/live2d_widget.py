@@ -19,7 +19,7 @@ import traceback
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPoint
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
 
@@ -28,23 +28,31 @@ from logger import get_logger
 
 class Live2DWidget(QOpenGLWidget):
     """
-    Live2D 渲染组件 - 作为悬浮球的子组件
+    Live2D 渲染组件 - 作为独立的顶层透明窗口
 
     使用 live2d-py 库渲染 Live2D 模型
     参考: https://github.com/EasyLive2D/live2d-py/tree/main/demos/PyQt
+
+    重要：QOpenGLWidget 必须作为顶层窗口（FramelessWindowHint +
+    WA_TranslucentBackground）才能正确合成透明背景；作为普通 QWidget
+    的子组件时，部分显卡上 GL 内容无法合成到透明窗口（表现为窗口
+    存在但完全不可见）。因此本组件以顶层窗口方式使用，鼠标事件
+    （拖拽/点击/右键菜单）通过 event_delegate 委托回悬浮球控制窗口。
     """
 
     def __init__(
         self,
         model_path: str,
         parent: Optional[QWidget] = None,
+        event_delegate: Optional[QWidget] = None,
     ) -> None:
         """
         初始化 Live2D 渲染组件
 
         Args:
             model_path: 模型 JSON 文件路径（.model3.json）
-            parent: 父窗口
+            parent: 父窗口（顶层模式传 None）
+            event_delegate: 事件委托对象（悬浮球控制窗口，处理点击/菜单/拖拽同步）
 
         Raises:
             RuntimeError: 如果 Live2D 初始化或模型加载失败
@@ -56,6 +64,12 @@ class Live2DWidget(QOpenGLWidget):
         self._live2d_initialized = False
         self._render_frame_count = 0
         self._render_timer_id: int | None = None  # 渲染定时器 ID
+
+        # 事件委托（悬浮球控制窗口）
+        self._event_delegate = event_delegate
+        self._is_dragging = False
+        self._drag_start_global = QPoint()
+        self._drag_start_pos = QPoint()
 
         # 渲染节流相关状态
         self._is_interactive = False  # 用户是否正在交互（悬停/点击）
@@ -70,9 +84,6 @@ class Live2DWidget(QOpenGLWidget):
         self._perf_last_report_time = 0.0  # 上次性能报告时间
         self._perf_frames_since_report = 0  # 自上次报告以来的帧数
 
-        # 设置组件属性（作为子组件，不需要窗口标志）
-        # 注意：某些系统/显卡下，透明背景会导致 Live2D 渲染不出来
-        # 暂时使用半透明红色背景进行测试，便于观察窗口是否真的显示
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setStyleSheet("background:transparent")
 
@@ -231,8 +242,10 @@ class Live2DWidget(QOpenGLWidget):
             # 获取 OpenGL 函数
             gl = QOpenGLContext.currentContext().functions()
 
-            # 设置 OpenGL 视口（关键！）
-            gl.glViewport(0, 0, self.width(), self.height())
+            # 设置 OpenGL 视口（关键！FBO 为物理像素尺寸，
+            # 需要乘以 devicePixelRatio，否则高分屏下模型只占一角）
+            dpr = self.devicePixelRatioF()
+            gl.glViewport(0, 0, int(self.width() * dpr), int(self.height() * dpr))
 
             # 启用 Alpha 混合（透明背景必需）
             # 注意：QOpenGLFunctions 中没有 GL_BLEND 常量，使用 OpenGL 原生常量
@@ -317,7 +330,6 @@ class Live2DWidget(QOpenGLWidget):
                         "model_path": self._model_path,
                         "window_visible": self.isVisible(),
                         "window_opacity": self.windowOpacity(),
-                        "widget_opacity": self.opacity(),
                     }
 
                     # 尝试获取模型画布信息（如果有API）
@@ -443,9 +455,9 @@ class Live2DWidget(QOpenGLWidget):
             w = width if width is not None else self.width()
             h = height if height is not None else self.height()
 
-            # 设置视图矩阵（根据窗口尺寸调整）
-            # live2d-py 会自动处理视图矩阵更新
-            self._model.Resize(w, h)
+            # 视口使用物理像素（见 paintGL），投影矩阵需与视口一致
+            dpr = self.devicePixelRatioF()
+            self._model.Resize(int(w * dpr), int(h * dpr))
 
         except Exception as e:
             self._logger.error(f"更新视图矩阵失败: {e}")
@@ -573,29 +585,55 @@ class Live2DWidget(QOpenGLWidget):
             self._logger.error(f"Live2D 碰撞检测失败: {e}")
             return None
 
-    # ----------------- 鼠标事件转发（确保拖拽功能正常） -----------------
+    # ----------------- 鼠标事件（顶层窗口模式） -----------------
 
     def mousePressEvent(self, event) -> None:
-        """鼠标按下事件 - 转发到父窗口以支持拖拽"""
-        # 由于我们是父窗口的子组件，直接忽略事件让父窗口处理
-        if self.parent():
-            event.ignore()
-        else:
+        """鼠标按下事件 - 记录拖拽起点"""
+        if self._event_delegate is None:
             super().mousePressEvent(event)
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._is_dragging = False
+            self._drag_start_global = event.globalPosition().toPoint()
+            self._drag_start_pos = self.pos()
 
     def mouseMoveEvent(self, event) -> None:
-        """鼠标移动事件 - 转发到父窗口以支持拖拽"""
-        if self.parent():
-            event.ignore()
-        else:
+        """鼠标移动事件 - 拖拽移动窗口"""
+        if self._event_delegate is None:
             super().mouseMoveEvent(event)
+            return
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            current = event.globalPosition().toPoint()
+            delta = current - self._drag_start_global
+            if not self._is_dragging and delta.manhattanLength() > 5:
+                self._is_dragging = True
+            if self._is_dragging:
+                self.move(self._drag_start_pos + delta)
+                # 同步隐藏控制窗口位置（聊天窗口定位基准）
+                self._event_delegate._sync_pos(self.pos())
 
     def mouseReleaseEvent(self, event) -> None:
-        """鼠标释放事件 - 转发到父窗口以支持拖拽和点击"""
-        if self.parent():
-            event.ignore()
-        else:
+        """鼠标释放事件 - 点击（命中检测/切换聊天窗口）"""
+        if self._event_delegate is None:
             super().mouseReleaseEvent(event)
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            if not self._is_dragging:
+                local_pos = event.position().toPoint()
+                hit_area = self.get_hit_area(local_pos.x(), local_pos.y())
+                if hit_area:
+                    self.play_click_animation(hit_area)
+                    self._logger.info(f"Live2D 点击区域: {hit_area}")
+                else:
+                    self._event_delegate._toggle_chat_window()
+            self._is_dragging = False
+
+    def contextMenuEvent(self, event) -> None:
+        """右键菜单 - 委托给悬浮球控制窗口"""
+        if self._event_delegate is not None:
+            self._event_delegate._menu.exec(event.globalPos())
+        else:
+            super().contextMenuEvent(event)
 
     def enterEvent(self, event) -> None:
         """鼠标进入事件 - 设置交互状态，提高渲染频率"""

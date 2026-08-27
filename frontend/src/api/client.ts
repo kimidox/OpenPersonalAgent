@@ -21,6 +21,7 @@ import type {
   InstallSkillResponse,
   LLMConfigItem,
   LLMConfigListResponse,
+  Live2DModelsResponse,
   Live2DSettingsResponse,
   LoadModelResponse,
   PromptTemplatesResponse,
@@ -375,6 +376,8 @@ export const api = {
     request<VoiceSettingsResponse>("/api/settings/voice"),
   getLive2DSettings: () =>
     request<Live2DSettingsResponse>("/api/settings/live2d"),
+  getLive2DModels: () =>
+    request<Live2DModelsResponse>("/api/settings/live2d/models"),
 
   // -------------------------------------------------------------------
   // 录音
@@ -437,8 +440,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ theme }),
     }),
-  restartFloatingBall: () =>
+  restartFloatingBall: (opts?: { live2d?: boolean }) =>
     request<{ restarted: boolean }>("/api/floating-ball/restart", {
       method: "POST",
+      body: JSON.stringify(opts ?? {}),
     }),
 };
