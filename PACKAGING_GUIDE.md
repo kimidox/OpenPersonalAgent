@@ -33,7 +33,7 @@
 启动链（安装后）：
 
 1. Tauri 主进程启动，[sidecar.rs](./frontend/src-tauri/src/sidecar.rs) 从安装目录 `backend_service/backend_service.exe` 以 `--port {动态端口} --token {随机token}` 拉起后端
-2. 后端完成初始化后在 stdout 输出 `BACKEND_READY {"port":...,"token":...,"pid":...}`，Rust 解析握手（上限 15s）
+2. 后端完成初始化后在 stdout 输出 `BACKEND_READY {"port":...,"token":...,"pid":...}`，Rust 解析握手（上限 90s：安装包首启冷盘 + 杀软扫描可能较慢）
 3. 后端再 spawn 悬浮球子进程（PySide6 + live2d-py，打包在同一 exe 内）
 4. 前端通过 HTTP REST（命令）+ WebSocket（流式事件）与后端通信
 
@@ -152,7 +152,7 @@ cd frontend && npm run dev     # 另开终端，Rust 侧无 BACKEND_DEV 时自�
 - `ModuleNotFoundError` → spec 缺 hiddenimport，补到 [backend_service.spec](./backend_service.spec) 的 `hiddenimports`
 - `找不到后端可执行文件: backend_service/backend_service.exe` → 安装目录资源缺失，检查 `tauri.conf.json` 的 `resources` 配置
 
-### Q2: 等待 marker 超时（15s）？
+### Q2: 等待 marker 超时（90s）？
 
 冒烟测试本机约 4s 出 marker。若持续超时，手动运行安装目录的 `backend_service\backend_service.exe --port 18799 --token test` 观察 stdout：能否正常输出 `BACKEND_READY {...}`。
 
@@ -174,11 +174,12 @@ PyInstaller + 未签名 exe 常见误报。正式分发需代码签名证书。
 ### Q6: 如何调试打包问题？
 
 - 后端日志：`%APPDATA%/OpenPersonalAgent/PersonalData/logs/`
-- Rust 侧日志：控制台启动 `PersonalWindowGLM.exe` 查看 `[backend:stdout]` / `[backend:stderr]` 输出
-- spec 打 debug 包：`console=True` 已保留（marker 走 stdout，不能关；stdio 均为管道不会闪黑框）
+- Rust 外壳日志：`%APPDATA%/OpenPersonalAgent/PersonalData/logs/tauri_shell.log`（含 `[backend:stdout]` / `[backend:stderr]` 转发，安装后无控制台也能排查）
+- spec 打 debug 包：`console=True` 已保留（marker 走 stdout，不能关）；Rust 侧以 CREATE_NO_WINDOW 拉起后端，悬浮球子进程 spawn 时也会注入该标志，均不会闪黑框
 
 ---
 
 ## 更新日志
 
 - v4.0.0（2026-08）：移除旧纯 PyInstaller 单体打包（PersonalWindowGLM.spec / onefile / build.bat）；确立 Tauri NSIS + PyInstaller onedir sidecar 两级打包；新增 build_release.ps1 一键脚本
+- v4.0.1（2026-08）：修复安装后首启问题——后端握手超时 15s→90s（冷盘+杀软扫描）、安装目录资源优先于开发目录解析、启动失败弹窗附带后端输出尾部（Traceback 直达）；修复启动黑框——后端 spawn 加 CREATE_NO_WINDOW、悬浮球 multiprocessing spawn 注入 CREATE_NO_WINDOW、ffmpeg 子进程补防黑框；修复打包模式 multiprocessing 子进程分发——[main.py](./main.py) 入口补 `freeze_support()`（否则悬浮球子进程把 `--multiprocessing-fork` 当普通参数重跑后端后退出）；新增 Rust 外壳日志落盘 `tauri_shell.log`

@@ -6,14 +6,14 @@
 //! - 读取 stdout 直到 `BACKEND_READY {...}` marker
 //! - 持有 child 句柄供 check_alive / kill / restart
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use rand::RngCore;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -22,13 +22,28 @@ use crate::BackendInfo;
 /// marker 前缀（与 backend_service/app.py 对齐）。
 const MARKER_PREFIX: &str = "BACKEND_READY ";
 
-/// sidecar 等待 marker 上限。
-const READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// sidecar 等待 marker 上限（lib.rs 的 wait_for_ready 调用方共用此值）。
+///
+/// 不能太短：安装包首启（冷盘 + 杀软实时扫描 _internal 全量 DLL）可能远慢于
+/// 开发机热缓存（约 4s）。过短会在后端仍在初始化时被误杀，表现为
+/// "后端启动失败"；真正的崩溃由 stdout EOF / 退出码快速感知，不受此值影响。
+pub const READY_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// 后端输出诊断缓冲行数上限（stdout + stderr 最近 N 行）。
+const TAIL_LINES: usize = 40;
+
+/// Windows：抑制 console 子进程新建控制台窗口（防黑框一闪）。
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct SidecarManager {
     child: Arc<Mutex<Option<Child>>>,
     /// 当前 sidecar 的端口/token（最近一次握手成功值）。
     current: Arc<Mutex<Option<BackendInfo>>>,
+    /// 后端输出诊断缓冲（启动失败时拼入错误弹窗，远程排查用）。
+    output_tail: Arc<Mutex<VecDeque<String>>>,
+    /// marker 之前捕获的致命错误（stderr Traceback / stdout 报错 / EOF）。
+    startup_error: Arc<Mutex<Option<String>>>,
 }
 
 impl SidecarManager {
@@ -36,6 +51,8 @@ impl SidecarManager {
         Self {
             child: Arc::new(Mutex::new(None)),
             current: Arc::new(Mutex::new(None)),
+            output_tail: Arc::new(Mutex::new(VecDeque::with_capacity(TAIL_LINES))),
+            startup_error: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -58,6 +75,10 @@ impl SidecarManager {
             *self.current.lock().await = Some(info);
             return Ok(());
         }
+
+        // 重置诊断缓冲（每次启动/重启重新累积）
+        self.output_tail.lock().await.clear();
+        *self.startup_error.lock().await = None;
 
         let port = pick_free_port()?;
         let token = random_token();
@@ -85,7 +106,13 @@ impl SidecarManager {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .kill_on_drop(true)
+            // 中文日志按 UTF-8 输出，避免 Windows 管道默认 GBK 编码触发 logging 报错
+            .env("PYTHONIOENCODING", "utf-8");
+        // backend_service.exe / python.exe 是 console 子系统程序：从无控制台的 GUI
+        // 进程 spawn 时 Windows 会为其新建控制台窗口 → 黑框一闪。CREATE_NO_WINDOW 抑制。
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
         if let (true, Some(root)) = (is_backend_dev, project_root.as_ref()) {
             cmd.current_dir(root);
             // PYTHONPATH = 项目根 + 现有值
@@ -105,11 +132,27 @@ impl SidecarManager {
         let stdout = child.stdout.take().expect("stdout piped");
         let stderr = child.stderr.take().expect("stderr piped");
 
-        // stderr 转发到 Rust 日志（不解析）
+        // stderr 转发到 Rust 日志 + 诊断缓冲；marker 前出现 Traceback 等致命错误立即记录
+        let stderr_tail = self.output_tail.clone();
+        let stderr_startup_error = self.startup_error.clone();
+        let stderr_ready = self.current.clone();
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                log::info!("[backend:stderr] {line}");
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            while let Ok(n) = read_line_lossy(&mut reader, &mut line).await {
+                if n == 0 {
+                    break;
+                }
+                let text = line.trim_end_matches('\n').trim_end_matches('\r').to_string();
+                line.clear();
+                log::info!("[backend:stderr] {text}");
+                push_tail(&stderr_tail, &text).await;
+                if stderr_ready.lock().await.is_none() && is_fatal_error_line(&text) {
+                    let mut err = stderr_startup_error.lock().await;
+                    if err.is_none() {
+                        *err = Some(text);
+                    }
+                }
             }
         });
 
@@ -119,9 +162,18 @@ impl SidecarManager {
         // 同步读 stdout 直到 marker（在 wait_for_ready 里做），这里把 stdout 转入解析循环
         let current = self.current.clone();
         let child_lock = self.child.clone();
+        let stdout_tail = self.output_tail.clone();
+        let stdout_startup_error = self.startup_error.clone();
         tokio::spawn(async move {
-            if let Err(e) = read_stdout_until_marker(stdout, port, &token, &current).await {
+            if let Err(e) =
+                read_stdout_until_marker(stdout, port, &token, &current, &stdout_tail).await
+            {
                 log::error!("[sidecar] marker 读取失败: {e}");
+                // 失败原因供 wait_for_ready 快速返回（弹窗展示真实报错）
+                let mut err = stdout_startup_error.lock().await;
+                if err.is_none() {
+                    *err = Some(e.to_string());
+                }
                 // 读取失败 → 标记 child 已死
                 let mut c = child_lock.lock().await;
                 if let Some(mut child) = c.take() {
@@ -134,6 +186,9 @@ impl SidecarManager {
     }
 
     /// 阻塞等待 marker（最长 READY_TIMEOUT）。
+    ///
+    /// 失败时附带后端最近输出（stdout/stderr 尾部），让"后端启动失败"弹窗直接
+    /// 展示真实报错（Python Traceback / DLL 加载失败等），无需用户手动复现。
     pub async fn wait_for_ready(
         &self,
         timeout: Duration,
@@ -143,10 +198,31 @@ impl SidecarManager {
             if let Some(info) = self.current.lock().await.clone() {
                 return Ok(info);
             }
+            if let Some(err) = self.startup_error.lock().await.clone() {
+                return Err(format!(
+                    "后端启动失败: {err}\n\n后端最近输出:\n{}",
+                    self.tail_text().await
+                )
+                .into());
+            }
             if tokio::time::Instant::now() >= deadline {
-                return Err("等待 BACKEND_READY marker 超时".into());
+                return Err(format!(
+                    "等待 BACKEND_READY marker 超时（{timeout:?}）。\n后端最近输出:\n{}",
+                    self.tail_text().await
+                )
+                .into());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// 诊断缓冲文本（最近 TAIL_LINES 行）。
+    async fn tail_text(&self) -> String {
+        let tail = self.output_tail.lock().await;
+        if tail.is_empty() {
+            "(无输出)".to_string()
+        } else {
+            tail.iter().cloned().collect::<Vec<_>>().join("\n")
         }
     }
 
@@ -206,8 +282,10 @@ async fn read_stdout_until_marker(
     expected_port: u16,
     expected_token: &str,
     current: &Arc<Mutex<Option<BackendInfo>>>,
+    tail: &Arc<Mutex<VecDeque<String>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut reader = BufReader::new(stdout).lines();
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
     let mut got_marker = false;
     let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
 
@@ -219,9 +297,20 @@ async fn read_stdout_until_marker(
                     return Err("marker 等待超时".into());
                 }
             }
-            line = reader.next_line() => {
-                match line {
-                    Ok(Some(text)) => {
+            n = read_line_lossy(&mut reader, &mut line) => {
+                match n {
+                    Ok(0) => {
+                        log::warn!("[sidecar] stdout EOF");
+                        return if got_marker {
+                            Ok(())
+                        } else {
+                            Err("stdout EOF 且未收到 marker".into())
+                        };
+                    }
+                    Ok(_) => {
+                        let text = line.trim_end_matches('\n').trim_end_matches('\r').to_string();
+                        line.clear();
+                        push_tail(tail, &text).await;
                         if !got_marker {
                             if let Some(rest) = text.strip_prefix(MARKER_PREFIX) {
                                 match parse_marker(rest, expected_port, expected_token) {
@@ -245,14 +334,6 @@ async fn read_stdout_until_marker(
                         }
                         log::info!("[backend:stdout] {text}");
                     }
-                    Ok(None) => {
-                        log::warn!("[sidecar] stdout EOF");
-                        return if got_marker {
-                            Ok(())
-                        } else {
-                            Err("stdout EOF 且未收到 marker".into())
-                        };
-                    }
                     Err(e) => {
                         log::error!("[sidecar] stdout 读取异常: {e}");
                         return Err(e.into());
@@ -261,6 +342,59 @@ async fn read_stdout_until_marker(
             }
         }
     }
+}
+
+/// 按行读取，遇到非 UTF-8 字节时用 `U+FFFD` 替换（lossy），避免后端输出
+/// 含 GBK/其它编码时 `BufReader::lines()` 直接报错导致诊断信息丢失。
+/// 返回本行写入的字节数（含换行符）；返回 0 表示 EOF。
+async fn read_line_lossy<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut BufReader<R>,
+    buf: &mut String,
+) -> std::io::Result<usize> {
+    let mut byte_buf = Vec::new();
+    // BufReader 已缓冲，直接按字节读到 '\n'，性能足够
+    loop {
+        let mut byte = [0u8; 1];
+        match reader.read(&mut byte).await? {
+            0 => {
+                if byte_buf.is_empty() {
+                    return Ok(0);
+                }
+                break;
+            }
+            _ => {
+                let got_newline = byte[0] == b'\n';
+                byte_buf.push(byte[0]);
+                if got_newline {
+                    break;
+                }
+            }
+        }
+    }
+    let text = String::from_utf8_lossy(&byte_buf);
+    buf.push_str(&text);
+    Ok(byte_buf.len())
+}
+
+/// 追加一行到诊断缓冲（保留最近 TAIL_LINES 行）。
+async fn push_tail(tail: &Arc<Mutex<VecDeque<String>>>, line: &str) {
+    let mut t = tail.lock().await;
+    if t.len() >= TAIL_LINES {
+        t.pop_front();
+    }
+    t.push_back(line.to_string());
+}
+
+/// marker 之前的 stderr 行是否为致命启动错误。
+fn is_fatal_error_line(line: &str) -> bool {
+    const PATTERNS: [&str; 5] = [
+        "Traceback (most recent call last)",
+        "ModuleNotFoundError",
+        "ImportError",
+        "DLL load failed",
+        "Failed to load Python DLL",
+    ];
+    PATTERNS.iter().any(|p| line.contains(p))
 }
 
 /// 解析 marker JSON：`{"port":8765,"token":"...","pid":12345}`。
@@ -309,9 +443,7 @@ async fn kill_process_tree(child: &mut Child) -> bool {
 
     #[cfg(windows)]
     {
-        // tokio::process::Command 在 Windows 上原生提供 creation_flags 方法
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
+        // CREATE_NO_WINDOW 已提升为模块级常量（backend spawn 复用）
         let result = Command::new("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .creation_flags(CREATE_NO_WINDOW)
@@ -374,7 +506,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// - BACKEND_EXTERNAL=1：Rust 不拉后端，连外部已启动的（PyCharm Debug 启动）
 ///   端口固定 8765，token 为空（dev 模式跳过校验）
 /// - BACKEND_DEV=1：Rust 拉 python -m uvicorn（PyCharm 断点不生效，不推荐）
-/// - 默认打包模式：找 backend_service exe
+/// - 默认打包模式：找 PyInstaller onedir 产物 backend_service/ 目录
 fn resolve_backend_command(
     port: u16,
     token: &str,
@@ -404,20 +536,41 @@ fn resolve_backend_command(
         return Ok((program, args));
     }
 
-    // 打包模式：找 backend_service exe（Tauri externalBin 约定带平台后缀）
+    // 打包模式：PyInstaller onedir 产物（backend_service/ 目录 + exe）
     let exe_name = if cfg!(windows) {
-        "backend_service-x86_64-pc-windows-msvc.exe"
-    } else if cfg!(target_os = "macos") {
-        "backend_service-x86_64-apple-darwin"
+        "backend_service.exe"
     } else {
-        "backend_service-x86_64-unknown-linux-gnu"
+        "backend_service"
     };
 
-    // 开发期 tauri dev：从项目根目录的 dist-sidecar/ 找
+    // 打包后（优先）：backend_service/ 目录经 tauri.conf.json bundle.resources 装到 exe 同级。
+    // 必须先于开发目录兜底判断，否则开发机上安装的正式包会偷偷运行 dist-sidecar 产物，
+    // 安装包本身的问题（资源缺失等）被完全掩盖。
+    let app_dir = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .parent()
+        .ok_or("无法定位 exe 目录")?
+        .to_path_buf();
+    let packaged = app_dir.join("backend_service").join(exe_name);
+    if packaged.exists() {
+        let args = vec![
+            "--host".to_string(),
+            "127.0.0.1".to_string(),
+            "--port".to_string(),
+            port.to_string(),
+            "--token".to_string(),
+            token.to_string(),
+        ];
+        return Ok((packaged.to_string_lossy().into_owned(), args));
+    }
+
+    // 开发期兜底（tauri dev / 直接运行 target 下的 exe）：
+    // 从项目根目录的 dist-sidecar/backend_service/ 找
     let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("dist-sidecar")
+        .join("backend_service")
         .join(exe_name);
     if dev_path.exists() {
         let args = vec![
@@ -431,25 +584,7 @@ fn resolve_backend_command(
         return Ok((dev_path.to_string_lossy().into_owned(), args));
     }
 
-    // 打包后：Tauri 把 externalBin 解压到 sidecar 资源目录
-    // Tauri 2：通过 sidecar 资源目录查找；这里用当前可执行文件所在目录兜底
-    let app_dir = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .parent()
-        .ok_or("无法定位 exe 目录")?
-        .to_path_buf();
-    let packaged = app_dir.join(exe_name);
-    if packaged.exists() {
-        let args = vec![
-            "--host".to_string(),
-            "127.0.0.1".to_string(),
-            "--port".to_string(),
-            port.to_string(),
-            "--token".to_string(),
-            token.to_string(),
-        ];
-        return Ok((packaged.to_string_lossy().into_owned(), args));
-    }
-
-    Err(format!("找不到后端可执行文件: {exe_name}（开发模式请设置 BACKEND_DEV=1）").into())
+    Err(format!(
+        "找不到后端可执行文件: backend_service/{exe_name}（请先执行 pyinstaller backend_service.spec --noconfirm --distpath dist-sidecar）"
+    ).into())
 }

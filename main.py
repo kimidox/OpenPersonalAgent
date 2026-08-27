@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import multiprocessing
 import sys
 
 
@@ -26,4 +27,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Windows 打包模式必须最先调用：multiprocessing spawn 的子进程（悬浮球）以
+    # `backend_service.exe --multiprocessing-fork ...` 重新拉起本 exe，
+    # freeze_support 会把控制权交给子进程入口；漏掉则子进程把该参数当普通
+    # CLI 参数再跑一遍后端 → argparse 报错退出（黑框一闪 + 悬浮球不出现）。
+    # dev 模式下是 no-op。
+    multiprocessing.freeze_support()
     main()

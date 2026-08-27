@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
+from contextlib import contextmanager
 from multiprocessing import Process, Queue, get_context
 from typing import Any
 
@@ -27,6 +29,47 @@ from floating_ball.floating_ball_ipc import (
 )
 from floating_ball.floating_ball_process import run_floating_ball_process
 from floating_ball.ipc_optimizer import BatchMessageSender, IPCPerformanceMonitor
+
+
+@contextmanager
+def _spawn_without_console():
+    """Windows 打包环境：multiprocessing spawn 期间注入 CREATE_NO_WINDOW。
+
+    backend_service.exe 由 Tauri 以 CREATE_NO_WINDOW 启动（自身无控制台），
+    而 popen_spawn_win32.Popen 以 flags=0 调 CreateProcess，Windows 会为
+    console 子系统 exe 新建控制台窗口 → 悬浮球子进程启动时黑框一闪。
+    multiprocessing 无公开参数可传 creationflags，因此临时替换
+    _winapi.CreateProcess：flags==0 时注入 CREATE_NO_WINDOW。
+    仅 sys.frozen（PyInstaller 打包）启用；开发模式父进程有控制台，
+    子进程继承终端输出，保持行为不变。作用域仅限本 with 块，
+    不影响其他 subprocess 调用（如用户主动打开应用）。
+    """
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        yield
+        return
+    try:
+        import _winapi
+    except ImportError:
+        yield
+        return
+
+    CREATE_NO_WINDOW = 0x08000000
+    _orig_create_process = _winapi.CreateProcess
+
+    def _create_process_no_console(*args, **kwargs):
+        # 签名：CreateProcess(app, cmd, proc_attrs, thread_attrs,
+        #                     inherit, creation_flags, env, cwd, startupinfo)
+        if len(args) >= 6 and args[5] == 0:
+            args = args[:5] + (CREATE_NO_WINDOW,) + args[6:]
+        elif kwargs.get("creation_flags") == 0:
+            kwargs["creation_flags"] = CREATE_NO_WINDOW
+        return _orig_create_process(*args, **kwargs)
+
+    _winapi.CreateProcess = _create_process_no_console
+    try:
+        yield
+    finally:
+        _winapi.CreateProcess = _orig_create_process
 
 
 class FloatingBallManager:
@@ -137,7 +180,9 @@ class FloatingBallManager:
             name="FloatingBallProcess",
             daemon=False,
         )
-        self._process.start()
+        # 打包环境防黑框：spawn 期间临时注入 CREATE_NO_WINDOW
+        with _spawn_without_console():
+            self._process.start()
 
         # 启动 IPC 轮询线程
         self._poll_thread = threading.Thread(

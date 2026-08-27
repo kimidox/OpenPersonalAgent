@@ -29,11 +29,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "icon": [
       "application.ico"
     ],
     "externalBin": [],
-    "resources": []
+    "resources": {
+      "../../dist-sidecar/backend_service": "backend_service/"
+    }
   }
 }

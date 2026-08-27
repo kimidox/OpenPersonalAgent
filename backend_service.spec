@@ -14,6 +14,8 @@
 - 悬浮球子进程（PySide6 + live2d-py）代码与后端打包在一起，
   FloatingBallManager 用 multiprocessing.Process spawn 子进程时
   会重新 import 本 exe，需 hiddenimports 覆盖。
+- 打包模式 multiprocessing 子进程分发依赖 main.py 入口的
+  freeze_support()（PyInstaller runtime hook 已替换其实现），不可移除。
 """
 
 import sys

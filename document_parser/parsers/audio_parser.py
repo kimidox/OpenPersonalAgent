@@ -139,6 +139,7 @@ class AudioParser(BaseParser):
             Path | None: 转换后的临时 WAV 文件路径，失败返回 None
         """
         import subprocess
+        import sys
 
         try:
             # 创建临时文件
@@ -148,6 +149,7 @@ class AudioParser(BaseParser):
             # -ar 16000: 采样率 16kHz
             # -ac 1: 单声道
             # -acodec pcm_s16le: 16-bit PCM 编码
+            # creationflags: 打包环境无控制台，防 ffmpeg 闪黑框
             result = subprocess.run(
                 [
                     "ffmpeg",
@@ -159,7 +161,10 @@ class AudioParser(BaseParser):
                     temp_path
                 ],
                 capture_output=True,
-                text=True
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if sys.platform == "win32"
+                else 0
             )
 
             if result.returncode != 0:

@@ -9,6 +9,7 @@
 
 mod sidecar;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -46,11 +47,8 @@ async fn restart_backend(state: tauri::State<'_, AppState>) -> Result<BackendInf
     let sidecar = state.sidecar.clone();
     let backend = state.backend.clone();
     sidecar.restart().await.map_err(|e| e.to_string())?;
-    // 等待新 marker
-    let info = sidecar
-        .wait_for_ready(std::time::Duration::from_secs(15))
-        .await
-        .map_err(|e| e.to_string())?;
+    // 等待新 marker（与首次启动一致：安装环境下后端初始化可能较慢）
+    let info = sidecar.wait_for_ready(sidecar::READY_TIMEOUT).await.map_err(|e| e.to_string())?;
     let mut b = backend.write().await;
     *b = info.clone();
     log::info!("[tauri] 后端已重启: {}", info.base_url);
@@ -155,13 +153,77 @@ fn parse_window_size_from_env() -> (f64, f64, f64, f64) {
     (width, height, min_width, min_height)
 }
 
+/// 日志双写 Writer：stderr（开发终端可见）+ tauri_shell.log（安装后无控制台，
+/// stderr 输出会全部丢失，落盘才能远程排查"后端没起来/黑框闪退"类问题）。
+struct TeeWriter {
+    file: Option<std::fs::File>,
+}
+
+impl std::io::Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stderr().write_all(buf);
+        if let Some(f) = self.file.as_mut() {
+            // 落盘失败不能影响日志流本身（磁盘满/权限），静默丢弃
+            let _ = f.write_all(buf);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(f) = self.file.as_mut() {
+            let _ = f.flush();
+        }
+        Ok(())
+    }
+}
+
+/// 打开外壳日志文件：与后端共用日志目录
+/// `%APPDATA%/OpenPersonalAgent/PersonalData/logs/tauri_shell.log`。
+/// 超过 5MB 时截断重开，防长期累积；目录不可用时返回 None（退化为纯 stderr）。
+fn open_shell_log_file() -> Option<(std::fs::File, PathBuf)> {
+    use std::path::Path;
+
+    let appdata = std::env::var("APPDATA").ok()?;
+    let log_dir = Path::new(&appdata)
+        .join("OpenPersonalAgent")
+        .join("PersonalData")
+        .join("logs");
+    std::fs::create_dir_all(&log_dir).ok()?;
+    let path = log_dir.join("tauri_shell.log");
+    let truncate = std::fs::metadata(&path)
+        .map(|m| m.len() > 5 * 1024 * 1024)
+        .unwrap_or(false);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(!truncate)
+        .truncate(truncate)
+        .open(&path)
+        .ok()?;
+    Some((file, path))
+}
+
+/// 初始化 env_logger：双写 stderr + tauri_shell.log。
+fn init_logging() {
+    let (file, path) = match open_shell_log_file() {
+        Some(v) => (Some(v.0), Some(v.1)),
+        None => (None, None),
+    };
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_secs()
+        .target(env_logger::Target::Pipe(Box::new(TeeWriter { file })))
+        .init();
+    match path {
+        Some(p) => log::info!("[tauri] 外壳日志文件: {}", p.display()),
+        None => log::warn!("[tauri] 日志文件创建失败，仅输出到 stderr"),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     load_dotenv();
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_secs()
-        .init();
+    init_logging();
 
     let (win_w, win_h, win_min_w, win_min_h) = parse_window_size_from_env();
     log::info!(
@@ -274,7 +336,7 @@ async fn start_sidecar(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     sidecar.start().await?;
     log::info!("[tauri] 等待 BACKEND_READY marker...");
-    let info = sidecar.wait_for_ready(std::time::Duration::from_secs(15)).await?;
+    let info = sidecar.wait_for_ready(sidecar::READY_TIMEOUT).await?;
     log::info!("[tauri] 后端就绪: {}", info.base_url);
 
     let mut b = backend.write().await;
@@ -322,7 +384,7 @@ async fn health_watch_loop(
                     log::error!("[tauri] 重启失败: {e}");
                     continue;
                 }
-                match sidecar.wait_for_ready(std::time::Duration::from_secs(15)).await {
+                match sidecar.wait_for_ready(sidecar::READY_TIMEOUT).await {
                     Ok(info) => {
                         let mut b = backend.write().await;
                         *b = info.clone();
@@ -377,7 +439,7 @@ async fn health_watch_loop(
                     }
                     restart_count += 1;
                     let _ = sidecar.restart().await;
-                    match sidecar.wait_for_ready(std::time::Duration::from_secs(15)).await {
+                    match sidecar.wait_for_ready(sidecar::READY_TIMEOUT).await {
                         Ok(info) => {
                             let mut b = backend.write().await;
                             *b = info.clone();
