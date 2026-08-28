@@ -50,6 +50,7 @@ from backend_service.routers import recording as recording_router
 from backend_service.routers import files as files_router
 from backend_service.routers import settings as settings_router
 from backend_service.routers import floating_ball as floating_ball_router
+from backend_service.routers import cli as cli_router
 from backend_service.schemas import HealthResponse, ReadyResponse
 
 
@@ -321,6 +322,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     app.include_router(files_router.router)
     app.include_router(settings_router.router)
     app.include_router(floating_ball_router.router)
+    app.include_router(cli_router.router)
     app.include_router(ws_router.router)
 
     return app

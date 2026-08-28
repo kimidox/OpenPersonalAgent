@@ -77,6 +77,15 @@ export interface SkillSummary {
   is_disabled: boolean;
 }
 
+export interface CliPackageSummary {
+  name: string;
+  version: string;
+  description: string;
+  entry: string;
+  install_dir: string;
+  commands: Array<{ usage: string; desc: string }>;
+}
+
 export interface LLMConfigItem {
   id: string | null;
   name: string;

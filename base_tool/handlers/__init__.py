@@ -74,8 +74,11 @@ def _auto_register_all() -> None:
         run_command,
         scheduled_tasks,
         uploaded_files,
+        read_uploaded_file,
         hotkey,
         skill_management,
+        cli_package,
+        prompt_override,
     )
 
 

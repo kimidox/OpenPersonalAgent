@@ -443,8 +443,10 @@ class FloatingBallManager:
             return
 
         try:
+            # 悬浮球是轻量聊天入口，创建"聊天会话"而非"智能体会话"
+            # （后者含技能目录/复杂规划等 agent 行为，适合主窗口）
             conversation_id, _title = self._skill_agent.start_new_conversation(
-                conversation_type="agent_conversation",
+                conversation_type="human_chat_conversation",
             )
         except Exception as e:
             self._logger.exception(f"悬浮球创建会话失败: {e}")

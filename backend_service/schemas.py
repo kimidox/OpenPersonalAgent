@@ -50,6 +50,8 @@ class SendMessageRequest(BaseModel):
     """
     query: str = Field(..., min_length=1)
     enable_thinking: bool = False
+    # deprecated: 文件内容改由 query 中 <File:fid/> 占位符 + 后端持久层注入，
+    # 此字段仅为旧客户端兼容保留，收到时仍走 _consume_uploaded_files_content
     uploaded_files_content: str | dict | None = None
     queued_ok: bool = True
     source: Literal["main", "floating_ball", "scheduler"] = "main"

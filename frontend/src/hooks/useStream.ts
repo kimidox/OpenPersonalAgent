@@ -80,8 +80,10 @@ interface UseStreamOptions {
     thinking: string;
     toolCalls: ToolCallInfo[];
   }) => void;
-  // 工具执行结果通知外部追加独立 tool 卡片
-  onToolResult?: (content: string, kind: string) => void;
+  // 工具执行结果通知外部追加独立 tool 卡片；
+  // insertBefore=true 表示该结果先于本 run 首个 turn.start 到达
+  // （运行时确认续跑的 confirm 分支结果），应插到流式卡片之前保持时间顺序
+  onToolResult?: (content: string, kind: string, insertBefore?: boolean) => void;
 }
 
 export function useStream(options: UseStreamOptions): UseStreamReturn {
@@ -232,8 +234,10 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
   const handleToolResult = useCallback(
     (event: WSEvent<ToolResultData>) => {
       if (state.runId !== event.run_id) return;
-      // 工具结果作为独立卡片外抛，不再折叠进 assistant 卡片的 toolCalls
-      onToolResult?.(event.data.content, event.data.kind);
+      // 工具结果作为独立卡片外抛，不再折叠进 assistant 卡片的 toolCalls；
+      // run 内尚无 turn.start（turnCount===0）说明这是运行时确认续跑的
+      // confirm 分支结果，先于模型推理到达，需插到空白流式卡片之前
+      onToolResult?.(event.data.content, event.data.kind, turnCountRef.current === 0);
     },
     [state.runId, onToolResult],
   );

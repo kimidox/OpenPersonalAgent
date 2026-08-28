@@ -60,6 +60,7 @@ class RunContext:
     source: RunSource
     query: str
     enable_thinking: bool = False
+    # deprecated: 文件内容改由 query 占位符 + 持久层注入，仅旧客户端兼容保留
     uploaded_files_content: str | dict | None = None
     # 由 RunCoordinator 在启动 worker 前注入
     stop_event: threading.Event = field(default_factory=threading.Event)

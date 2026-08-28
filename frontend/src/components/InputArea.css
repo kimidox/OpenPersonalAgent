@@ -13,6 +13,7 @@
   margin: 0;
   padding: 0 8px;
   box-sizing: border-box;
+  position: relative;
 }
 
 .attachments-list {
@@ -55,6 +56,46 @@
 .attachment-remove:hover {
   background: var(--accent);
   color: white;
+}
+
+/* 「/」强制引用占位 chip：显示 Skill 名称 / CLI 名称，发送时还原为标记 */
+.slash-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 12px;
+  background: rgba(139, 92, 246, 0.12);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: #8b5cf6;
+  font-weight: 500;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+}
+
+.slash-ref-chip .attachment-remove {
+  background: rgba(139, 92, 246, 0.15);
+  color: #8b5cf6;
+}
+
+.slash-ref-chip .attachment-remove:hover {
+  background: #8b5cf6;
+  color: white;
+}
+
+.slash-ref-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.slash-ref-chip.skill .slash-ref-icon {
+  fill: #8b5cf6;
+}
+
+.slash-ref-chip.cli .slash-ref-icon {
+  fill: none;
+  stroke: #8b5cf6;
+  stroke-width: 1.5;
 }
 
 .input-text {

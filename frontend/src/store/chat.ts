@@ -19,9 +19,12 @@ export interface DisplayMessage {
   // 本地生成的唯一 id（用于 React key）
   localId: string;
   role: "user" | "assistant" | "system" | "tool";
-  // 用户消息：可能含 <Files> 标签的完整 query（渲染时由 MessageItem 解析剥离）；
-  // assistant 消息：分 thinking / content / toolCalls 三段；tool 消息：工具结果文本
+  // 用户消息：可能含 <Skill:id/> / <File:fid/> / <Cli:name/> 占位符的完整 query
+  // （渲染时由 MessageItem 解析剥离）；assistant 消息：分 thinking / content /
+  // toolCalls 三段；tool 消息：工具结果文本
   content: string;
+  // 消息元数据（来自后端 ext：forced_refs / files / type 等），引用 chip 渲染依据
+  metadata?: Record<string, unknown>;
   thinking?: string;
   toolCalls?: { raw: string; result?: unknown; done: boolean }[];
   // tool 结果卡片的来源 kind（base_tool / tool）
@@ -54,14 +57,16 @@ interface ChatState {
   clearMessages: () => void;
 
   // 实时消息操作（由 useStream 调用）
-  appendUserMessage: (content: string) => void;
+  appendUserMessage: (content: string, metadata?: Record<string, unknown>) => void;
   startAssistantMessage: (runId: string) => void;
   // 开启下一轮 assistant 卡片（模型新一轮发言前调用）
   newAssistantMessage: () => void;
   updateAssistantMessage: (patch: Partial<DisplayMessage>) => void;
   completeAssistantMessage: () => void;
-  // 追加一条独立的工具结果卡片
-  appendToolResultMessage: (content: string, kind?: string) => void;
+  // 追加一条独立的工具结果卡片；
+  // insertBefore=true 时插到最后一张流式卡片之前（运行时确认续跑的
+  // confirm 分支结果先于本 run 首个 turn.start 到达，需保持时间顺序）
+  appendToolResultMessage: (content: string, kind?: string, insertBefore?: boolean) => void;
   // 清除所有消息的 awaitingUser 标记（用户回复 ask_user 后隐藏卡片）
   clearAwaitingUser: () => void;
   setMessages: (msgs: DisplayMessage[]) => void;
@@ -83,7 +88,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ loadingConversations: true, error: null });
     try {
       const conversations = await api.listConversations();
-      set({ conversations, loadingConversations: false });
+      set((s) => {
+        // 后端可能用首条 query 更新了标题，同步当前会话的详情
+        const cur = s.currentConversation;
+        const refreshed = cur
+          ? conversations.find((c) => c.conversation_id === cur.conversation_id)
+          : undefined;
+        return {
+          conversations,
+          loadingConversations: false,
+          currentConversation:
+            cur && refreshed ? { ...cur, title: refreshed.title } : cur,
+        };
+      });
     } catch (err) {
       const msg = err instanceof APIError ? err.message : String(err);
       set({ loadingConversations: false, error: `加载会话列表失败：${msg}` });
@@ -195,6 +212,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           localId: nextLocalId(),
           role,
           content: contentStr,
+          metadata: (m.metadata as Record<string, unknown> | undefined) ?? undefined,
           timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
         });
       }
@@ -255,14 +273,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   clearMessages: () => set({ messages: [] }),
 
-  appendUserMessage: (content) => {
+  appendUserMessage: (content: string, metadata?: Record<string, unknown>) => {
     set((s) => ({
       messages: [
         ...s.messages,
         {
           localId: nextLocalId(),
-          role: "user",
+          role: "user" as const,
           content,
+          metadata,
           timestamp: Date.now(),
         },
       ],
@@ -335,19 +354,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
-  appendToolResultMessage: (content, kind) => {
-    set((s) => ({
-      messages: [
-        ...s.messages,
-        {
-          localId: nextLocalId(),
-          role: "tool",
-          content,
-          toolResultKind: kind,
-          timestamp: Date.now(),
-        },
-      ],
-    }));
+  appendToolResultMessage: (content, kind, insertBefore) => {
+    set((s) => {
+      const toolMsg: DisplayMessage = {
+        localId: nextLocalId(),
+        role: "tool",
+        content,
+        toolResultKind: kind,
+        timestamp: Date.now(),
+      };
+      if (!insertBefore) {
+        return { messages: [...s.messages, toolMsg] };
+      }
+      // 运行时确认续跑：结果先于首个 turn.start 到达，
+      // 插到最后一张流式卡片之前，保持时间顺序
+      const messages = [...s.messages];
+      let insertAt = messages.length;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].isStreaming) {
+          insertAt = i;
+          break;
+        }
+      }
+      messages.splice(insertAt, 0, toolMsg);
+      return { messages };
+    });
   },
 
   clearAwaitingUser: () => {

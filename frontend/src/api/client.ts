@@ -11,6 +11,7 @@ import type {
   AgentStatus,
   AutostartResponse,
   BaseInfoResponse,
+  CliPackageSummary,
   ConfigValueResponse,
   ConstraintsResponse,
   ConversationDetail,
@@ -274,6 +275,11 @@ export const api = {
     request<void>(`/api/skills/${skillId}`, { method: "DELETE" }),
   installSkill: (file: File) =>
     uploadFile<InstallSkillResponse>("/api/skills/install", file),
+
+  // -------------------------------------------------------------------
+  // CLI 包
+  // -------------------------------------------------------------------
+  listCliPackages: () => request<CliPackageSummary[]>("/api/cli"),
 
   // -------------------------------------------------------------------
   // LLM 配置

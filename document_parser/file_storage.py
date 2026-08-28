@@ -583,6 +583,251 @@ def cleanup_old_images(days: int = None) -> dict:
     except Exception as e:
         logger.error(f"清理图片文件时发生错误: {e}")
         return {
-            "deleted_count": deleted_count,
-            "total_size": total_size,
+            "deleted_count": 0,
+            "total_size": 0,
         }
+
+
+# =====================================================================
+# 持久化上传文件存储（会话引用的权威文件层）
+# =====================================================================
+# 与临时 FileStorage 的区别：
+# - 固定目录（PersonalData/uploads），跨进程重启可用
+# - manifest.json 磁盘索引：file_id -> 元数据
+# - 解析文本 sidecar（<file_id>.txt），供 read_uploaded_file 工具与
+#   占位符注入懒加载，避免每轮重复解析
+# 仅使用标准库 + document_parser.parser_factory（懒导入）。
+
+_UPLOADS_MANIFEST = "manifest.json"
+
+
+def _get_uploads_storage() -> Path:
+    """返回持久化上传目录（PersonalData/uploads），不存在时创建。"""
+    from logger import get_module_logger
+
+    logger = get_module_logger("file_storage")
+    from config import WORKER_DIR
+
+    uploads_dir = Path(WORKER_DIR) / "uploads"
+    if not uploads_dir.exists():
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"创建上传文件存储目录: {uploads_dir}")
+    return uploads_dir
+
+
+def _load_uploads_manifest() -> dict[str, Any]:
+    """读取 manifest；损坏时返回空 dict（自愈为空索引）。"""
+    manifest_path = _get_uploads_storage() / _UPLOADS_MANIFEST
+    if not manifest_path.exists():
+        return {}
+    import json
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_uploads_manifest(manifest: dict[str, Any]) -> None:
+    """原子写入 manifest（先写 .tmp 再 os.replace）。"""
+    import json
+
+    manifest_path = _get_uploads_storage() / _UPLOADS_MANIFEST
+    tmp_path = manifest_path.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, manifest_path)
+
+
+def save_upload(
+    data: bytes,
+    original_name: str,
+    mime_type: Optional[str] = None,
+    parsed_text: Optional[str] = None,
+) -> dict[str, Any]:
+    """持久化保存上传文件，返回含 file_id 的元数据字典。
+
+    Args:
+        data: 文件字节数据
+        original_name: 原始文件名
+        mime_type: MIME 类型（可选）
+        parsed_text: 解析文本（可选，持久化为 sidecar 供懒加载）
+
+    Returns:
+        {"file_id", "file_name"(原始名), "file_path", "file_size", "mime_type"}
+    """
+    from logger import get_module_logger
+
+    logger = get_module_logger("file_storage")
+
+    uploads_dir = _get_uploads_storage()
+    file_id = uuid.uuid4().hex
+    stored_name = f"{file_id}_{original_name}"
+    file_path = uploads_dir / stored_name
+
+    with open(file_path, "wb") as f:
+        f.write(data)
+
+    if parsed_text is not None:
+        with open(uploads_dir / f"{file_id}.txt", "w", encoding="utf-8") as f:
+            f.write(parsed_text)
+
+    manifest = _load_uploads_manifest()
+    manifest[file_id] = {
+        "file_id": file_id,
+        "file_name": original_name,
+        "stored_name": stored_name,
+        "file_size": len(data),
+        "mime_type": mime_type,
+        "created_at": datetime.now().isoformat(),
+        "has_parsed_text": parsed_text is not None,
+    }
+    _save_uploads_manifest(manifest)
+    logger.info(
+        f"上传文件已持久化: {original_name} (file_id: {file_id}, "
+        f"大小: {len(data)} 字节, 含解析文本: {parsed_text is not None})"
+    )
+    return {
+        "file_id": file_id,
+        "file_name": original_name,
+        "file_path": str(file_path),
+        "file_size": len(data),
+        "mime_type": mime_type,
+    }
+
+
+def get_upload_info(file_id: str) -> Optional[dict[str, Any]]:
+    """查询上传文件元数据；不存在返回 None。"""
+    return _load_uploads_manifest().get(file_id)
+
+
+def persist_parsed_text(file_id: str, parsed_text: str) -> None:
+    """把解析文本写入 sidecar 并更新 manifest（静默失败，仅记录日志）。"""
+    from logger import get_module_logger
+
+    logger = get_module_logger("file_storage")
+    try:
+        uploads_dir = _get_uploads_storage()
+        with open(uploads_dir / f"{file_id}.txt", "w", encoding="utf-8") as f:
+            f.write(parsed_text)
+        manifest = _load_uploads_manifest()
+        if file_id in manifest:
+            manifest[file_id]["has_parsed_text"] = True
+            _save_uploads_manifest(manifest)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"持久化解析文本失败: {file_id} - {e}")
+
+
+def _parse_stored_file(file_path: Path) -> str:
+    """用 parser_factory 解析文件并返回文本（失败时返回错误提示文本）。"""
+    from logger import get_module_logger
+
+    logger = get_module_logger("file_storage")
+    try:
+        from document_parser.parser_factory import parse_file
+
+        result = parse_file(file_path)
+        return (getattr(result, "content", None) or "").strip()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"解析上传文件失败: {file_path.name} - {e}")
+        return f"[解析失败: {e}]"
+
+
+def get_uploaded_text(file_id: str, *, reparse_if_missing: bool = True) -> Optional[str]:
+    """获取上传文件的解析文本（懒加载）。
+
+    优先读 sidecar（<file_id>.txt）；不存在且允许时用 parser_factory
+    重新解析并持久化 sidecar。文件不存在返回 None。
+
+    Args:
+        file_id: 上传文件 ID
+        reparse_if_missing: sidecar 缺失时是否重新解析并写回
+
+    Returns:
+        解析文本；文件不存在返回 None
+    """
+    from logger import get_module_logger
+
+    logger = get_module_logger("file_storage")
+
+    info = get_upload_info(file_id)
+    if info is None:
+        return None
+
+    uploads_dir = _get_uploads_storage()
+    sidecar = uploads_dir / f"{file_id}.txt"
+    if sidecar.exists():
+        with open(sidecar, "r", encoding="utf-8") as f:
+            return f.read()
+
+    file_path = uploads_dir / info.get("stored_name", "")
+    if not file_path.exists():
+        logger.warning(f"上传文件已丢失: {info.get('file_name')} ({file_id})")
+        return None
+
+    if not reparse_if_missing:
+        return None
+
+    # 懒解析并写回 sidecar（下次直接命中）
+    text = _parse_stored_file(file_path)
+    try:
+        with open(sidecar, "w", encoding="utf-8") as f:
+            f.write(text)
+        manifest = _load_uploads_manifest()
+        if file_id in manifest:
+            manifest[file_id]["has_parsed_text"] = True
+            _save_uploads_manifest(manifest)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"写回解析 sidecar 失败: {file_id} - {e}")
+    return text
+
+
+def get_upload_base64_url(file_id: str) -> Optional[str]:
+    """读取上传文件的原始字节并编码为 data URL（供多模态消息使用）。
+
+    Args:
+        file_id: 上传文件 ID
+
+    Returns:
+        data:{mime};base64,... 格式的 URL；文件不存在返回 None
+    """
+    import base64
+
+    info = get_upload_info(file_id)
+    if info is None:
+        return None
+    file_path = _get_uploads_storage() / info.get("stored_name", "")
+    if not file_path.exists():
+        return None
+    with open(file_path, "rb") as f:
+        data = f.read()
+    mime = info.get("mime_type") or "application/octet-stream"
+    return f"data:{mime};base64,{base64.b64encode(data).decode('utf-8')}"
+
+
+def delete_upload(file_id: str) -> bool:
+    """删除上传文件（原始文件 + sidecar + manifest 条目）。"""
+    manifest = _load_uploads_manifest()
+    info = manifest.pop(file_id, None)
+    if info is None:
+        return False
+    uploads_dir = _get_uploads_storage()
+    for name in (info.get("stored_name", ""), f"{file_id}.txt"):
+        p = uploads_dir / name
+        if name and p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+    _save_uploads_manifest(manifest)
+    return True
+
+
+def list_uploads() -> list[dict[str, Any]]:
+    """列出全部持久化上传文件元数据（按创建时间倒序）。"""
+    manifest = _load_uploads_manifest()
+    items = [v for v in manifest.values() if isinstance(v, dict)]
+    items.sort(key=lambda x: str(x.get("created_at", "")), reverse=True)
+    return items

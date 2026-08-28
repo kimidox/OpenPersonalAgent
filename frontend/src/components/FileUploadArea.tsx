@@ -18,9 +18,9 @@ export default function FileUploadArea({ onUploaded, disabled }: Props) {
     setError(null);
     try {
       const data = await api.uploadFile(file);
-      // 注意：不再在这里调用 api.setUploadedContent()。
-      // 文件解析文本应随本次用户消息一起通过 sendMessage.uploaded_files_content 发送，
-      // 避免残留在 SkillAgent 单例中污染其他会话。
+      // 注意：不再调用 api.setUploadedContent()，也不回传 parsed_text。
+      // 上传即持久化（manifest + sidecar），发送时由后端按 query 中
+      // <File:fid/> 占位符懒加载注入，避免内容残留在 SkillAgent 单例。
       const summary =
         data.parsed_pages > 0
           ? `📎 ${data.original_name}（${data.parsed_pages} 页）`

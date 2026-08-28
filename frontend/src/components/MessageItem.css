@@ -17,7 +17,7 @@
   padding: 12px 16px;
   border-radius: var(--radius-lg);
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.15;
   word-break: break-word;
   box-shadow: var(--shadow-sm);
 }

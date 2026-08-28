@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatStore, type DisplayMessage } from "@/store/chat";
 import { api, APIError } from "@/api/client";
+import { getBaseUrl, isTauri } from "@/api/backend";
 import { WSClient } from "@/api/ws";
 import { useStream, type ToolCallInfo } from "@/hooks/useStream";
 import type { FileAttachment } from "@/types/api";
-import { buildQueryWithFiles } from "@/utils/fileTags";
+import { buildLocalForcedRefs, buildQueryWithFileRefs } from "@/utils/fileTags";
 import ConversationSidebar from "./ConversationSidebar";
 import MessageList from "./MessageList";
 import InputArea from "./InputArea";
@@ -40,10 +41,24 @@ export default function ChatPage() {
   const [ws, setWs] = useState<WSClient | null>(null);
 
   // 初始化：加载会话列表
+  // Tauri 打包模式下后端 sidecar 可能尚未就绪（baseUrl 未注入，backend-ready 事件稍后才到），
+  // 此时请求必然失败且无人重试（切到设置页再返回会因组件重挂载而恢复）。
+  // 这里轮询等待 baseUrl 注入后再加载，消除启动竞态。
   useEffect(() => {
-    loadConversations();
+    if (!isTauri() || getBaseUrl()) {
+      loadConversations();
+      return;
+    }
+    const timer = setInterval(() => {
+      if (getBaseUrl()) {
+        clearInterval(timer);
+        loadConversations();
+      }
+    }, 500);
+    return () => clearInterval(timer);
   }, [loadConversations]);
 
+  // run 结束后刷新会话列表：后端会用会话首条 query 更新默认标题
   // handleSend 必须在 useStream 之前定义（useStream 的 onSendMessage 依赖它）
   const handleSend = useCallback(
     async (query: string, attachments?: FileAttachment[]) => {
@@ -58,10 +73,11 @@ export default function ChatPage() {
       // 回复 ask_user 时清除旧消息的 awaitingUser 标记，隐藏待回复卡片
       clearAwaitingUser();
 
-      // 构造带 <Files> 标签的完整 query：文件内容嵌入标签内
-      const fullQuery = buildQueryWithFiles(query, attachments);
-      // store 中存完整 query（含标签），渲染时由 MessageItem 解析剥离
-      appendUserMessage(fullQuery);
+      // 构造带占位符的完整 query：附件以 <File:fid/> 追加在 query 尾部，
+      // 文件内容不回传（后端持久层懒加载，发送时注入）
+      const fullQuery = buildQueryWithFileRefs(query, attachments);
+      // store 中存完整 query（含占位符），渲染时由 MessageItem 解析剥离
+      appendUserMessage(fullQuery, buildLocalForcedRefs(attachments) ?? undefined);
 
       try {
         const resp = await api.sendMessage(currentConversationId, {
@@ -112,6 +128,8 @@ export default function ChatPage() {
             role: (m.role as "user" | "assistant" | "system" | "tool") ?? "assistant",
             content:
               typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+            // user 消息的 forced_refs 元数据：引用 chip 渲染依据
+            metadata: (m.metadata as Record<string, unknown> | undefined) ?? undefined,
             timestamp: m.timestamp
               ? new Date(m.timestamp).getTime()
               : Date.now(),
@@ -146,8 +164,8 @@ export default function ChatPage() {
   );
 
   const handleToolResult = useCallback(
-    (content: string, kind: string) => {
-      appendToolResultMessage(content, kind);
+    (content: string, kind: string, insertBefore?: boolean) => {
+      appendToolResultMessage(content, kind, insertBefore);
     },
     [appendToolResultMessage],
   );
@@ -160,6 +178,15 @@ export default function ChatPage() {
       onToolResult: handleToolResult,
     });
 
+  // run 结束后刷新会话列表：后端会用会话首条 query 更新默认标题
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    if (prevRunningRef.current && !runState.isRunning) {
+      loadConversations().catch(() => {});
+    }
+    prevRunningRef.current = runState.isRunning;
+  }, [runState.isRunning, loadConversations]);
+
   // 把 run 状态同步到 store 的 assistant 消息
   // 用 ref 跟踪已同步的 runId/content/thinking，避免相同内容重复同步触发无限循环
   const lastSyncRef = useRef<{
@@ -171,8 +198,19 @@ export default function ChatPage() {
   useEffect(() => {
     if (!runState.runId) return;
     const storeMessages = useChatStore.getState().messages;
-    const last = storeMessages[storeMessages.length - 1];
-    if (!last || !last.isStreaming) return;
+    // 从后向前查找流式卡片（与 updateAssistantMessage/completeAssistantMessage
+    // 的定位逻辑一致）：运行时确认续跑（如依赖安装确认）中，confirm 分支的
+    // tool.result 会先于首个 turn.start 追加到流式卡片之后，最后一条消息
+    // 可能是 tool 卡片。若只检查 messages[last] 会提前 return，导致续跑的
+    // 推理内容和 awaitingUser 标记全部丢失（表现为确认安装后推理"立即停止"）。
+    let hasStreamingCard = false;
+    for (let i = storeMessages.length - 1; i >= 0; i--) {
+      if (storeMessages[i].isStreaming) {
+        hasStreamingCard = true;
+        break;
+      }
+    }
+    if (!hasStreamingCard) return;
 
     // 新 run 启动时重置同步标记
     if (lastSyncRef.current.runId !== runState.runId) {

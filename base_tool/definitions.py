@@ -70,6 +70,11 @@ TOOL_CATALOG = {
     "list_scheduled_tasks": "列出定时任务。",
     "delete_scheduled_task": "删除定时任务。",
     "uploaded_files": "管理已上传文件。支持三种操作：list(列出文件)、get_content(获取内容)、get_metadata(获取元信息)。",
+    "read_uploaded_file": "按 file_id 读取用户上传文件的解析文本（持久层，跨会话可用）。历史消息中的「用户曾上传文件」短标记需用此工具获取内容。",
+    "install_skill_from_zip": "从 ZIP 压缩包安装 Skill 包。",
+    "install_cli_package": "从含 cli.json 清单的 ZIP 压缩包安装 CLI 包。",
+    "list_cli_packages": "列出所有已安装的 CLI 包及其用法。",
+    "update_prompt": "读取或修改工具的描述提示词（自优化）。支持 list/read/write/reset/rollback 五种操作。",
 }
 
 CONTROL_TOOL_DEFINITIONS: list[dict] = [
@@ -531,6 +536,26 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "read_uploaded_file",
+        "description": (
+            "按 file_id 读取用户上传文件的解析文本（持久层，跨会话可用）。\n"
+            "使用场景：\n"
+            "- 历史消息中出现「用户曾上传文件「xxx」，需要内容时调用 read_uploaded_file 工具获取」提示\n"
+            "- 用户追问先前上传文件的具体内容\n"
+            "参数：file_id(必需)，上传文件 ID（用户消息短标记中括号内给出）。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_id": {
+                    "type": "string",
+                    "description": "上传文件 ID（用户消息短标记中括号内给出，形如 file_id: xxx）"
+                }
+            },
+            "required": ["file_id"]
+        },
+    },
+    {
         "name": "install_skill_from_zip",
         "description": (
             "从 ZIP 压缩包安装 Skill。\n"
@@ -554,6 +579,96 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             },
             "required": ["zip_path"]
         },
+    },
+    {
+        "name": "install_cli_package",
+        "description": (
+            "从 ZIP 压缩包安装 CLI 包（ZIP 中必须包含 cli.json 清单文件）。\n"
+            "cli.json 规范：name(必填，包名)、entry(必填，入口文件相对路径)、"
+            "version/description(可选)、commands(可选，命令用法列表)。\n"
+            "安装到用户数据目录 CLI/ 下，安装后可通过 run_command 按入口文件调用。\n"
+            "参数：zip_path(必需，ZIP文件路径)、overwrite(可选，是否覆盖已存在的同名包，默认false)。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "zip_path": {
+                    "type": "string",
+                    "description": "ZIP 包文件的绝对路径或相对于工作目录的路径"
+                },
+                "overwrite": {
+                    "type": "string",
+                    "description": "是否覆盖已存在的同名 CLI 包。可选值：true、false（默认 false）"
+                }
+            },
+            "required": ["zip_path"]
+        },
+    },
+    {
+        "name": "list_cli_packages",
+        "description": (
+            "列出所有已安装的 CLI 包及其用法说明。\n"
+            "返回包名、版本、描述、安装目录、入口文件和可用命令列表。\n"
+            "无需参数。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        },
+    },
+    {
+        "name": "update_prompt",
+        "description": (
+            "读取或修改工具的描述提示词，实现提示词自优化。\n"
+            "每个工具的 description 保存在 PersonalData/prompts/tools/{tool_name}.md，"
+            "修改立即生效并持久化，修改前的版本自动快照为 .bak。\n"
+            "操作类型：\n"
+            "- list: 列出所有可优化的工具及覆盖状态（无需 tool_name）\n"
+            "- read: 查看指定工具当前生效的完整 description\n"
+            "- write: 保存优化后的 description（正文第一行将作为工具目录中的简要描述）\n"
+            "- reset: 恢复指定工具的出厂默认描述\n"
+            "- rollback: 回滚到上一次修改前的版本\n"
+            "使用场景：\n"
+            "- 总结工具调用失败经验，把错误案例和修正规范沉淀进工具描述\n"
+            "- 精简冗长的工具描述以降低 token 消耗\n"
+            "- 用户明确要求调整工具的使用规范\n"
+            "参数：action(必需，list/read/write/reset/rollback)、tool_name(必需，除list外)、content(必需，仅write)。\n\n"
+            "【write 内容规范】\n"
+            "- content 为 description 正文，不要包含 <!-- --> 注释头（系统自动添加）\n"
+            "- 第一行必须是该工具的一句话功能简介（会展示在工具目录中）\n"
+            "- 后续行可包含使用规范、正误示例等；保持原有语言（默认中文）\n"
+            "- 不要虚构工具不存在的参数或能力；参数 schema 不可被修改\n"
+            "- 保存前建议先 read 当前版本，在其基础上优化而非凭空重写\n\n"
+            "✅ 正确示例：\n"
+            "1. update_prompt(action=\"read\", tool_name=\"run_command\")\n"
+            "2. update_prompt(action=\"write\", tool_name=\"run_command\", content=\"执行 Python 或 PowerShell 命令。\\n【规范】...\")\n"
+            "3. update_prompt(action=\"rollback\", tool_name=\"edit\")\n\n"
+            "❌ 错误示例：\n"
+            "错误1: update_prompt(action=\"write\", tool_name=\"run_command\", content=\"\")\n"
+            "原因：content 不能为空\n\n"
+            "错误2: update_prompt(action=\"read\")\n"
+            "原因：read 需要 tool_name 参数"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "read", "write", "reset", "rollback"],
+                    "description": "操作类型：list列出工具、read查看描述、write保存优化、reset恢复默认、rollback回滚上次修改"
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "目标工具名称（action=list 时不需要）。可用工具名可通过 action=list 获取"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "新的 description 正文（仅 action=write 时需要）。第一行为一句话功能简介，后续行可含使用规范与示例"
+                }
+            },
+            "required": ["action"]
+        },
     }
 ]
 
@@ -574,10 +689,23 @@ def get_all_tool_definitions_from_registry() -> list[dict]:
             - parameters: 参数定义（OpenAI function calling格式）
     """
     from .registry import get_tool_registry
-    
+
     registry = get_tool_registry()
-    
+
     # 获取注册表中的所有工具定义
     all_definitions = registry.get_all_tool_definitions()
-    
+
     return all_definitions
+
+
+# ---------------------------------------------------------------------------
+# 工具描述覆盖层：应用用户数据目录下的描述覆盖（PersonalData/prompts/tools/*.md）
+# 就地修改本模块常量，所有消费方（BaseChatModel/stream_parser/dispatch 等）
+# 因持有同一批 list/dict 引用而自动生效。详见 prompt_overrides.py 模块说明。
+# ---------------------------------------------------------------------------
+try:
+    from .prompt_overrides import apply_tool_overrides as _apply_tool_overrides
+
+    _apply_tool_overrides()
+except Exception:  # 覆盖层加载失败不影响启动，静默回退内置默认描述
+    pass

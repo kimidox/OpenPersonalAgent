@@ -194,7 +194,13 @@ class StreamBridge:
             # 设置会话上下文
             agent.set_conversation_id(ctx.conversation_id)
             agent.set_enable_thinking(ctx.enable_thinking)
-            # 文件内容已通过 <Files> 标签嵌入 query 中，无需单独设置
+            # 会话首条 query 到达时，用 query 内容替换默认标题
+            try:
+                agent.maybe_set_conversation_title(ctx.query)
+            except Exception:  # noqa: BLE001
+                pass
+            # 文件内容已通过 query 中 <File:fid/> 占位符标记，
+            # 由 _agent._extract_refs 从持久层懒加载注入，无需单独设置
             # 调用主入口
             return agent.run(
                 ctx.query,

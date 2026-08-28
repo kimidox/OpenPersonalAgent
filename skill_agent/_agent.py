@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import uuid
 from dataclasses import asdict
@@ -135,6 +136,8 @@ class SkillAgent:
         self._consecutive_repeat_count: int = 0
         # 存储上传文件的结构化数据：{"text_content": str, "images": list}
         self._uploaded_files_content: dict = {"text_content": "", "images": []}
+        # 当前轮强制引用的 ext 元数据（forced_refs），持久化时一次性消费
+        self._pending_user_refs: list[dict[str, Any]] = []
         self._enable_thinking: bool = False
         self._step_plan: list[dict] = []
         self._current_step: int = 0
@@ -530,6 +533,35 @@ class SkillAgent:
 
         return (self._conversation_id, title)
 
+    def maybe_set_conversation_title(self, query: str) -> None:
+        """会话首条 query 到达时，用 query 内容替换默认标题（会话 ID 前缀）。
+
+        仅当会话尚无消息记录时生效，不覆盖用户手动命名的标题。
+        标题取 query 首行，剥离 <Files> 等文件标签与 <Skill:id/>、
+        <File:id/>、<Cli:name/> 占位符，超长由前端渲染时截断。
+        """
+        if self.memory is None or not self._conversation_id:
+            return
+        try:
+            if self.memory.count_messages(self._conversation_id) > 0:
+                return
+            cleaned = re.sub(r"<Files>.*?</Files>", "", query or "", flags=re.S).strip()
+            # 剥离 /skill:id /cli:name 等命令前缀（标题中不展示引用编码）
+            cleaned = re.sub(r"(?:^|\s)\/(skill|cli):[A-Za-z0-9_\-]+", " ", cleaned)
+            # 剥离占位符（无 ext 背书判断：title 场景宁可多剥，不出现在标题里）
+            cleaned = re.sub(r"<(?:Skill|File|Cli):[A-Za-z0-9_\-]+/>", " ", cleaned)
+            cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+            first_line = cleaned.splitlines()[0].strip() if cleaned else ""
+            if not first_line:
+                return
+            title = first_line[:30]
+            self.memory.update_conversation_title(self._conversation_id, title)
+            logger.info(
+                f"会话标题已按首条 query 设置: conversation_id={self._conversation_id[:8]}, title={title}"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"按 query 设置会话标题失败: {e}")
+
     def set_conversation_id(self, conversation_id: str) -> None:
         """Set the active conversation ID, stripping surrounding whitespace.
 
@@ -923,6 +955,7 @@ class SkillAgent:
         plan_data: dict,
         log_callback: Optional[Callable[[str, str], Any]] = None,
         enable_vision: bool = True,
+        persist_query: Optional[str] = None,
     ) -> str:
         """生成计划后，请求用户确认。返回 SKILL_AGENT_AWAITING_USER_REPLY 以暂停等待用户。"""
         plan_display = self._format_plan_display(plan_data)
@@ -944,12 +977,16 @@ class SkillAgent:
             if hasattr(self, "_last_uploaded_files") and self._last_uploaded_files is not None:
                 metadata["files"] = self._last_uploaded_files
                 self._last_uploaded_files = None
-            # 将上传文件内容追加到用户消息（一次性消费）
+            # 将上传文件内容追加到用户消息（一次性消费）；
+            # 强制引用时 memory 保留原始占位符文本（前端渲染 chip）
             user_content = self._consume_uploaded_files_content(
                 user_query.strip(),
                 enable_vision=enable_vision,
             )
-            self.memory.append_message(conversation_id, "user", user_content, metadata=metadata)
+            persist_content = persist_query.strip() if persist_query is not None else user_content
+            # 引用元数据合并进 metadata（ext.forced_refs 背书）
+            self._consume_pending_user_refs(metadata)
+            self.memory.append_message(conversation_id, "user", persist_content, metadata=metadata)
             # 持久化计划展示
             self.memory.append_message(conversation_id, "assistant", plan_display, metadata={"type": "plan"})
             # 持久化确认请求（type=plan_confirm 区别于普通 ask_user，避免被现有 ask_user 历史检测误触）
@@ -1417,6 +1454,43 @@ class SkillAgent:
             )
         return (execute_atomic_tool(name, args, self._tool_ctx,self.registry), False, None)
 
+    def _consume_pending_user_refs(self, metadata: dict[str, Any]) -> None:
+        """把当前轮强制引用元数据合并进持久化 metadata（一次性消费）。
+
+        ext.forced_refs 是占位符的权威背书：历史轮短标记渲染（Message.
+        _process_refs）与前端 chip 渲染都以此为校验依据。
+        """
+        refs = getattr(self, "_pending_user_refs", None)
+        if not refs:
+            return
+        merged = list(metadata.get("forced_refs") or [])
+        merged.extend(r for r in refs if r not in merged)
+        metadata["forced_refs"] = merged
+        self._pending_user_refs = []
+
+    def _build_image_parts_from_refs(self, enable_vision: bool) -> list[dict]:
+        """根据图片引用元数据构建多模态 image_url 部分（持久层懒加载）。"""
+        if not enable_vision:
+            return []
+        refs = getattr(self, "_pending_user_refs", None) or []
+        image_refs = [r for r in refs if r.get("type") == "file" and r.get("is_image")]
+        if not image_refs:
+            return []
+        parts: list[dict] = []
+        try:
+            from document_parser.file_storage import get_upload_base64_url
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"导入图片加载服务失败: {e}")
+            return []
+        for r in image_refs:
+            try:
+                url = get_upload_base64_url(str(r.get("id", "")))
+                if url:
+                    parts.append({"type": "image_url", "image_url": {"url": url}})
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"加载引用图片失败: {r.get('id')} - {e}")
+        return parts
+
     def _append_model_messages(
         self,
         messages: list[dict[str, Any]],
@@ -1424,6 +1498,7 @@ class SkillAgent:
         system_prompt: str,
         user_query: str,
         enable_vision: bool = True,
+        persist_query: Optional[str] = None,
     ) -> None:
         """重建消息列表，拼接系统提示词 + 历史对话 + 当前用户消息。
 
@@ -1433,8 +1508,12 @@ class SkillAgent:
         Args:
             messages: 待重建的消息列表（会被清空并重新填充）。
             system_prompt: 系统提示词文本。
-            user_query: 当前用户输入文本。
+            user_query: 当前用户输入文本（发送给 LLM 的版本）。
             enable_vision: 是否启用图片处理，默认 True。
+            persist_query: 持久化到 memory 的用户消息文本（回显版本）。
+                用于「/」强制引用场景：LLM 收到注入文档后的版本，
+                而 memory 保留含 /skill:id 标记的原文供前端渲染引用 chip。
+                为 None 时持久化 user_query 本身。
 
         Side effects:
             清空并重建 messages 列表；消费 _uploaded_files_content 缓存；
@@ -1466,8 +1545,22 @@ class SkillAgent:
             user_query.strip(),
             enable_vision=enable_vision,
         )
+        # 图片强制引用（<File:fid/> 且 mime 为 image/*）：装配多模态 image_url 部分
+        _image_parts = self._build_image_parts_from_refs(enable_vision)
+        if _image_parts:
+            if isinstance(user_content, str):
+                user_content = (
+                    [{"type": "text", "text": user_content}] if user_content else []
+                ) + _image_parts
+            elif isinstance(user_content, list):
+                user_content = user_content + _image_parts
         if self.memory is not None:
-            self.memory.append_message(conversation_id, "user", user_content, metadata=metadata)
+            # 强制引用：memory 保留原始占位符文本（前端渲染 chip），
+            # LLM 消息使用注入文档后的 user_content
+            persist_content = persist_query.strip() if persist_query is not None else user_content
+            # 引用元数据合并进 metadata（一次性消费，含 ext.forced_refs 背书）
+            self._consume_pending_user_refs(metadata)
+            self.memory.append_message(conversation_id, "user", persist_content, metadata=metadata)
         messages.append({"role": "user", "content": user_content})
 
     def _persist_after_tool_turn(
@@ -1841,6 +1934,7 @@ class SkillAgent:
         user_query: str,
         log_callback: Optional[Callable[[str, str], Any]],
         emit_token_usage: Callable[[], None],
+        persist_query: Optional[str] = None,
     ) -> dict:
         """输入分类与主循环上下文准备。
 
@@ -1938,6 +2032,7 @@ class SkillAgent:
         if plan_mode == PlanMode.COMPLEX_TASK:
             early_return = self._handle_complex_task_planning(
                 user_query, tool_catalog_text, log_callback, model.enable_vision,
+                persist_query=persist_query,
             )
             if early_return is not None:
                 # 用户原始 query 的持久化统一由下方 _append_model_messages 处理，
@@ -1957,6 +2052,7 @@ class SkillAgent:
             system_prompt=system_prompt,
             user_query=user_query,
             enable_vision=model.enable_vision,
+            persist_query=persist_query,
         )
         active_skill_text, active_skill_ids = self._recover_active_skills()
 
@@ -1975,6 +2071,7 @@ class SkillAgent:
         tool_catalog_text: str,
         log_callback: Optional[Callable[[str, str], Any]],
         enable_vision: bool,
+        persist_query: Optional[str] = None,
     ) -> Optional[str]:
         """处理复杂任务的计划生成与确认流程。
 
@@ -2006,6 +2103,7 @@ class SkillAgent:
                 plan_data,
                 log_callback,
                 enable_vision=enable_vision,
+                persist_query=persist_query,
             )
 
         # 未启用确认环节：展示计划后直接执行（保持原有行为）
@@ -2390,6 +2488,51 @@ class SkillAgent:
 
         return None
 
+    def _handle_install_confirmation(self, fname, args, log_callback, emit_token_usage_fn, messages):
+        """安装类工具（install_skill_from_zip / install_cli_package）的运行时确认拦截。
+
+        安装会向用户数据目录写入文件，落盘前必须经用户确认。
+        复用运行时确认机制：用户回复「确认安装」后由
+        _handle_runtime_confirmation 直接重新分发工具调用。
+
+        Args:
+            fname: 工具名（install_skill_from_zip 或 install_cli_package）
+            args: 工具参数字典，含 zip_path
+            log_callback: 前端日志回调
+            emit_token_usage_fn: 发送 token 用量回调
+            messages: 对话消息列表（确认时做快照）
+
+        Returns:
+            tuple 或 None: (action, value)，action="return" 时应立即返回；
+                           None 表示无安装意图（如缺少 zip_path），继续正常执行。
+        """
+        zip_path = str(args.get("zip_path", "") or "").strip()
+        if not zip_path:
+            # 参数缺失时交给 handler 返回错误，不触发确认
+            return None
+
+        pkg_kind = "Skill 包" if fname == "install_skill_from_zip" else "CLI 包"
+        overwrite = str(args.get("overwrite", "false")).strip().lower() in ("true", "1", "yes")
+        overwrite_hint = "（将覆盖已存在的同名包）" if overwrite else ""
+
+        ask_args = {
+            "question": (
+                f"即将安装{pkg_kind}：\n\n{zip_path}\n\n"
+                f"该操作会向用户数据目录写入文件{overwrite_hint}。是否确认安装？"
+            ),
+            "choices": ["确认安装", "取消"]
+        }
+        # 保存待执行工具信息，等用户确认后由 _handle_runtime_confirmation 重新分发
+        self._runtime_confirm_pending = True
+        self._runtime_confirm_fname = fname
+        self._runtime_confirm_args = args
+        self._runtime_confirm_messages = list(messages)  # 快照
+        # 触发确认 UI（不保存到历史，不发给 LLM）
+        if log_callback:
+            log_callback(_ask_user_ui_log_payload(ask_args), "await_user")
+        emit_token_usage_fn()
+        return ("return", SKILL_AGENT_AWAITING_USER_REPLY)
+
     def _handle_request_tool_details_step(self, fname, args, model, tools, full_thinking, arg_str, messages, active_skill_text, active_skill_ids, log_callback, content_parts=None):
         """Handle request_tool_details: progressive disclosure of tool definitions.
 
@@ -2559,6 +2702,16 @@ class SkillAgent:
         # AI-BRANCH-MARKER: 危险命令确认分支 — 需要用户确认的命令走确认路径
         if fname == "run_command":
             confirm_result = self._handle_run_command_confirmation(
+                fname, args, log_callback, _emit_token_usage, messages,
+            )
+            if confirm_result is not None:
+                action, value = confirm_result
+                if action == "return":
+                    return {"action": "return", "value": value}
+
+        # 安装类工具确认分支：向用户数据目录写入文件前必须经用户确认
+        elif fname in ("install_skill_from_zip", "install_cli_package"):
+            confirm_result = self._handle_install_confirmation(
                 fname, args, log_callback, _emit_token_usage, messages,
             )
             if confirm_result is not None:
@@ -2750,6 +2903,131 @@ class SkillAgent:
         )
         return {"action": "continue", "tool_called": tool_called}
 
+    # 强制引用指令模式：/skill:<id> 或 /cli:<name>（出现在消息开头或空白符之后）
+    _FORCED_SKILL_RE = re.compile(r"(?:^|\s)/skill:([A-Za-z0-9_\-]+)", re.IGNORECASE)
+    _FORCED_CLI_RE = re.compile(r"(?:^|\s)/cli:([A-Za-z0-9_\-]+)", re.IGNORECASE)
+    # 新占位符语法：<Skill:id/>、<File:file_id/>、<Cli:name/>
+    _REF_TAG_RE = re.compile(r"<(Skill|File|Cli):([A-Za-z0-9_\-]+)/>")
+
+    def _extract_refs(self, user_query: str) -> tuple[str, str, list[dict[str, Any]]]:
+        """提取强制引用并注入对应文档（新占位符 + 旧 / 语法双支持）。
+
+        新语法在 LLM 查询中保留编号锚点（位置相关性），文档集中追加在
+        消息尾部；旧 / 语法沿用剥离行为。两者都产出 ext 引用元数据
+        （forced_refs），供历史轮短标记渲染与前端 chip 使用。
+
+        Args:
+            user_query: 原始用户输入（可能含占位符或旧标记）。
+
+        Returns:
+            (LLM 查询, 强制注入的文档块, ext 引用元数据列表)。
+            无引用时文档块为空字符串、列表为空。
+        """
+        query = user_query or ""
+        if not query:
+            return ("", "", [])
+
+        refs: list[dict[str, Any]] = []
+        blocks: list[str] = []
+        disabled_ids = self._disabled_skill_ids_frozen()
+
+        def _ref_index(ref: dict[str, Any]) -> int:
+            """去重：同一 (type, id) 复用同一编号与文档块。返回 1-based 编号。"""
+            for i, r in enumerate(refs):
+                if r.get("type") == ref.get("type") and r.get("id") == ref.get("id"):
+                    return i + 1
+            refs.append(ref)
+            return len(refs)
+
+        def _skill_anchor(sid: str) -> str:
+            idx = _ref_index({"type": "skill", "id": sid})
+            if sid in disabled_ids:
+                return f"[引用#{idx}: Skill「{sid}」已在设置中禁用，未注入]"
+            skill = self.registry.get(sid)
+            if skill is None:
+                return f"[引用#{idx}: 未找到 Skill「{sid}」，请检查引用名称]"
+            name = getattr(skill, "name", sid)
+            blocks.append(
+                f"<引用文档 #{idx}: Skill {sid}>\n"
+                "【用户强制引用的 Skill（已绕过自动匹配，必须按此文档执行）】\n"
+                + format_skill_for_prompt(skill)
+                + f"\n</引用文档 #{idx}>"
+            )
+            return f"[引用#{idx}: Skill「{name}」]"
+
+        def _cli_anchor(name: str) -> str:
+            idx = _ref_index({"type": "cli", "id": name})
+            try:
+                import cli_manager
+                pkg = cli_manager.get_cli_package(name)
+                if pkg is None:
+                    return f"[引用#{idx}: 未找到 CLI 包「{name}」，请检查引用名称]"
+                blocks.append(
+                    f"<引用文档 #{idx}: CLI {name}>\n"
+                    "【用户强制引用的 CLI 工具（已绕过自动匹配，按以下用法使用）】\n"
+                    + cli_manager.format_cli_usage_text(pkg)
+                    + f"\n</引用文档 #{idx}>"
+                )
+                return f"[引用#{idx}: CLI「{name}」]"
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"强制引用 CLI 包处理异常: {e}")
+                return f"[引用#{idx}: CLI「{name}」注入失败]"
+
+        def _file_anchor(fid: str) -> str:
+            try:
+                from document_parser.file_storage import get_upload_info, get_uploaded_text
+                info = get_upload_info(fid)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"强制引用文件处理异常: {e}")
+                info = None
+            if info is None:
+                _ref_index({"type": "file", "id": fid, "missing": True})
+                return f"[文件已失效: {fid}]"
+            name = info.get("file_name") or fid
+            mime = info.get("mime_type") or ""
+            is_image = mime.startswith("image/")
+            if is_image:
+                # 图片走多模态通道（_append_model_messages 按 is_image 构建 image_url），
+                # 此处只留锚点与元数据，不注入文本块
+                _ref_index({"type": "file", "id": fid, "file_name": name, "is_image": True})
+                return f"[引用: 图片「{name}」]"
+            idx = _ref_index({"type": "file", "id": fid, "file_name": name})
+            text = ""
+            try:
+                text = get_uploaded_text(fid) or ""
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"读取上传文件文本失败: {fid} - {e}")
+                text = f"[文件内容读取失败: {e}]"
+            blocks.append(
+                f"<引用文件 #{idx}: {name}>\n{text}\n</引用文件 #{idx}>"
+            )
+            return f"[引用#{idx}: 文件「{name}」]"
+
+        def _sub(m: "re.Match") -> str:
+            kind, ref_id = m.group(1), m.group(2)
+            if kind == "Skill":
+                return _skill_anchor(ref_id)
+            if kind == "Cli":
+                return _cli_anchor(ref_id)
+            return _file_anchor(ref_id)
+
+        # 新占位符 → 编号锚点（保留位置相关性）
+        query = self._REF_TAG_RE.sub(_sub, query)
+
+        # 旧 / 语法：剥离并追加文档块（行为兼容）
+        legacy_skill_ids = [m.group(1) for m in self._FORCED_SKILL_RE.finditer(query)]
+        legacy_cli_names = [m.group(1) for m in self._FORCED_CLI_RE.finditer(query)]
+        if legacy_skill_ids or legacy_cli_names:
+            cleaned = self._FORCED_SKILL_RE.sub(" ", query)
+            cleaned = self._FORCED_CLI_RE.sub(" ", cleaned)
+            query = re.sub(r"\s{2,}", " ", cleaned).strip()
+            for sid in dict.fromkeys(legacy_skill_ids):
+                _skill_anchor(sid)
+            for name in dict.fromkeys(legacy_cli_names):
+                _cli_anchor(name)
+
+        return (query, "\n\n".join(blocks), refs)
+
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None, stop_check_callback: Optional[Callable[[], bool]] = None) -> str:
         """SkillAgent 主运行方法，执行输入分类、工具循环和结果返回。
 
@@ -2845,7 +3123,24 @@ class SkillAgent:
             # 如果从运行时确认继续，跳过计划检测和输入分类，直接进入主循环
             # AI-BRANCH-MARKER: 输入分类分支 — 根据用户输入类型(text/plan_confirm/plan_reject)决定后续流程
             if not _skip_to_main_loop:
-                ctx_result = self._classify_and_prepare_context(user_query, log_callback, _emit_token_usage)
+                # 强制引用（新占位符 <Skill:id/> / <File:fid/> / <Cli:name/>，
+                # 兼容旧 /skill:id 语法）：占位符替换为编号锚点，
+                # 文档/文件内容追加在消息尾部（位置相关性 + 集中注入）。
+                # 持久化与回显保留原始占位符文本（前端渲染为引用 chip），
+                # ext.forced_refs 记录引用元数据（历史轮短标记渲染依据）
+                _persist_query = user_query
+                user_query, _forced_ref_text, _refs = self._extract_refs(user_query)
+                if _forced_ref_text:
+                    self._last_user_query = user_query
+                    user_query = (user_query + "\n\n" + _forced_ref_text).strip()
+                    self._pending_user_refs = _refs
+                else:
+                    _persist_query = None
+                    self._pending_user_refs = []
+
+                ctx_result = self._classify_and_prepare_context(
+                    user_query, log_callback, _emit_token_usage, persist_query=_persist_query
+                )
                 if ctx_result["action"] == "return":
                     return ctx_result["value"]
                 model = ctx_result["model"]
