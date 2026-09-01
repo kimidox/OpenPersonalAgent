@@ -3,16 +3,18 @@
 
 数据存储策略（开发/打包统一，消除双路径维护）:
 ┌─────────────────┬──────────────────────────────────────────────┐
-│     数据类型     │ 开发环境 = 打包环境（相同路径）                 │
+│     数据类型     │ 路径                                          │
 ├─────────────────┼──────────────────────────────────────────────┤
 │ 只读资源        │ dev: 项目根 / pkg: sys._MEIPASS                │
-│ 应用级配置(.env)│ dev: 项目根 / pkg: %APPDATA%/App/.env          │
-│ 用户数据        │ %APPDATA%/OpenPersonalAgent/PersonalData/     │
-│ 工作目录        │ 同上（可用环境变量 PERSONAL_DATA_DIR 覆盖）     │
+│ 应用级配置(.env)│ dev: 项目根 / pkg: 安装根/.env                 │
+│ 用户数据        │ dev: 项目根/PersonalData（.env 可重定向）      │
+│                 │ pkg: 安装根/PersonalData（不可写时回退APPDATA）│
+│ 工作目录        │ 同用户数据（可用环境变量 PERSONAL_DATA_DIR 覆盖）│
 └─────────────────┴──────────────────────────────────────────────┘
 
-PERSONAL_DATA_DIR 环境变量可重定向工作数据目录（测试/多实例隔离用），
-默认所有模式统一读写 %APPDATA% 下的同一份数据。
+打包模式下"安装根目录"指 Tauri exe 所在目录（backend_service/ 的上一级），
+PersonalData 随安装路径走，用户可直接把已有 PersonalData 放到安装根目录使用。
+PERSONAL_DATA_DIR 环境变量可重定向工作数据目录（测试/多实例隔离）。
 """
 import sys
 import os
@@ -47,9 +49,18 @@ class PathManager:
     
     @property
     def project_root(self) -> Path:
-        """项目根目录 (开发: 项目根目录, 打包: exe所在目录)"""
+        """
+        项目根目录 (开发: 项目根目录, 打包: 安装根目录)
+
+        打包时 PyInstaller onedir 产物作为 Tauri 资源安装在 <安装目录>/backend_service/
+        下（exe 位于 backend_service/ 内部），安装根目录需上跳一级取得，
+        PersonalData/.env 等用户数据随安装根目录（Tauri exe 同级）走。
+        """
         if self._is_frozen:
-            return Path(sys.executable).resolve().parent
+            exe_dir = Path(sys.executable).resolve().parent
+            if exe_dir.name == "backend_service":
+                return exe_dir.parent
+            return exe_dir
         return Path(__file__).resolve().parent
     
     @property
@@ -75,16 +86,38 @@ class PathManager:
     def personal_data_dir(self) -> Path:
         """
         PersonalData目录 - 统一存放用户工作数据
-        开发/打包统一: %APPDATA%/OpenPersonalAgent/PersonalData/
-        可通过环境变量 PERSONAL_DATA_DIR 重定向（测试/多实例隔离）
+        开发: 优先读项目根 .env 的 PERSONAL_DATA_DIR，未配置则 项目根/PersonalData/
+        打包: 安装根目录/PersonalData/（随安装路径走，避免 %APPDATA% 跨用户/跨目录不一致；
+              安装目录不可写时回退 %APPDATA%/OpenPersonalAgent/PersonalData/）
+        环境变量 PERSONAL_DATA_DIR 优先级最高（测试/多实例隔离）
         """
         override = os.environ.get('PERSONAL_DATA_DIR')
+        if not override and not self._is_frozen:
+            # 开发环境：从项目根 .env 读取用户数据目录配置
+            override = self._read_env_value('PERSONAL_DATA_DIR')
         if override:
             data_dir = Path(override).expanduser().resolve()
         else:
+            data_dir = self.project_root / self._personal_data_dir
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # 安装目录不可写（如装到 Program Files）→ 回退 %APPDATA%，避免启动即崩溃
             data_dir = self.user_data_dir / self._personal_data_dir
-        data_dir.mkdir(parents=True, exist_ok=True)
+            data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir
+
+    def _read_env_value(self, key: str) -> str | None:
+        """读取项目根 .env 中的指定键（不写入 os.environ，无 dotenv 时返回 None）。"""
+        env_path = self.project_root / ".env"
+        if not env_path.is_file():
+            return None
+        try:
+            import dotenv
+            value = dotenv.dotenv_values(dotenv_path=str(env_path)).get(key)
+            return value.strip() if value and value.strip() else None
+        except Exception:
+            return None
     
     def get_bundled_resource(self, relative_path: str) -> Path:
         """获取打包资源路径"""

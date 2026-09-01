@@ -41,6 +41,11 @@ export interface SendMessageRequest {
   source?: "main" | "floating_ball" | "scheduler";
 }
 
+export interface RegenerateRequest {
+  enable_thinking?: boolean;
+  queued_ok?: boolean;
+}
+
 export interface SendMessageStartedResponse {
   status: "started";
   run_id: string;
@@ -200,6 +205,22 @@ export interface RecordingStatusResponse {
   is_recording: boolean;
   asr_model_loaded: boolean;
   current_audio_path: string | null;
+}
+
+// ---------------------------------------------------------------------
+// TTS
+// ---------------------------------------------------------------------
+
+export interface TtsStatusResponse {
+  loaded: boolean;
+  model_path: string | null;
+  num_speakers: number;
+}
+
+export interface TtsSpeakRequest {
+  text: string;
+  speaker_id?: number;
+  speed?: number;
 }
 
 export interface StartRecordingResponse {

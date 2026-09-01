@@ -68,6 +68,13 @@ class SendMessageQueuedResponse(BaseModel):
     position: int
 
 
+class RegenerateRequest(BaseModel):
+    """POST /api/conversations/{id}/regenerate 请求体（query 取自最后一条 user 消息）。"""
+
+    enable_thinking: bool = False
+    queued_ok: bool = True
+
+
 class StopRunResponse(BaseModel):
     stopped: bool
     run_id: str | None = None

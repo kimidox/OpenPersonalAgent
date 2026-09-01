@@ -4,9 +4,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from logger import get_module_logger
+
 from .base import ToolHandler
 from ..context import ToolContext
 from . import register_handler
+
+logger = get_module_logger("base_tool.skill_management")
 
 
 class InstallSkillFromZipHandler(ToolHandler):
@@ -43,6 +47,11 @@ class InstallSkillFromZipHandler(ToolHandler):
             installed_ids = mgr.install_from_zip(zip_path, overwrite=overwrite_bool)
             if not installed_ids:
                 return "安装完成，但未成功注册任何 Skill"
+
+            # 发布到 Skills 根目录，使 SkillRegistry 能够加载并展示
+            for sid in installed_ids:
+                if not mgr.publish_skill(sid):
+                    logger.warning(f"Skill '{sid}' 已安装到 user_defined，但发布到 Skills 根目录失败")
 
             # 刷新 registry
             if registry:

@@ -243,9 +243,12 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
   );
 
   const handleTokenUsage = useCallback((event: WSEvent<TokenUsageData>) => {
-    if (state.runId !== event.run_id) return;
-    setState((s) => ({ ...s, tokenUsage: event.data.usage }));
-  }, [state.runId]);
+    // 函数式守卫：state.runId 闭包值可能滞后于最新一次 agent.start 的 setState
+    // （token.usage 与 agent.start 紧邻到达时会被 stale 值误杀），setState 内取最新值判断
+    setState((s) =>
+      s.runId === event.run_id ? { ...s, tokenUsage: event.data.usage } : s,
+    );
+  }, []);
 
   const handleAwaitUser = useCallback((event: WSEvent<AwaitUserData>) => {
     if (state.runId !== event.run_id) return;

@@ -404,7 +404,17 @@ class SkillManager:
         """
         zip_file = Path(zip_path)
         if not zip_file.exists():
-            raise FileNotFoundError(f"ZIP文件不存在: {zip_path}")
+            parent = zip_file.parent
+            extra = ""
+            if parent.exists():
+                try:
+                    files = [p.name for p in parent.iterdir() if p.is_file()]
+                    extra = f" (目录存在，文件数: {len(files)})"
+                except OSError as e:
+                    extra = f" (目录存在但无法列出: {e})"
+            else:
+                extra = " (父目录不存在)"
+            raise FileNotFoundError(f"ZIP文件不存在: {zip_path}{extra}")
 
         if not zipfile.is_zipfile(zip_path):
             raise ValueError(f"文件不是有效的ZIP格式: {zip_path}")

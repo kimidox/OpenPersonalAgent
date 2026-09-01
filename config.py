@@ -13,21 +13,39 @@ env_file='.env'
 
 
 def _resolve_env_path():
-    """解析 .env 文件路径（frozen 模式下含首启默认配置复制逻辑）"""
+    """解析 .env 文件路径（frozen 模式下含首启默认配置复制逻辑）
+
+    frozen 模式查找顺序：
+    1. %APPDATA%/OpenPersonalAgent/.env（用户配置，运行期 set_config 写入处）
+    2. 安装根目录/.env（随安装包携带的配置，首启复制到用户目录）
+    3. 打包内部默认 .env（bundle 资源）
+    """
     import shutil
 
     if paths.is_frozen:
         # 用户配置路径
         user_env = paths.user_data_dir / env_file
+        if user_env.exists():
+            return user_env
+
+        # 安装根目录 .env（用户随安装目录放置的配置）→ 首启复制到用户目录
+        install_env = paths.project_root / env_file
+        if install_env.exists():
+            try:
+                shutil.copy(install_env, user_env)
+            except OSError:
+                return install_env
+            return user_env
+
         # 默认配置路径（打包内部）
         default_env = paths.get_bundled_resource(env_file)
+        if default_env.exists():
+            try:
+                shutil.copy(default_env, user_env)
+            except OSError:
+                return default_env
 
-        # 首次运行：复制默认配置到用户目录
-        if not user_env.exists() and default_env.exists():
-            shutil.copy(default_env, user_env)
-
-        # 优先读取用户配置
-        return user_env if user_env.exists() else default_env
+        return user_env
     return paths.project_root / env_file
 
 

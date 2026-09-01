@@ -47,6 +47,7 @@ from backend_service.routers import ws as ws_router
 from backend_service.routers import agent as agent_router
 from backend_service.routers import skills as skills_router
 from backend_service.routers import recording as recording_router
+from backend_service.routers import tts as tts_router
 from backend_service.routers import files as files_router
 from backend_service.routers import settings as settings_router
 from backend_service.routers import floating_ball as floating_ball_router
@@ -319,6 +320,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     app.include_router(agent_router.router)
     app.include_router(skills_router.router)
     app.include_router(recording_router.router)
+    app.include_router(tts_router.router)
     app.include_router(files_router.router)
     app.include_router(settings_router.router)
     app.include_router(floating_ball_router.router)

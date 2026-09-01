@@ -831,13 +831,19 @@ class SkillAgent:
             reply = result.content or ""
 
             # 发送 token_usage 触发 stream_renderer.complete()，使 badge 被应用到卡片
+            from dataclasses import asdict
             if log_callback and config.TOKEN_USAGE_ENABLED and result.token_usage:
-                from dataclasses import asdict
                 log_callback(json.dumps(asdict(result.token_usage), ensure_ascii=False), "token_usage")
 
             if self.memory is not None:
-                # user 消息已在 _append_model_messages 中持久化，这里只追加 assistant 回复
-                self.memory.append_message(self._conversation_id, "assistant", reply)
+                # user 消息已在 _append_model_messages 中持久化，这里只追加 assistant 回复；
+                # token 用量随 metadata 持久化，前端加载历史时还原到卡片左下角
+                metadata = (
+                    {"token_usage": asdict(result.token_usage)}
+                    if result.token_usage
+                    else None
+                )
+                self.memory.append_message(self._conversation_id, "assistant", reply, metadata=metadata)
 
             logger.debug("直接回复完成，回复长度: %s", len(reply))
             return reply

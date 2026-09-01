@@ -155,7 +155,8 @@ CONTROL_TOOL_DEFINITIONS: list[dict] = [
         "description": (
             "完成任务，向用户提供最终答复。\n"
             "这是任务完成的唯一结束方式，必须调用此工具。\n"
-            "参数：message（必需），给用户的完整答复。"
+            "参数：message（必需），给用户的完整答复。\n"
+            "注意：只有当所有前置工具调用都成功返回、没有以'错误:'开头的结果时，才允许调用此工具报告任务完成。若前置调用失败，应继续尝试修复或向用户说明失败原因，而不得直接调用 finish 声称成功。"
         ),
         "parameters": {
             "type": "object",
@@ -563,7 +564,8 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
             "- 平铺模式：ZIP 根目录直接包含 SKILL.md 等文件\n"
             "- 包目录模式：ZIP 内含一级子目录，子目录中包含 SKILL.md\n"
             "安装后 Skill 可立即被 SkillAgent 使用。\n"
-            "参数：zip_path(必需，ZIP文件路径)、overwrite(可选，是否覆盖已存在的Skill，默认false)。"
+            "参数：zip_path(必需，ZIP文件路径)、overwrite(可选，是否覆盖已存在的Skill，默认false)。\n"
+            "注意：调用后请仔细阅读返回结果。如果返回结果以'错误:'开头，说明安装失败，必须向用户说明失败原因，不得调用 finish 报告成功。"
         ),
         "parameters": {
             "type": "object",

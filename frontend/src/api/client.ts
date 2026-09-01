@@ -27,6 +27,7 @@ import type {
   LoadModelResponse,
   PromptTemplatesResponse,
   RecordingStatusResponse,
+  RegenerateRequest,
   ReleaseModelResponse,
   ScheduledTaskCreate,
   ScheduledTaskResponse,
@@ -39,6 +40,8 @@ import type {
   SkillSummary,
   StartRecordingResponse,
   StopRecordingResponse,
+  TtsSpeakRequest,
+  TtsStatusResponse,
   UploadResponse,
   VoiceSettingsResponse,
 } from "@/types/api";
@@ -202,6 +205,11 @@ export const api = {
   sendMessage: (conversationId: string, body: SendMessageRequest) =>
     request<SendMessageStartedResponse | SendMessageQueuedResponse>(
       `/api/conversations/${conversationId}/messages`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  regenerate: (conversationId: string, body: RegenerateRequest) =>
+    request<SendMessageStartedResponse | SendMessageQueuedResponse>(
+      `/api/conversations/${conversationId}/regenerate`,
       { method: "POST", body: JSON.stringify(body) },
     ),
   stopConversation: (conversationId: string) =>
@@ -413,6 +421,16 @@ export const api = {
       `/api/recording/asr/transcribe?audio_path=${encodeURIComponent(audioPath)}`,
       { method: "POST" },
     ),
+
+  // -------------------------------------------------------------------
+  // TTS
+  // -------------------------------------------------------------------
+  ttsStatus: () => request<TtsStatusResponse>("/api/tts/status"),
+  ttsSpeak: (body: TtsSpeakRequest) =>
+    request<{ started: boolean }>("/api/tts/speak", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   // -------------------------------------------------------------------
   // 文件上传

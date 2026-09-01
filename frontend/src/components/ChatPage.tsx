@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useChatStore, type DisplayMessage } from "@/store/chat";
+import { useChatStore, type DisplayMessage, type TokenUsageInfo } from "@/store/chat";
 import { api, APIError } from "@/api/client";
 import { getBaseUrl, isTauri } from "@/api/backend";
 import { WSClient } from "@/api/ws";
@@ -32,11 +32,15 @@ export default function ChatPage() {
     completeAssistantMessage,
     appendToolResultMessage,
     clearAwaitingUser,
+    truncateLastTurn,
+    applyTokenUsage,
     setMessages,
   } = store;
 
   const [enableThinking, setEnableThinking] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // TTS 模型加载状态（朗读按钮显示依据，周期轮询）
+  const [ttsLoaded, setTtsLoaded] = useState(false);
   // 当前会话的 WS 客户端：用 state 而非 ref，使 ws 变化能触发 useStream 重新订阅
   const [ws, setWs] = useState<WSClient | null>(null);
 
@@ -128,8 +132,16 @@ export default function ChatPage() {
             role: (m.role as "user" | "assistant" | "system" | "tool") ?? "assistant",
             content:
               typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-            // user 消息的 forced_refs 元数据：引用 chip 渲染依据
+            // user 消息的 forced_refs 元数据：引用 chip 渲染依据；
+            // assistant 消息的 token_usage：历史卡片用量还原
             metadata: (m.metadata as Record<string, unknown> | undefined) ?? undefined,
+            tokenUsage:
+              m.role === "assistant" &&
+              m.metadata?.token_usage &&
+              typeof m.metadata.token_usage === "object" &&
+              typeof (m.metadata.token_usage as TokenUsageInfo).total_tokens === "number"
+                ? (m.metadata.token_usage as TokenUsageInfo)
+                : undefined,
             timestamp: m.timestamp
               ? new Date(m.timestamp).getTime()
               : Date.now(),
@@ -261,6 +273,55 @@ export default function ChatPage() {
     api.agentThinking().then((r) => setEnableThinking(r.enabled)).catch(() => {});
   }, []);
 
+  // TTS 模型加载状态轮询：加载后消息卡片显示朗读按钮
+  useEffect(() => {
+    let cancelled = false;
+    const check = () =>
+      api
+        .ttsStatus()
+        .then((s) => {
+          if (!cancelled) setTtsLoaded(Boolean(s.loaded));
+        })
+        .catch(() => {});
+    check();
+    const timer = setInterval(check, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // token.usage 事件同步到最后一张 assistant 卡片（气泡左下角用量展示）。
+  // 注意不能用 updateAssistantMessage：token.usage 可能晚于 message.complete
+  // 到达，届时卡片已非流式，必须用不依赖 isStreaming 的 applyTokenUsage
+  useEffect(() => {
+    if (!runState.runId || !runState.tokenUsage) return;
+    const usage = runState.tokenUsage;
+    // 解析失败的后端会回退为 { raw: string }，此时不更新用量
+    if (typeof (usage as { raw?: unknown }).raw === "string") return;
+    applyTokenUsage(usage as TokenUsageInfo);
+  }, [runState.runId, runState.tokenUsage, applyTokenUsage]);
+
+  // 重新生成：后端删除最后一轮推理记录并重跑，前端同步清空最后一轮卡片
+  async function handleRegenerate() {
+    if (!currentConversationId || runState.isRunning) return;
+    setSendError(null);
+    try {
+      const resp = await api.regenerate(currentConversationId, {
+        enable_thinking: enableThinking,
+        queued_ok: true,
+      });
+      truncateLastTurn();
+      if (resp.status === "queued") {
+        setSendError(`已排队，位置 ${resp.position}`);
+      }
+      startAssistantMessage(resp.run_id);
+    } catch (err) {
+      const msg = err instanceof APIError ? err.detail : String(err);
+      setSendError(`重新生成失败：${msg}`);
+    }
+  }
+
   async function handleStop() {
     if (!currentConversationId) return;
     try {
@@ -331,6 +392,9 @@ export default function ChatPage() {
             isPaused={runState.isPaused}
             runError={runState.errorMessage}
             onReplyAwait={replyToAwait}
+            canRegenerate={!runState.isRunning}
+            onRegenerate={handleRegenerate}
+            ttsLoaded={ttsLoaded}
           />
         )}
 

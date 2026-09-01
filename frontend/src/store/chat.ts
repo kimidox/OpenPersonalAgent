@@ -15,6 +15,12 @@ import type {
 } from "@/types/api";
 import type { AwaitUserSpec } from "@/types/events";
 
+export interface TokenUsageInfo {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
 export interface DisplayMessage {
   // 本地生成的唯一 id（用于 React key）
   localId: string;
@@ -32,6 +38,8 @@ export interface DisplayMessage {
   timestamp: number;
   // 该 assistant 消息是否仍在流式中（用于打字机渲染）
   isStreaming?: boolean;
+  // 本轮 LLM 调用消耗的 token 数（token.usage 事件同步）
+  tokenUsage?: TokenUsageInfo | null;
   // 是否因 sidecar 重启被中断
   aborted?: boolean;
   // 是否等待用户回复
@@ -62,6 +70,10 @@ interface ChatState {
   // 开启下一轮 assistant 卡片（模型新一轮发言前调用）
   newAssistantMessage: () => void;
   updateAssistantMessage: (patch: Partial<DisplayMessage>) => void;
+  // token 用量写入最后一张 assistant 卡片；token.usage 事件可能晚于
+  // message.complete 到达（后端 finally 块推送），此时卡片已非流式，
+  // 不能走 updateAssistantMessage（只匹配 isStreaming 卡片）
+  applyTokenUsage: (usage: TokenUsageInfo) => void;
   completeAssistantMessage: () => void;
   // 追加一条独立的工具结果卡片；
   // insertBefore=true 时插到最后一张流式卡片之前（运行时确认续跑的
@@ -69,6 +81,8 @@ interface ChatState {
   appendToolResultMessage: (content: string, kind?: string, insertBefore?: boolean) => void;
   // 清除所有消息的 awaitingUser 标记（用户回复 ask_user 后隐藏卡片）
   clearAwaitingUser: () => void;
+  // 重新生成：删除最后一条 user 消息之后的所有卡片（上一轮推理结果）
+  truncateLastTurn: () => void;
   setMessages: (msgs: DisplayMessage[]) => void;
 }
 
@@ -181,12 +195,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
           }
 
+          // token 用量从 metadata 还原（后端持久化在 assistant 消息 ext.token_usage）
+          let tokenUsage: DisplayMessage["tokenUsage"];
+          if (
+            metadata.token_usage &&
+            typeof metadata.token_usage === "object" &&
+            typeof (metadata.token_usage as TokenUsageInfo).total_tokens === "number"
+          ) {
+            tokenUsage = metadata.token_usage as TokenUsageInfo;
+          }
+
           displayMessages.push({
             localId: nextLocalId(),
             role: "assistant",
             content: contentStr,
             thinking,
             toolCalls,
+            tokenUsage,
             timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
           });
           continue;
@@ -341,6 +366,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
+  applyTokenUsage: (usage) => {
+    set((s) => {
+      const messages = [...s.messages];
+      // 写入最后一张 assistant 卡片（本 run 的最终回复），
+      // 不要求 isStreaming：token.usage 可能晚于 message.complete 到达
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === "assistant") {
+          messages[i] = { ...messages[i], tokenUsage: usage };
+          break;
+        }
+      }
+      return { messages };
+    });
+  },
+
   completeAssistantMessage: () => {
     set((s) => {
       const messages = [...s.messages];
@@ -387,6 +427,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
         m.awaitingUser ? { ...m, awaitingUser: false, awaitUserSpec: null } : m,
       ),
     }));
+  },
+
+  truncateLastTurn: () => {
+    set((s) => {
+      let lastUserIdx = -1;
+      for (let i = s.messages.length - 1; i >= 0; i--) {
+        if (s.messages[i].role === "user") {
+          lastUserIdx = i;
+          break;
+        }
+      }
+      if (lastUserIdx < 0) return {};
+      // 保留最后一条 user 消息卡片，删除其后全部 assistant/tool 卡片
+      return { messages: s.messages.slice(0, lastUserIdx + 1) };
+    });
   },
 
   setMessages: (msgs) => set({ messages: msgs }),

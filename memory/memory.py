@@ -36,6 +36,14 @@ class Memory(ABC):
     def clear_conversation(self, conversation_id: str) -> None:
         """删除该会话及其全部消息（含持久化中的会话行，与关闭标签页语义一致）。"""
 
+    def pop_last_turn(self, conversation_id: str) -> dict[str, Any] | None:
+        """删除会话中最后一条 user 消息及其之后的所有消息，返回该 user 消息记录。
+
+        用于「重新生成」：删除后重新提交该 query，由 Agent 在 run 中重新持久化。
+        默认未实现，由支持的子类（如 SqliteMemory）覆盖。
+        """
+        raise NotImplementedError(f"{type(self).__name__} 不支持 pop_last_turn")
+
     @abstractmethod
     def set_active_skills(self, conversation_id: str, skill_ids: list[str]) -> None:
         """记录当前会话已加载的 Skill id 列表（与 SkillAgent 中 active_skill_ids 对应）。"""

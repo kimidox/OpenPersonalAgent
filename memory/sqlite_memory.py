@@ -376,6 +376,33 @@ class SqliteMemory(Memory):
             db.query(Conversations).filter(Conversations.conversation_id == conversation_id).delete()
             db.commit()
 
+    def pop_last_turn(self, conversation_id: str) -> dict[str, Any] | None:
+        """删除会话中最后一条 user 消息及其之后的所有消息（重新生成语义）。
+
+        返回被删除的 user 消息记录（含 role/content/metadata），
+        会话中不存在 user 消息时返回 None（不做任何删除）。
+        """
+        with get_session() as db:
+            rows = (
+                db.query(Messages)
+                .filter(Messages.conversation_id == conversation_id)
+                .order_by(Messages.id.asc())
+                .all()
+            )
+            last_user_idx = None
+            for i in range(len(rows) - 1, -1, -1):
+                if rows[i].role == "user":
+                    last_user_idx = i
+                    break
+            if last_user_idx is None:
+                return None
+            user_row = rows[last_user_idx]
+            record = Message.from_orm(user_row).to_record_dict()
+            for row in rows[last_user_idx:]:
+                db.delete(row)
+            db.commit()
+            return record
+
     def set_active_skills(self, conversation_id: str, skill_ids: list[str]) -> None:
         with get_session() as db:
             conv = self._ensure_conversation_row(db, conversation_id)

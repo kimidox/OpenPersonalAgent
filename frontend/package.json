@@ -1,13 +1,14 @@
 {
   "name": "personal-window-glm-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:build": "tauri build && node scripts/bump-version.mjs",
     "tauri:dev": "cross-env BACKEND_DEV=1 tauri dev",
     "tauri:dev:external": "cross-env BACKEND_EXTERNAL=1 BACKEND_PORT=8765 tauri dev"
   },

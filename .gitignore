@@ -1,10 +1,9 @@
-/PersonalData/llm_config.json
+/PersonalData/
 /.env.dev
-/PersonalData/venv/
+/.env
 /dist/
 /build/
 /database/
-/PersonalData/screenshots/
 /frontend/node_modules/
 /frontend/src-tauri/target/
 /frontend/src-tauri/target/

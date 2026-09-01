@@ -8,6 +8,13 @@ import "./MessageItem.css";
 interface Props {
   message: DisplayMessage;
   isPaused: boolean;
+  // 是否为最后一张 assistant 卡片（重新生成按钮仅出现在这里）
+  isLastAssistant?: boolean;
+  // 是否允许重新生成（run 进行中禁用）
+  canRegenerate?: boolean;
+  onRegenerate?: () => void;
+  // TTS 模型已加载时显示朗读按钮
+  ttsLoaded?: boolean;
 }
 
 /** 从 metadata.forced_refs 中查找引用的显示名 */
@@ -207,16 +214,176 @@ function ToolResultCard({ message }: { message: DisplayMessage }) {
   );
 }
 
-export default function MessageItem({ message, isPaused }: Props) {
-  if (message.role === "user") {
-    return <UserMessage message={message} />;
+/** 剥离 Markdown 语法，生成适合朗读的纯文本 */
+function stripMarkdownForTts(md: string): string {
+  return md
+    // 代码块跳过朗读
+    .replace(/```[\s\S]*?```/g, " ")
+    // 行内代码保留内容
+    .replace(/`([^`]+)`/g, "$1")
+    // 图片跳过
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    // 链接只保留文字
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    // 标题 / 引用 / 列表标记
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/^([ \t]*)>[ \t]?/gm, "$1")
+    .replace(/^([ \t]*)[-*+][ \t]+/gm, "$1")
+    // 强调 / 删除线
+    .replace(/(\*\*|__|\*|_|~~)/g, "")
+    // 引用占位符标签
+    .replace(/<(Skill|File|Cli):[^>]+>/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/** 复制文本：优先 Clipboard API，失败时回退 execCommand（Tauri WebView 兼容） */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function IconCopy() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="5" y="5" width="9" height="9" rx="1.5" />
+      <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" />
+    </svg>
+  );
+}
+
+function IconRegenerate() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+      <path d="M13.7 1.8v2.9h-2.9" />
+    </svg>
+  );
+}
+
+function IconSpeak() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 2.5 4.5 5.5H2v5h2.5L8 13.5v-11z" />
+      <path d="M10.5 5.5a3.5 3.5 0 0 1 0 5" />
+      <path d="M12.3 3.7a6 6 0 0 1 0 8.6" />
+    </svg>
+  );
+}
+
+/** assistant 消息卡片底部操作条：左下 token 用量，右下 复制/重新生成/朗读 */
+function AssistantFooter({
+  message,
+  isLastAssistant,
+  canRegenerate,
+  onRegenerate,
+  ttsLoaded,
+}: {
+  message: DisplayMessage;
+  isLastAssistant?: boolean;
+  canRegenerate?: boolean;
+  onRegenerate?: () => void;
+  ttsLoaded?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+
+  const usage = message.tokenUsage;
+  const usageText =
+    usage && typeof usage.total_tokens === "number"
+      ? `输入 ${usage.prompt_tokens ?? 0} · 输出 ${usage.completion_tokens ?? 0} · 共 ${usage.total_tokens} tokens`
+      : null;
+
+  async function handleCopy() {
+    const ok = await copyText(message.content);
+    if (ok) setCopied(true);
   }
 
-  if (message.role === "tool") {
-    return <ToolResultCard message={message} />;
+  async function handleSpeak() {
+    const text = stripMarkdownForTts(message.content);
+    if (!text) return;
+    setSpeaking(true);
+    try {
+      await api.ttsSpeak({ text });
+    } catch (err) {
+      console.error("[MessageItem] 朗读失败:", err);
+      setSpeaking(false);
+      return;
+    }
+    // 后台异步播放无法得知结束时刻，短暂高亮后恢复
+    setTimeout(() => setSpeaking(false), 2000);
   }
 
-  // assistant
+  return (
+    <div className="message-footer">
+      <div className="token-usage">{usageText ?? "\u00A0"}</div>
+      <div className="message-actions">
+        <button
+          type="button"
+          className="msg-action-btn"
+          onClick={handleCopy}
+          title="复制原文"
+        >
+          <IconCopy />
+          <span>{copied ? "已复制" : "复制"}</span>
+        </button>
+        {isLastAssistant && canRegenerate && onRegenerate && (
+          <button
+            type="button"
+            className="msg-action-btn"
+            onClick={onRegenerate}
+            title="清空本轮推理并重新生成"
+          >
+            <IconRegenerate />
+            <span>重新生成</span>
+          </button>
+        )}
+        {ttsLoaded && (
+          <button
+            type="button"
+            className={`msg-action-btn${speaking ? " active" : ""}`}
+            onClick={handleSpeak}
+            title="朗读本条消息"
+          >
+            <IconSpeak />
+            <span>{speaking ? "朗读中" : "朗读"}</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AssistantMessage({
+  message,
+  isPaused,
+  isLastAssistant,
+  canRegenerate,
+  onRegenerate,
+  ttsLoaded,
+}: Props) {
   const isStreaming = message.isStreaming;
   const showCursor = isStreaming && !isPaused;
 
@@ -267,7 +434,31 @@ export default function MessageItem({ message, isPaused }: Props) {
         {message.aborted && (
           <div className="aborted-tag">运行中断，请重发</div>
         )}
+
+        {!isStreaming && message.content && (
+          <AssistantFooter
+            message={message}
+            isLastAssistant={isLastAssistant}
+            canRegenerate={canRegenerate}
+            onRegenerate={onRegenerate}
+            ttsLoaded={ttsLoaded}
+          />
+        )}
       </div>
     </div>
   );
+}
+
+export default function MessageItem(props: Props) {
+  const { message } = props;
+
+  if (message.role === "user") {
+    return <UserMessage message={message} />;
+  }
+
+  if (message.role === "tool") {
+    return <ToolResultCard message={message} />;
+  }
+
+  return <AssistantMessage {...props} />;
 }

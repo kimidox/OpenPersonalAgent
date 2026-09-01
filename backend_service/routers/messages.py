@@ -19,6 +19,7 @@ from backend_service.runner import (
 from backend_service.ws.stream_bridge import StreamBridge
 from backend_service.schemas import (
     AgentStatus,
+    RegenerateRequest,
     SendMessageQueuedResponse,
     SendMessageRequest,
     SendMessageStartedResponse,
@@ -29,27 +30,24 @@ from backend_service.ws.events import new_run_id
 router = APIRouter(prefix="/api", tags=["messages", "agent"])
 
 
-@router.post(
-    "/conversations/{conversation_id}/messages",
-    response_model=SendMessageStartedResponse | SendMessageQueuedResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def send_message(
+def _submit_run(
     conversation_id: str,
-    body: SendMessageRequest,
-    request: Request,
-    agent=Depends(require_skill_agent),
-    runner: RunCoordinator = Depends(get_run_coordinator),
-    bridge: StreamBridge = Depends(get_stream_bridge),
+    *,
+    query: str,
+    source: str,
+    enable_thinking: bool,
+    queued_ok: bool,
+    runner: RunCoordinator,
+    bridge: StreamBridge,
 ) -> SendMessageStartedResponse | SendMessageQueuedResponse:
-    """发送消息 → 启动 run（流式经 WS 推送）。"""
+    """构造 RunContext 并提交（send_message / regenerate 共用）。"""
     run_id = new_run_id()
     ctx = RunContext(
         run_id=run_id,
         conversation_id=conversation_id,
-        source=body.source,
-        query=body.query,
-        enable_thinking=body.enable_thinking,
+        source=source,
+        query=query,
+        enable_thinking=enable_thinking,
     )
     # 注入 executor / on_complete / on_error（由 stream_bridge 构造）
     ctx.executor = bridge.build_executor(ctx)
@@ -57,7 +55,7 @@ def send_message(
     ctx.on_error = bridge.make_on_error(ctx)
 
     try:
-        result = runner.submit(ctx, queued_ok=body.queued_ok)
+        result = runner.submit(ctx, queued_ok=queued_ok)
     except SameConversationConflictError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -87,6 +85,85 @@ def send_message(
         return SendMessageStartedResponse(status="started", run_id=result.run_id)
     return SendMessageQueuedResponse(
         status="queued", run_id=result.run_id, position=result.position
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages",
+    response_model=SendMessageStartedResponse | SendMessageQueuedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def send_message(
+    conversation_id: str,
+    body: SendMessageRequest,
+    request: Request,
+    agent=Depends(require_skill_agent),
+    runner: RunCoordinator = Depends(get_run_coordinator),
+    bridge: StreamBridge = Depends(get_stream_bridge),
+) -> SendMessageStartedResponse | SendMessageQueuedResponse:
+    """发送消息 → 启动 run（流式经 WS 推送）。"""
+    return _submit_run(
+        conversation_id,
+        query=body.query,
+        source=body.source,
+        enable_thinking=body.enable_thinking,
+        queued_ok=body.queued_ok,
+        runner=runner,
+        bridge=bridge,
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/regenerate",
+    response_model=SendMessageStartedResponse | SendMessageQueuedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def regenerate_message(
+    conversation_id: str,
+    body: RegenerateRequest,
+    request: Request,
+    agent=Depends(require_skill_agent),
+    runner: RunCoordinator = Depends(get_run_coordinator),
+    bridge: StreamBridge = Depends(get_stream_bridge),
+) -> SendMessageStartedResponse | SendMessageQueuedResponse:
+    """重新生成最后一轮回复。
+
+    从持久化记忆中删除最后一条 user 消息及其之后的所有消息
+    （即上一轮推理结果），然后用原 query 重新提交 run；
+    user 消息由 Agent 在新 run 中重新持久化，历史不重复。
+    """
+    memory = getattr(agent, "memory", None)
+    if memory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Agent memory 未就绪",
+        )
+    try:
+        record = memory.pop_last_turn(conversation_id)
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="当前记忆实现不支持重新生成",
+        )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="会话中没有可重新生成的用户消息",
+        )
+    query = record.get("content") if isinstance(record, dict) else None
+    if not isinstance(query, str) or not query.strip():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="最后一条用户消息内容为空，无法重新生成",
+        )
+    return _submit_run(
+        conversation_id,
+        query=query,
+        source="main",
+        enable_thinking=body.enable_thinking,
+        queued_ok=body.queued_ok,
+        runner=runner,
+        bridge=bridge,
     )
 
 

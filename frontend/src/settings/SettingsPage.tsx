@@ -9,6 +9,7 @@ import VoiceSettingsPage from "./VoiceSettingsPage";
 import SkillsManagementPage from "./SkillsManagementPage";
 import SkillTogglePage from "./SkillTogglePage";
 import OtherSettingsPage from "./OtherSettingsPage";
+import AboutPage from "./AboutPage";
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -23,7 +24,8 @@ type SettingsTab =
   | "tasks"
   | "prompt"
   | "live2d"
-  | "other";
+  | "other"
+  | "about";
 
 interface TabDef {
   key: SettingsTab;
@@ -100,6 +102,13 @@ const ICONS = {
       <circle cx="5" cy="12" r="1" />
     </svg>
   ),
+  about: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="16" x2="12" y2="12" />
+      <line x1="12" y1="8" x2="12.01" y2="8" />
+    </svg>
+  ),
 };
 
 const TABS: TabDef[] = [
@@ -112,6 +121,7 @@ const TABS: TabDef[] = [
   { key: "prompt", label: "系统提示词", icon: ICONS.prompt },
   { key: "live2d", label: "2D Live", icon: ICONS.live2d },
   { key: "other", label: "其他设置", icon: ICONS.other },
+  { key: "about", label: "版本说明", icon: ICONS.about },
 ];
 
 export default function SettingsPage({ onBack }: SettingsPageProps) {
@@ -148,6 +158,7 @@ export default function SettingsPage({ onBack }: SettingsPageProps) {
         {tab === "skills-mgmt" && <SkillsManagementPage />}
         {tab === "skills-toggle" && <SkillTogglePage />}
         {tab === "other" && <OtherSettingsPage />}
+        {tab === "about" && <AboutPage />}
       </main>
     </div>
   );
